@@ -46,6 +46,21 @@ appender reference in the root level section below.
     </encoder>
   </appender>
 
+  <appender name="SERIALIZELOG" class="ch.qos.logback.core.rolling.RollingFileAppender">
+    <file>${cassandra.logdir}/serialize.log</file>
+    <rollingPolicy class="ch.qos.logback.core.rolling.FixedWindowRollingPolicy">
+      <fileNamePattern>${cassandra.logdir}/serialize.log.%i.zip</fileNamePattern>
+      <minIndex>1</minIndex>
+      <maxIndex>5</maxIndex>
+    </rollingPolicy>
+    <triggeringPolicy class="ch.qos.logback.core.rolling.SizeBasedTriggeringPolicy">
+      <maxFileSize>10MB</maxFileSize>
+    </triggeringPolicy>
+    <encoder>
+      <pattern>%-5level [%thread] %date{ISO8601} %F:%L - %msg%n</pattern>
+    </encoder>
+  </appender>
+
   <!-- DEBUGLOG rolling file appender to debug.log (all levels) -->
 
   <appender name="DEBUGLOG" class="ch.qos.logback.core.rolling.RollingFileAppender">
@@ -98,4 +113,9 @@ appender reference in the root level section below.
 
   <logger name="org.apache.cassandra" level="DEBUG"/>
   <logger name="com.thinkaurelius.thrift" level="ERROR"/>
+
+  <logger name="serialize.logger" level="DEBUG" additivity="false">
+    <appender-ref ref="SERIALIZELOG" />
+  </logger>
+
 </configuration>
