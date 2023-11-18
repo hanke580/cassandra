@@ -1177,6 +1177,7 @@ public class ColumnFamilyStore implements ColumnFamilyStoreMBean
 
             try
             {
+                org.zlab.dinv.logger.SerializeMonitor.isSerializing = true;
                 for (Memtable memtable : memtables)
                 {
                     // flush the memtable
@@ -1189,6 +1190,7 @@ public class ColumnFamilyStore implements ColumnFamilyStoreMBean
                 // signal the post-flush we've done our work
                 // Note: This should not be done in case of error. Read more below.
                 postFlush.latch.countDown();
+                org.zlab.dinv.logger.SerializeMonitor.isSerializing = false;
             }
             catch (FSWriteError e)
             {
