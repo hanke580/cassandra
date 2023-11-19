@@ -54,7 +54,7 @@ appender reference in the root level section below.
       <maxIndex>5</maxIndex>
     </rollingPolicy>
     <triggeringPolicy class="ch.qos.logback.core.rolling.SizeBasedTriggeringPolicy">
-      <maxFileSize>10MB</maxFileSize>
+      <maxFileSize>2000MB</maxFileSize>
     </triggeringPolicy>
     <encoder>
       <pattern>%-5level [%thread] %date{ISO8601} %F:%L - %msg%n</pattern>
