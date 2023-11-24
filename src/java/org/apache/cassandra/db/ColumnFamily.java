@@ -27,10 +27,8 @@ import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
-
 import com.google.common.collect.ImmutableMap;
 import org.apache.commons.lang3.builder.HashCodeBuilder;
-
 import org.apache.cassandra.cache.IRowCacheEntry;
 import org.apache.cassandra.config.CFMetaData;
 import org.apache.cassandra.config.Schema;
@@ -53,46 +51,48 @@ import org.apache.cassandra.utils.*;
  * Whether the implementation is thread safe or not is left to the
  * implementing classes.
  */
-public abstract class ColumnFamily implements Iterable<Cell>, IRowCacheEntry
-{
+public abstract class ColumnFamily implements Iterable<Cell>, IRowCacheEntry {
+
+    private static final org.slf4j.Logger serialize_logger = org.slf4j.LoggerFactory.getLogger("serialize.logger");
+
+    private java.lang.ThreadLocal<Boolean> isSerializeLoggingActive = new ThreadLocal<Boolean>() {
+
+        @Override
+        protected Boolean initialValue() {
+            return false;
+        }
+    };
+
     /* The column serializer for this Column Family. Create based on config. */
     public static final ColumnFamilySerializer serializer = new ColumnFamilySerializer();
 
     protected final CFMetaData metadata;
 
-    protected ColumnFamily(CFMetaData metadata)
-    {
+    protected ColumnFamily(CFMetaData metadata) {
         assert metadata != null;
         this.metadata = metadata;
     }
 
-    public <T extends ColumnFamily> T cloneMeShallow(ColumnFamily.Factory<T> factory, boolean reversedInsertOrder)
-    {
+    public <T extends ColumnFamily> T cloneMeShallow(ColumnFamily.Factory<T> factory, boolean reversedInsertOrder) {
         T cf = factory.create(metadata, reversedInsertOrder);
         cf.delete(this);
         return cf;
     }
 
-    public ColumnFamily cloneMeShallow()
-    {
+    public ColumnFamily cloneMeShallow() {
         return cloneMeShallow(false);
     }
 
-    public ColumnFamily cloneMeShallow(boolean reversed)
-    {
+    public ColumnFamily cloneMeShallow(boolean reversed) {
         return cloneMeShallow(getFactory(), reversed);
     }
 
-    public ColumnFamilyType getType()
-    {
+    public ColumnFamilyType getType() {
         return metadata.cfType;
     }
 
-    public int liveCQL3RowCount(long now)
-    {
-        ColumnCounter counter = getComparator().isDense()
-                              ? new ColumnCounter(now)
-                              : new ColumnCounter.GroupByPrefix(now, getComparator(), metadata.clusteringColumns().size());
+    public int liveCQL3RowCount(long now) {
+        ColumnCounter counter = getComparator().isDense() ? new ColumnCounter(now) : new ColumnCounter.GroupByPrefix(now, getComparator(), metadata.clusteringColumns().size());
         return counter.countAll(this).live();
     }
 
@@ -101,56 +101,59 @@ public abstract class ColumnFamily implements Iterable<Cell>, IRowCacheEntry
      */
     public abstract ColumnFamily cloneMe();
 
-    public UUID id()
-    {
+    public UUID id() {
+        if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+            if (!isSerializeLoggingActive.get()) {
+                isSerializeLoggingActive.set(true);
+                serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(this, this.metadata, "this.metadata").toJsonString());
+                isSerializeLoggingActive.set(false);
+            }
+        }
         return metadata.cfId;
     }
 
     /**
      * @return The CFMetaData for this row
      */
-    public CFMetaData metadata()
-    {
+    public CFMetaData metadata() {
+        if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+            if (!isSerializeLoggingActive.get()) {
+                isSerializeLoggingActive.set(true);
+                serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(this, this.metadata, "this.metadata").toJsonString());
+                isSerializeLoggingActive.set(false);
+            }
+        }
         return metadata;
     }
 
-    public void addColumn(CellName name, ByteBuffer value, long timestamp)
-    {
+    public void addColumn(CellName name, ByteBuffer value, long timestamp) {
         addColumn(name, value, timestamp, 0);
     }
 
-    public void addColumn(CellName name, ByteBuffer value, long timestamp, int timeToLive)
-    {
+    public void addColumn(CellName name, ByteBuffer value, long timestamp, int timeToLive) {
         assert !metadata().isCounter();
         Cell cell = AbstractCell.create(name, value, timestamp, timeToLive, metadata());
         addColumn(cell);
     }
 
-    public void addCounter(CellName name, long value)
-    {
+    public void addCounter(CellName name, long value) {
         addColumn(new BufferCounterUpdateCell(name, value, FBUtilities.timestampMicros()));
     }
 
-    public void addTombstone(CellName name, ByteBuffer localDeletionTime, long timestamp)
-    {
+    public void addTombstone(CellName name, ByteBuffer localDeletionTime, long timestamp) {
         addColumn(new BufferDeletedCell(name, localDeletionTime, timestamp));
     }
 
-    public void addTombstone(CellName name, int localDeletionTime, long timestamp)
-    {
+    public void addTombstone(CellName name, int localDeletionTime, long timestamp) {
         addColumn(new BufferDeletedCell(name, localDeletionTime, timestamp));
     }
 
-    public void addAtom(OnDiskAtom atom)
-    {
-        if (atom instanceof Cell)
-        {
-            addColumn((Cell)atom);
-        }
-        else
-        {
+    public void addAtom(OnDiskAtom atom) {
+        if (atom instanceof Cell) {
+            addColumn((Cell) atom);
+        } else {
             assert atom instanceof RangeTombstone;
-            delete((RangeTombstone)atom);
+            delete((RangeTombstone) atom);
         }
     }
 
@@ -166,8 +169,7 @@ public abstract class ColumnFamily implements Iterable<Cell>, IRowCacheEntry
      * *as long as said addition is done in comparator order*. For AtomicSortedColumns,
      * the tester will correspond to the state of when this method is called.
      */
-    public DeletionInfo.InOrderTester inOrderDeletionTester()
-    {
+    public DeletionInfo.InOrderTester inOrderDeletionTester() {
         return deletionInfo().inOrderTester();
     }
 
@@ -177,10 +179,13 @@ public abstract class ColumnFamily implements Iterable<Cell>, IRowCacheEntry
     public abstract Factory getFactory();
 
     public abstract DeletionInfo deletionInfo();
+
     public abstract void setDeletionInfo(DeletionInfo info);
 
     public abstract void delete(DeletionInfo info);
+
     public abstract void delete(DeletionTime deletionTime);
+
     protected abstract void delete(RangeTombstone tombstone);
 
     public abstract SearchIterator<CellName, Cell> searchIterator();
@@ -259,8 +264,7 @@ public abstract class ColumnFamily implements Iterable<Cell>, IRowCacheEntry
     /**
      * Returns true if this contains no columns or deletion info
      */
-    public boolean isEmpty()
-    {
+    public boolean isEmpty() {
         return deletionInfo().isLive() && !hasColumns();
     }
 
@@ -284,8 +288,7 @@ public abstract class ColumnFamily implements Iterable<Cell>, IRowCacheEntry
     /**
      * If `columns` has any tombstones (top-level or range tombstones), they will be applied to this set of columns.
      */
-    public void delete(ColumnFamily columns)
-    {
+    public void delete(ColumnFamily columns) {
         delete(columns.deletionInfo());
     }
 
@@ -293,121 +296,89 @@ public abstract class ColumnFamily implements Iterable<Cell>, IRowCacheEntry
      * This function will calculate the difference between 2 column families.
      * The external input is assumed to be a superset of internal.
      */
-    public ColumnFamily diff(ColumnFamily cfComposite)
-    {
+    public ColumnFamily diff(ColumnFamily cfComposite) {
         assert cfComposite.id().equals(id());
         ColumnFamily cfDiff = ArrayBackedSortedColumns.factory.create(metadata);
         cfDiff.delete(cfComposite.deletionInfo());
-
         // (don't need to worry about cfNew containing Columns that are shadowed by
         // the delete tombstone, since cfNew was generated by CF.resolve, which
         // takes care of those for us.)
-        for (Cell cellExternal : cfComposite)
-        {
+        for (Cell cellExternal : cfComposite) {
             CellName cName = cellExternal.name();
             Cell cellInternal = getColumn(cName);
-            if (cellInternal == null)
-            {
+            if (cellInternal == null) {
                 cfDiff.addColumn(cellExternal);
-            }
-            else
-            {
+            } else {
                 Cell cellDiff = cellInternal.diff(cellExternal);
-                if (cellDiff != null)
-                {
+                if (cellDiff != null) {
                     cfDiff.addColumn(cellDiff);
                 }
             }
         }
-
         cfDiff.setDeletionInfo(deletionInfo().diff(cfComposite.deletionInfo()));
-
         if (!cfDiff.isEmpty())
             return cfDiff;
-        
         return null;
     }
 
-    public long dataSize()
-    {
+    public long dataSize() {
         long size = 0;
-        for (Cell cell : this)
-            size += cell.cellDataSize();
+        for (Cell cell : this) size += cell.cellDataSize();
         return size;
     }
 
-    public long maxTimestamp()
-    {
+    public long maxTimestamp() {
         long maxTimestamp = deletionInfo().maxTimestamp();
-        for (Cell cell : this)
-            maxTimestamp = Math.max(maxTimestamp, cell.timestamp());
+        for (Cell cell : this) maxTimestamp = Math.max(maxTimestamp, cell.timestamp());
         return maxTimestamp;
     }
 
     @Override
-    public int hashCode()
-    {
-        HashCodeBuilder builder = new HashCodeBuilder(373, 75437)
-                .append(metadata)
-                .append(deletionInfo());
-        for (Cell cell : this)
-            builder.append(cell);
+    public int hashCode() {
+        HashCodeBuilder builder = new HashCodeBuilder(373, 75437).append(metadata).append(deletionInfo());
+        for (Cell cell : this) builder.append(cell);
         return builder.toHashCode();
     }
 
     @Override
-    public boolean equals(Object o)
-    {
+    public boolean equals(Object o) {
         if (this == o)
             return true;
         if (o == null || !(o instanceof ColumnFamily))
             return false;
-
         ColumnFamily comparison = (ColumnFamily) o;
-
-        return metadata.equals(comparison.metadata)
-               && deletionInfo().equals(comparison.deletionInfo())
-               && ByteBufferUtil.compareUnsigned(digest(this), digest(comparison)) == 0;
+        return metadata.equals(comparison.metadata) && deletionInfo().equals(comparison.deletionInfo()) && ByteBufferUtil.compareUnsigned(digest(this), digest(comparison)) == 0;
     }
 
     @Override
-    public String toString()
-    {
+    public String toString() {
         StringBuilder sb = new StringBuilder("ColumnFamily(");
         sb.append(metadata.cfName);
-
         if (isMarkedForDelete())
             sb.append(" -").append(deletionInfo()).append("-");
-
         sb.append(" [").append(CellNames.getColumnsString(getComparator(), this)).append("])");
         return sb.toString();
     }
 
-    public static ByteBuffer digest(ColumnFamily cf)
-    {
+    public static ByteBuffer digest(ColumnFamily cf) {
         MessageDigest digest = FBUtilities.threadLocalMD5Digest();
         if (cf != null)
             cf.updateDigest(digest);
         return ByteBuffer.wrap(digest.digest());
     }
 
-    public void updateDigest(MessageDigest digest)
-    {
-        for (Cell cell : this)
-            cell.updateDigest(digest);
-
+    public void updateDigest(MessageDigest digest) {
+        for (Cell cell : this) cell.updateDigest(digest);
         deletionInfo().updateDigest(digest);
     }
 
-    public static ColumnFamily diff(ColumnFamily cf1, ColumnFamily cf2)
-    {
+    public static ColumnFamily diff(ColumnFamily cf1, ColumnFamily cf2) {
         if (cf1 == null)
             return cf2;
         return cf1.diff(cf2);
     }
 
-    public ColumnStats getColumnStats()
-    {
+    public ColumnStats getColumnStats() {
         // note that we default to MIN_VALUE/MAX_VALUE here to be able to override them later in this method
         // we are checking row/range tombstones and actual cells - there should always be data that overrides
         // these with actual values
@@ -418,17 +389,14 @@ public abstract class ColumnFamily implements Iterable<Cell>, IRowCacheEntry
         List<ByteBuffer> minColumnNamesSeen = Collections.emptyList();
         List<ByteBuffer> maxColumnNamesSeen = Collections.emptyList();
         boolean hasLegacyCounterShards = false;
-
-        if (deletionInfo().getTopLevelDeletion().localDeletionTime < Integer.MAX_VALUE)
-        {
+        if (deletionInfo().getTopLevelDeletion().localDeletionTime < Integer.MAX_VALUE) {
             tombstones.update(deletionInfo().getTopLevelDeletion().localDeletionTime);
             maxDeletionTimeTracker.update(deletionInfo().getTopLevelDeletion().localDeletionTime);
             minTimestampTracker.update(deletionInfo().getTopLevelDeletion().markedForDeleteAt);
             maxTimestampTracker.update(deletionInfo().getTopLevelDeletion().markedForDeleteAt);
         }
         Iterator<RangeTombstone> it = deletionInfo().rangeIterator();
-        while (it.hasNext())
-        {
+        while (it.hasNext()) {
             RangeTombstone rangeTombstone = it.next();
             tombstones.update(rangeTombstone.getLocalDeletionTime());
             minTimestampTracker.update(rangeTombstone.timestamp());
@@ -437,13 +405,10 @@ public abstract class ColumnFamily implements Iterable<Cell>, IRowCacheEntry
             minColumnNamesSeen = ColumnNameHelper.minComponents(minColumnNamesSeen, rangeTombstone.min, metadata.comparator);
             maxColumnNamesSeen = ColumnNameHelper.maxComponents(maxColumnNamesSeen, rangeTombstone.max, metadata.comparator);
         }
-
-        for (Cell cell : this)
-        {
+        for (Cell cell : this) {
             minTimestampTracker.update(cell.timestamp());
             maxTimestampTracker.update(cell.timestamp());
             maxDeletionTimeTracker.update(cell.getLocalDeletionTime());
-
             int deletionTime = cell.getLocalDeletionTime();
             if (deletionTime < Integer.MAX_VALUE)
                 tombstones.update(deletionTime);
@@ -452,90 +417,64 @@ public abstract class ColumnFamily implements Iterable<Cell>, IRowCacheEntry
             if (cell instanceof CounterCell)
                 hasLegacyCounterShards = hasLegacyCounterShards || ((CounterCell) cell).hasLegacyShards();
         }
-        return new ColumnStats(getColumnCount(),
-                               minTimestampTracker.get(),
-                               maxTimestampTracker.get(),
-                               maxDeletionTimeTracker.get(),
-                               tombstones,
-                               minColumnNamesSeen,
-                               maxColumnNamesSeen,
-                               hasLegacyCounterShards);
+        return new ColumnStats(getColumnCount(), minTimestampTracker.get(), maxTimestampTracker.get(), maxDeletionTimeTracker.get(), tombstones, minColumnNamesSeen, maxColumnNamesSeen, hasLegacyCounterShards);
     }
 
-    public boolean isMarkedForDelete()
-    {
+    public boolean isMarkedForDelete() {
         return !deletionInfo().isLive();
     }
 
     /**
      * @return the comparator whose sorting order the contained columns conform to
      */
-    public CellNameType getComparator()
-    {
+    public CellNameType getComparator() {
         return metadata.comparator;
     }
 
-    public boolean hasOnlyTombstones(long now)
-    {
-        for (Cell cell : this)
-            if (cell.isLive(now))
-                return false;
+    public boolean hasOnlyTombstones(long now) {
+        for (Cell cell : this) if (cell.isLive(now))
+            return false;
         return true;
     }
 
-    public Iterator<Cell> iterator()
-    {
+    public Iterator<Cell> iterator() {
         return getSortedColumns().iterator();
     }
 
-    public Iterator<Cell> reverseIterator()
-    {
+    public Iterator<Cell> reverseIterator() {
         return getReverseSortedColumns().iterator();
     }
 
-    public Map<CellName, ByteBuffer> asMap()
-    {
+    public Map<CellName, ByteBuffer> asMap() {
         ImmutableMap.Builder<CellName, ByteBuffer> builder = ImmutableMap.builder();
-        for (Cell cell : this)
-            builder.put(cell.name(), cell.value());
+        for (Cell cell : this) builder.put(cell.name(), cell.value());
         return builder.build();
     }
 
-    public static ColumnFamily fromBytes(ByteBuffer bytes)
-    {
+    public static ColumnFamily fromBytes(ByteBuffer bytes) {
         if (bytes == null)
             return null;
-
-        try
-        {
-            return serializer.deserialize(new DataInputStream(ByteBufferUtil.inputStream(bytes)),
-                                                              ArrayBackedSortedColumns.factory,
-                                                              ColumnSerializer.Flag.LOCAL,
-                                                              MessagingService.current_version);
-        }
-        catch (IOException e)
-        {
+        try {
+            return serializer.deserialize(new DataInputStream(ByteBufferUtil.inputStream(bytes)), ArrayBackedSortedColumns.factory, ColumnSerializer.Flag.LOCAL, MessagingService.current_version);
+        } catch (IOException e) {
             throw new RuntimeException(e);
         }
     }
 
-    public ByteBuffer toBytes()
-    {
-        try (DataOutputBuffer out = new DataOutputBuffer())
-        {
+    public ByteBuffer toBytes() {
+        try (DataOutputBuffer out = new DataOutputBuffer()) {
             serializer.serialize(this, out, MessagingService.current_version);
             return ByteBuffer.wrap(out.getData(), 0, out.getLength());
         }
     }
-
 
     /**
      * @return an iterator where the removes are carried out once everything has been iterated
      */
     public abstract BatchRemoveIterator<Cell> batchRemoveIterator();
 
-    public abstract static class Factory <T extends ColumnFamily>
-    {
+    public abstract static class Factory<T extends ColumnFamily> {
+
         /**
          * Returns a (initially empty) column map whose columns are sorted
          * according to the provided comparator.
@@ -546,20 +485,16 @@ public abstract class ColumnFamily implements Iterable<Cell>, IRowCacheEntry
          */
         public abstract T create(CFMetaData metadata, boolean insertReversed, int initialCapacity);
 
-        public T create(CFMetaData metadata, boolean insertReversed)
-        {
+        public T create(CFMetaData metadata, boolean insertReversed) {
             return create(metadata, insertReversed, 0);
         }
 
-        public T create(CFMetaData metadata)
-        {
+        public T create(CFMetaData metadata) {
             return create(metadata, false);
         }
 
-        public T create(String keyspace, String cfName)
-        {
+        public T create(String keyspace, String cfName) {
             return create(Schema.instance.getCFMetaData(keyspace, cfName));
         }
     }
-
 }

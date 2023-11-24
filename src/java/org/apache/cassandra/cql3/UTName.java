@@ -19,45 +19,63 @@ package org.apache.cassandra.cql3;
 
 import java.nio.ByteBuffer;
 
-public class UTName
-{
+public class UTName {
+
+    private static final org.slf4j.Logger serialize_logger = org.slf4j.LoggerFactory.getLogger("serialize.logger");
+
+    private java.lang.ThreadLocal<Boolean> isSerializeLoggingActive = new ThreadLocal<Boolean>() {
+
+        @Override
+        protected Boolean initialValue() {
+            return false;
+        }
+    };
+
     private String ksName;
+
     private final ColumnIdentifier utName;
 
-    public UTName(ColumnIdentifier ksName, ColumnIdentifier utName)
-    {
+    public UTName(ColumnIdentifier ksName, ColumnIdentifier utName) {
         this.ksName = ksName == null ? null : ksName.toString();
         this.utName = utName;
     }
 
-    public boolean hasKeyspace()
-    {
+    public boolean hasKeyspace() {
         return ksName != null;
     }
 
-    public void setKeyspace(String keyspace)
-    {
+    public void setKeyspace(String keyspace) {
         this.ksName = keyspace;
     }
 
-    public String getKeyspace()
-    {
+    public String getKeyspace() {
+        if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+            if (!isSerializeLoggingActive.get()) {
+                isSerializeLoggingActive.set(true);
+                serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(this, this.ksName, "this.ksName").toJsonString());
+                isSerializeLoggingActive.set(false);
+            }
+        }
         return ksName;
     }
 
-    public ByteBuffer getUserTypeName()
-    {
+    public ByteBuffer getUserTypeName() {
+        if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+            if (!isSerializeLoggingActive.get()) {
+                isSerializeLoggingActive.set(true);
+                serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(this, this.utName, "this.utName").toJsonString());
+                isSerializeLoggingActive.set(false);
+            }
+        }
         return utName.bytes;
     }
 
-    public String getStringTypeName()
-    {
+    public String getStringTypeName() {
         return utName.toString();
     }
 
     @Override
-    public String toString()
-    {
+    public String toString() {
         return (hasKeyspace() ? (ksName + ".") : "") + utName;
     }
 }

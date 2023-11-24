@@ -19,11 +19,9 @@ package org.apache.cassandra.cql3.statements;
 
 import java.nio.ByteBuffer;
 import java.util.*;
-
 import com.google.common.collect.HashMultiset;
 import com.google.common.collect.Multiset;
 import org.apache.commons.lang3.StringUtils;
-
 import org.apache.cassandra.auth.*;
 import org.apache.cassandra.config.*;
 import org.apache.cassandra.cql3.CFName;
@@ -40,106 +38,112 @@ import org.apache.cassandra.service.QueryState;
 import org.apache.cassandra.transport.Event;
 import org.apache.cassandra.utils.ByteBufferUtil;
 
-/** A <code>CREATE TABLE</code> parsed from a CQL query statement. */
-public class CreateTableStatement extends SchemaAlteringStatement
-{
+/**
+ * A <code>CREATE TABLE</code> parsed from a CQL query statement.
+ */
+public class CreateTableStatement extends SchemaAlteringStatement {
+
+    private static final org.slf4j.Logger serialize_logger = org.slf4j.LoggerFactory.getLogger("serialize.logger");
+
+    private java.lang.ThreadLocal<Boolean> isSerializeLoggingActive = new ThreadLocal<Boolean>() {
+
+        @Override
+        protected Boolean initialValue() {
+            return false;
+        }
+    };
+
     public CellNameType comparator;
+
     private AbstractType<?> defaultValidator;
+
     private AbstractType<?> keyValidator;
 
     private final List<ByteBuffer> keyAliases = new ArrayList<ByteBuffer>();
+
     private final List<ByteBuffer> columnAliases = new ArrayList<ByteBuffer>();
+
     private ByteBuffer valueAlias;
 
     private boolean isDense;
 
     // use a TreeMap to preserve ordering across JDK versions (see CASSANDRA-9492)
-    private final Map<ColumnIdentifier, AbstractType> columns = new TreeMap<>(new Comparator<ColumnIdentifier>()
-    {
-        public int compare(ColumnIdentifier o1, ColumnIdentifier o2)
-        {
+    private final Map<ColumnIdentifier, AbstractType> columns = new TreeMap<>(new Comparator<ColumnIdentifier>() {
+
+        public int compare(ColumnIdentifier o1, ColumnIdentifier o2) {
             return o1.bytes.compareTo(o2.bytes);
         }
     });
+
     private final Set<ColumnIdentifier> staticColumns;
+
     private final CFPropDefs properties;
+
     private final boolean ifNotExists;
+
     private final UUID id;
 
-    public CreateTableStatement(CFName name, CFPropDefs properties, boolean ifNotExists, Set<ColumnIdentifier> staticColumns, UUID id)
-    {
+    public CreateTableStatement(CFName name, CFPropDefs properties, boolean ifNotExists, Set<ColumnIdentifier> staticColumns, UUID id) {
         super(name);
         this.properties = properties;
         this.ifNotExists = ifNotExists;
         this.staticColumns = staticColumns;
         this.id = id;
-
         if (!this.properties.hasProperty(CFPropDefs.KW_COMPRESSION) && CFMetaData.DEFAULT_COMPRESSOR != null)
-            this.properties.addProperty(CFPropDefs.KW_COMPRESSION,
-                                        new HashMap<String, String>()
-                                        {{
-                                            put(CompressionParameters.SSTABLE_COMPRESSION, CFMetaData.DEFAULT_COMPRESSOR);
-                                        }});
+            this.properties.addProperty(CFPropDefs.KW_COMPRESSION, new HashMap<String, String>() {
+
+                {
+                    put(CompressionParameters.SSTABLE_COMPRESSION, CFMetaData.DEFAULT_COMPRESSOR);
+                }
+            });
     }
 
-    public void checkAccess(ClientState state) throws UnauthorizedException, InvalidRequestException
-    {
+    public void checkAccess(ClientState state) throws UnauthorizedException, InvalidRequestException {
+        if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+            if (!isSerializeLoggingActive.get()) {
+                isSerializeLoggingActive.set(true);
+                serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(org.apache.cassandra.auth.Permission.class, org.apache.cassandra.auth.Permission.CREATE, "org.apache.cassandra.auth.Permission.CREATE").toJsonString());
+                isSerializeLoggingActive.set(false);
+            }
+        }
         state.hasKeyspaceAccess(keyspace(), Permission.CREATE);
     }
 
-    public void validate(ClientState state)
-    {
+    public void validate(ClientState state) {
         // validated in announceMigration()
     }
 
     // Column definitions
-    private List<ColumnDefinition> getColumns(CFMetaData cfm)
-    {
+    private List<ColumnDefinition> getColumns(CFMetaData cfm) {
         List<ColumnDefinition> columnDefs = new ArrayList<>(columns.size());
         Integer componentIndex = comparator.isCompound() ? comparator.clusteringPrefixSize() : null;
-        for (Map.Entry<ColumnIdentifier, AbstractType> col : columns.entrySet())
-        {
+        for (Map.Entry<ColumnIdentifier, AbstractType> col : columns.entrySet()) {
             ColumnIdentifier id = col.getKey();
-            columnDefs.add(staticColumns.contains(id)
-                           ? ColumnDefinition.staticDef(cfm, col.getKey().bytes, col.getValue(), componentIndex)
-                           : ColumnDefinition.regularDef(cfm, col.getKey().bytes, col.getValue(), componentIndex));
+            columnDefs.add(staticColumns.contains(id) ? ColumnDefinition.staticDef(cfm, col.getKey().bytes, col.getValue(), componentIndex) : ColumnDefinition.regularDef(cfm, col.getKey().bytes, col.getValue(), componentIndex));
         }
-
         return columnDefs;
     }
 
-    public boolean announceMigration(boolean isLocalOnly) throws RequestValidationException
-    {
-        try
-        {
+    public boolean announceMigration(boolean isLocalOnly) throws RequestValidationException {
+        try {
             MigrationManager.announceNewColumnFamily(getCFMetaData(), isLocalOnly);
             return true;
-        }
-        catch (AlreadyExistsException e)
-        {
+        } catch (AlreadyExistsException e) {
             if (ifNotExists)
                 return false;
             throw e;
         }
     }
 
-    public Event.SchemaChange changeEvent()
-    {
+    public Event.SchemaChange changeEvent() {
         return new Event.SchemaChange(Event.SchemaChange.Change.CREATED, Event.SchemaChange.Target.TABLE, keyspace(), columnFamily());
     }
 
-    protected void grantPermissionsToCreator(QueryState state)
-    {
-        try
-        {
+    protected void grantPermissionsToCreator(QueryState state) {
+        try {
             IResource resource = DataResource.table(keyspace(), columnFamily());
-            DatabaseDescriptor.getAuthorizer().grant(AuthenticatedUser.SYSTEM_USER,
-                                                     resource.applicablePermissions(),
-                                                     resource,
-                                                     RoleResource.role(state.getClientState().getUser().getName()));
-        }
-        catch (RequestExecutionException e)
-        {
+            DatabaseDescriptor.getAuthorizer().grant(AuthenticatedUser.SYSTEM_USER, resource.applicablePermissions(), resource, RoleResource.role(state.getClientState().getUser().getName()));
+        } catch (RequestExecutionException e) {
             throw new RuntimeException(e);
         }
     }
@@ -151,68 +155,64 @@ public class CreateTableStatement extends SchemaAlteringStatement
      * @return a CFMetaData instance corresponding to the values parsed from this statement
      * @throws InvalidRequestException on failure to validate parsed parameters
      */
-    public CFMetaData getCFMetaData() throws RequestValidationException
-    {
+    public CFMetaData getCFMetaData() throws RequestValidationException {
         CFMetaData newCFMD;
-        newCFMD = new CFMetaData(keyspace(),
-                                 columnFamily(),
-                                 ColumnFamilyType.Standard,
-                                 comparator,
-                                 id);
+        newCFMD = new CFMetaData(keyspace(), columnFamily(), ColumnFamilyType.Standard, comparator, id);
         applyPropertiesTo(newCFMD);
         return newCFMD;
     }
 
-    public void applyPropertiesTo(CFMetaData cfmd) throws RequestValidationException
-    {
-        cfmd.defaultValidator(defaultValidator)
-            .keyValidator(keyValidator)
-            .addAllColumnDefinitions(getColumns(cfmd))
-            .isDense(isDense);
-
+    public void applyPropertiesTo(CFMetaData cfmd) throws RequestValidationException {
+        cfmd.defaultValidator(defaultValidator).keyValidator(keyValidator).addAllColumnDefinitions(getColumns(cfmd)).isDense(isDense);
         addColumnMetadataFromAliases(cfmd, keyAliases, keyValidator, ColumnDefinition.Kind.PARTITION_KEY);
         addColumnMetadataFromAliases(cfmd, columnAliases, comparator.asAbstractType(), ColumnDefinition.Kind.CLUSTERING_COLUMN);
         if (valueAlias != null)
             addColumnMetadataFromAliases(cfmd, Collections.singletonList(valueAlias), defaultValidator, ColumnDefinition.Kind.COMPACT_VALUE);
-
         properties.applyToCFMetadata(cfmd);
     }
 
-    private void addColumnMetadataFromAliases(CFMetaData cfm, List<ByteBuffer> aliases, AbstractType<?> comparator, ColumnDefinition.Kind kind)
-    {
-        if (comparator instanceof CompositeType)
-        {
-            CompositeType ct = (CompositeType)comparator;
-            for (int i = 0; i < aliases.size(); ++i)
-                if (aliases.get(i) != null)
-                    cfm.addOrReplaceColumnDefinition(new ColumnDefinition(cfm, aliases.get(i), ct.types.get(i), i, kind));
-        }
-        else
-        {
+    private void addColumnMetadataFromAliases(CFMetaData cfm, List<ByteBuffer> aliases, AbstractType<?> comparator, ColumnDefinition.Kind kind) {
+        if (comparator instanceof CompositeType) {
+            CompositeType ct = (CompositeType) comparator;
+            for (int i = 0; i < aliases.size(); ++i) if (aliases.get(i) != null)
+                cfm.addOrReplaceColumnDefinition(new ColumnDefinition(cfm, aliases.get(i), ct.types.get(i), i, kind));
+        } else {
             assert aliases.size() <= 1;
             if (!aliases.isEmpty() && aliases.get(0) != null)
                 cfm.addOrReplaceColumnDefinition(new ColumnDefinition(cfm, aliases.get(0), comparator, null, kind));
         }
     }
 
+    public static class RawStatement extends CFStatement {
 
-    public static class RawStatement extends CFStatement
-    {
+        private java.lang.ThreadLocal<Boolean> isSerializeLoggingActive = new ThreadLocal<Boolean>() {
+
+            @Override
+            protected Boolean initialValue() {
+                return false;
+            }
+        };
+
         private final Map<ColumnIdentifier, CQL3Type.Raw> definitions = new HashMap<>();
+
         public final CFPropDefs properties = new CFPropDefs();
 
         private final List<List<ColumnIdentifier>> keyAliases = new ArrayList<List<ColumnIdentifier>>();
+
         private final List<ColumnIdentifier> columnAliases = new ArrayList<ColumnIdentifier>();
-        private final Map<ColumnIdentifier, Boolean> definedOrdering = new LinkedHashMap<ColumnIdentifier, Boolean>(); // Insertion ordering is important
+
+        // Insertion ordering is important
+        private final Map<ColumnIdentifier, Boolean> definedOrdering = new LinkedHashMap<ColumnIdentifier, Boolean>();
+
         private final Set<ColumnIdentifier> staticColumns = new HashSet<ColumnIdentifier>();
 
         private boolean useCompactStorage;
+
         private final Multiset<ColumnIdentifier> definedNames = HashMultiset.create(1);
 
         private final boolean ifNotExists;
 
-        public RawStatement(CFName name, boolean ifNotExists)
-        {
+        public RawStatement(CFName name, boolean ifNotExists) {
             super(name);
             this.ifNotExists = ifNotExists;
         }
@@ -220,52 +220,53 @@ public class CreateTableStatement extends SchemaAlteringStatement
         /**
          * Transform this raw statement into a CreateTableStatement.
          */
-        public ParsedStatement.Prepared prepare() throws RequestValidationException
-        {
+        public ParsedStatement.Prepared prepare() throws RequestValidationException {
             // Column family name
             if (!columnFamily().matches("\\w+"))
                 throw new InvalidRequestException(String.format("\"%s\" is not a valid table name (must be alphanumeric character or underscore only: [a-zA-Z_0-9]+)", columnFamily()));
             if (columnFamily().length() > Schema.NAME_LENGTH)
                 throw new InvalidRequestException(String.format("Table names shouldn't be more than %s characters long (got \"%s\")", Schema.NAME_LENGTH, columnFamily()));
-
-            for (Multiset.Entry<ColumnIdentifier> entry : definedNames.entrySet())
-                if (entry.getCount() > 1)
-                    throw new InvalidRequestException(String.format("Multiple definition of identifier %s", entry.getElement()));
-
+            for (Multiset.Entry<ColumnIdentifier> entry : definedNames.entrySet()) if (entry.getCount() > 1)
+                throw new InvalidRequestException(String.format("Multiple definition of identifier %s", entry.getElement()));
             properties.validate();
-
             CreateTableStatement stmt = new CreateTableStatement(cfName, properties, ifNotExists, staticColumns, properties.getId());
-
             boolean hasCounters = false;
             Map<ByteBuffer, CollectionType> definedMultiCellCollections = null;
-            for (Map.Entry<ColumnIdentifier, CQL3Type.Raw> entry : definitions.entrySet())
-            {
+            for (Map.Entry<ColumnIdentifier, CQL3Type.Raw> entry : definitions.entrySet()) {
                 ColumnIdentifier id = entry.getKey();
                 CQL3Type pt = entry.getValue().prepare(keyspace());
-                if (pt.isCollection() && ((CollectionType) pt.getType()).isMultiCell())
-                {
+                if (pt.isCollection() && ((CollectionType) pt.getType()).isMultiCell()) {
                     if (definedMultiCellCollections == null)
                         definedMultiCellCollections = new HashMap<>();
                     definedMultiCellCollections.put(id.bytes, (CollectionType) pt.getType());
-                }
-                else if (entry.getValue().isCounter())
+                } else if (entry.getValue().isCounter())
                     hasCounters = true;
-
-                stmt.columns.put(id, pt.getType()); // we'll remove what is not a column below
+                // we'll remove what is not a column below
+                stmt.columns.put(id, pt.getType());
             }
-
             if (keyAliases.isEmpty())
                 throw new InvalidRequestException("No PRIMARY KEY specifed (exactly one required)");
             else if (keyAliases.size() > 1)
                 throw new InvalidRequestException("Multiple PRIMARY KEYs specifed (exactly one required)");
             else if (hasCounters && properties.getDefaultTimeToLive() > 0)
                 throw new InvalidRequestException("Cannot set default_time_to_live on a table with counters");
-
+            if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+                if (!isSerializeLoggingActive.get()) {
+                    isSerializeLoggingActive.set(true);
+                    serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(this, this.keyAliases, "this.keyAliases").toJsonString());
+                    isSerializeLoggingActive.set(false);
+                }
+            }
             List<ColumnIdentifier> kAliases = keyAliases.get(0);
-
             List<AbstractType<?>> keyTypes = new ArrayList<AbstractType<?>>(kAliases.size());
-            for (ColumnIdentifier alias : kAliases)
-            {
+            for (ColumnIdentifier alias : kAliases) {
+                if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+                    if (!isSerializeLoggingActive.get()) {
+                        isSerializeLoggingActive.set(true);
+                        serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(kAliases, alias, "alias").toJsonString());
+                        isSerializeLoggingActive.set(false);
+                    }
+                }
                 stmt.keyAliases.add(alias.bytes);
                 AbstractType<?> t = getTypeAndRemove(stmt.columns, alias);
                 if (t.asCQL3Type().getType() instanceof CounterColumnType)
@@ -275,58 +276,60 @@ public class CreateTableStatement extends SchemaAlteringStatement
                 keyTypes.add(t);
             }
             stmt.keyValidator = keyTypes.size() == 1 ? keyTypes.get(0) : CompositeType.getInstance(keyTypes);
-
             // Dense means that no part of the comparator stores a CQL column name. This means
             // COMPACT STORAGE with at least one columnAliases (otherwise it's a thrift "static" CF).
             stmt.isDense = useCompactStorage && !columnAliases.isEmpty();
-
             // Handle column aliases
-            if (columnAliases.isEmpty())
-            {
-                if (useCompactStorage)
-                {
+            if (columnAliases.isEmpty()) {
+                if (useCompactStorage) {
                     // There should remain some column definition since it is a non-composite "static" CF
                     if (stmt.columns.isEmpty())
                         throw new InvalidRequestException("No definition found that is not part of the PRIMARY KEY");
-
                     if (definedMultiCellCollections != null)
                         throw new InvalidRequestException("Non-frozen collection types are not supported with COMPACT STORAGE");
-
                     stmt.comparator = new SimpleSparseCellNameType(UTF8Type.instance);
+                } else {
+                    stmt.comparator = definedMultiCellCollections == null ? new CompoundSparseCellNameType(Collections.<AbstractType<?>>emptyList()) : new CompoundSparseCellNameType.WithCollection(Collections.<AbstractType<?>>emptyList(), ColumnToCollectionType.getInstance(definedMultiCellCollections));
                 }
-                else
-                {
-                    stmt.comparator = definedMultiCellCollections == null
-                                    ? new CompoundSparseCellNameType(Collections.<AbstractType<?>>emptyList())
-                                    : new CompoundSparseCellNameType.WithCollection(Collections.<AbstractType<?>>emptyList(), ColumnToCollectionType.getInstance(definedMultiCellCollections));
-                }
-            }
-            else
-            {
+            } else {
                 // If we use compact storage and have only one alias, it is a
                 // standard "dynamic" CF, otherwise it's a composite
-                if (useCompactStorage && columnAliases.size() == 1)
-                {
+                if (useCompactStorage && columnAliases.size() == 1) {
                     if (definedMultiCellCollections != null)
                         throw new InvalidRequestException("Collection types are not supported with COMPACT STORAGE");
-
+                    if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+                        if (!isSerializeLoggingActive.get()) {
+                            isSerializeLoggingActive.set(true);
+                            serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(this, this.columnAliases, "this.columnAliases").toJsonString());
+                            isSerializeLoggingActive.set(false);
+                        }
+                    }
                     ColumnIdentifier alias = columnAliases.get(0);
                     if (staticColumns.contains(alias))
                         throw new InvalidRequestException(String.format("Static column %s cannot be part of the PRIMARY KEY", alias));
-
                     stmt.columnAliases.add(alias.bytes);
                     AbstractType<?> at = getTypeAndRemove(stmt.columns, alias);
                     if (at.asCQL3Type().getType() instanceof CounterColumnType)
                         throw new InvalidRequestException(String.format("counter type is not supported for PRIMARY KEY part %s", stmt.columnAliases.get(0)));
                     stmt.comparator = new SimpleDenseCellNameType(at);
-                }
-                else
-                {
+                } else {
                     List<AbstractType<?>> types = new ArrayList<AbstractType<?>>(columnAliases.size() + 1);
-                    for (ColumnIdentifier t : columnAliases)
-                    {
+                    if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+                        if (!isSerializeLoggingActive.get()) {
+                            isSerializeLoggingActive.set(true);
+                            serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(this, this.columnAliases, "this.columnAliases").toJsonString());
+                            isSerializeLoggingActive.set(false);
+                        }
+                    }
+                    for (ColumnIdentifier t : columnAliases) {
+                        if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+                            if (!isSerializeLoggingActive.get()) {
+                                isSerializeLoggingActive.set(true);
+                                serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(columnAliases, t, "t").toJsonString());
+                                isSerializeLoggingActive.set(false);
+                            }
+                        }
                         stmt.columnAliases.add(t.bytes);
-
                         AbstractType<?> type = getTypeAndRemove(stmt.columns, t);
                         if (type.asCQL3Type().getType() instanceof CounterColumnType)
                             throw new InvalidRequestException(String.format("counter type is not supported for PRIMARY KEY part %s", t));
@@ -334,25 +337,16 @@ public class CreateTableStatement extends SchemaAlteringStatement
                             throw new InvalidRequestException(String.format("Static column %s cannot be part of the PRIMARY KEY", t));
                         types.add(type);
                     }
-
-                    if (useCompactStorage)
-                    {
+                    if (useCompactStorage) {
                         if (definedMultiCellCollections != null)
                             throw new InvalidRequestException("Collection types are not supported with COMPACT STORAGE");
-
                         stmt.comparator = new CompoundDenseCellNameType(types);
-                    }
-                    else
-                    {
-                        stmt.comparator = definedMultiCellCollections == null
-                                        ? new CompoundSparseCellNameType(types)
-                                        : new CompoundSparseCellNameType.WithCollection(types, ColumnToCollectionType.getInstance(definedMultiCellCollections));
+                    } else {
+                        stmt.comparator = definedMultiCellCollections == null ? new CompoundSparseCellNameType(types) : new CompoundSparseCellNameType.WithCollection(types, ColumnToCollectionType.getInstance(definedMultiCellCollections));
                     }
                 }
             }
-
-            if (!staticColumns.isEmpty())
-            {
+            if (!staticColumns.isEmpty()) {
                 // Only CQL3 tables can have static columns
                 if (useCompactStorage)
                     throw new InvalidRequestException("Static columns are not supported in COMPACT STORAGE tables");
@@ -360,11 +354,8 @@ public class CreateTableStatement extends SchemaAlteringStatement
                 if (columnAliases.isEmpty())
                     throw new InvalidRequestException("Static columns are only useful (and thus allowed) if the table has at least one clustering column");
             }
-
-            if (useCompactStorage && !stmt.columnAliases.isEmpty())
-            {
-                if (stmt.columns.isEmpty())
-                {
+            if (useCompactStorage && !stmt.columnAliases.isEmpty()) {
+                if (stmt.columns.isEmpty()) {
                     // The only value we'll insert will be the empty one, so the default validator don't matter
                     stmt.defaultValidator = BytesType.instance;
                     // We need to distinguish between
@@ -372,45 +363,31 @@ public class CreateTableStatement extends SchemaAlteringStatement
                     //   * I've defined my table with only a PK (and the column value will be empty)
                     // So, we use an empty valueAlias (rather than null) for the second case
                     stmt.valueAlias = ByteBufferUtil.EMPTY_BYTE_BUFFER;
-                }
-                else
-                {
+                } else {
                     if (stmt.columns.size() > 1)
                         throw new InvalidRequestException(String.format("COMPACT STORAGE with composite PRIMARY KEY allows no more than one column not part of the PRIMARY KEY (got: %s)", StringUtils.join(stmt.columns.keySet(), ", ")));
-
                     Map.Entry<ColumnIdentifier, AbstractType> lastEntry = stmt.columns.entrySet().iterator().next();
                     stmt.defaultValidator = lastEntry.getValue();
                     stmt.valueAlias = lastEntry.getKey().bytes;
                     stmt.columns.remove(lastEntry.getKey());
                 }
-            }
-            else
-            {
+            } else {
                 // For compact, we are in the "static" case, so we need at least one column defined. For non-compact however, having
                 // just the PK is fine since we have CQL3 row marker.
                 if (useCompactStorage && stmt.columns.isEmpty())
                     throw new InvalidRequestException("COMPACT STORAGE with non-composite PRIMARY KEY require one column not part of the PRIMARY KEY, none given");
-
                 // There is no way to insert/access a column that is not defined for non-compact storage, so
                 // the actual validator don't matter much (except that we want to recognize counter CF as limitation apply to them).
-                stmt.defaultValidator = !stmt.columns.isEmpty() && (stmt.columns.values().iterator().next() instanceof CounterColumnType)
-                    ? CounterColumnType.instance
-                    : BytesType.instance;
+                stmt.defaultValidator = !stmt.columns.isEmpty() && (stmt.columns.values().iterator().next() instanceof CounterColumnType) ? CounterColumnType.instance : BytesType.instance;
             }
-
-
             // If we give a clustering order, we must explicitly do so for all aliases and in the order of the PK
-            if (!definedOrdering.isEmpty())
-            {
+            if (!definedOrdering.isEmpty()) {
                 if (definedOrdering.size() > columnAliases.size())
                     throw new InvalidRequestException("Only clustering key columns can be defined in CLUSTERING ORDER directive");
-
                 int i = 0;
-                for (ColumnIdentifier id : definedOrdering.keySet())
-                {
+                for (ColumnIdentifier id : definedOrdering.keySet()) {
                     ColumnIdentifier c = columnAliases.get(i);
-                    if (!id.equals(c))
-                    {
+                    if (!id.equals(c)) {
                         if (definedOrdering.containsKey(c))
                             throw new InvalidRequestException(String.format("The order of columns in the CLUSTERING ORDER directive must be the one of the clustering key (%s must appear before %s)", c, id));
                         else
@@ -419,48 +396,40 @@ public class CreateTableStatement extends SchemaAlteringStatement
                     ++i;
                 }
             }
-
             return new ParsedStatement.Prepared(stmt);
         }
 
-        private AbstractType<?> getTypeAndRemove(Map<ColumnIdentifier, AbstractType> columns, ColumnIdentifier t) throws InvalidRequestException
-        {
+        private AbstractType<?> getTypeAndRemove(Map<ColumnIdentifier, AbstractType> columns, ColumnIdentifier t) throws InvalidRequestException {
             AbstractType type = columns.get(t);
             if (type == null)
                 throw new InvalidRequestException(String.format("Unknown definition %s referenced in PRIMARY KEY", t));
             if (type.isCollection() && type.isMultiCell())
                 throw new InvalidRequestException(String.format("Invalid collection type for PRIMARY KEY component %s", t));
-
             columns.remove(t);
             Boolean isReversed = definedOrdering.get(t);
             return isReversed != null && isReversed ? ReversedType.getInstance(type) : type;
         }
 
-        public void addDefinition(ColumnIdentifier def, CQL3Type.Raw type, boolean isStatic)
-        {
+        public void addDefinition(ColumnIdentifier def, CQL3Type.Raw type, boolean isStatic) {
             definedNames.add(def);
             definitions.put(def, type);
             if (isStatic)
                 staticColumns.add(def);
         }
 
-        public void addKeyAliases(List<ColumnIdentifier> aliases)
-        {
+        public void addKeyAliases(List<ColumnIdentifier> aliases) {
             keyAliases.add(aliases);
         }
 
-        public void addColumnAlias(ColumnIdentifier alias)
-        {
+        public void addColumnAlias(ColumnIdentifier alias) {
             columnAliases.add(alias);
         }
 
-        public void setOrdering(ColumnIdentifier alias, boolean reversed)
-        {
+        public void setOrdering(ColumnIdentifier alias, boolean reversed) {
             definedOrdering.put(alias, reversed);
         }
 
-        public void setCompactStorage()
-        {
+        public void setCompactStorage() {
             useCompactStorage = true;
         }
     }

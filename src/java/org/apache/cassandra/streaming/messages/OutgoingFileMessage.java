@@ -20,9 +20,7 @@ package org.apache.cassandra.streaming.messages;
 import java.io.IOException;
 import java.nio.channels.ReadableByteChannel;
 import java.util.List;
-
 import com.google.common.annotations.VisibleForTesting;
-
 import org.apache.cassandra.io.compress.CompressionMetadata;
 import org.apache.cassandra.io.sstable.format.SSTableReader;
 import org.apache.cassandra.io.util.DataOutputStreamPlus;
@@ -36,108 +34,98 @@ import org.apache.cassandra.utils.concurrent.Ref;
 /**
  * OutgoingFileMessage is used to transfer the part(or whole) of a SSTable data file.
  */
-public class OutgoingFileMessage extends StreamMessage
-{
-    public static Serializer<OutgoingFileMessage> serializer = new Serializer<OutgoingFileMessage>()
-    {
-        public OutgoingFileMessage deserialize(ReadableByteChannel in, int version, StreamSession session) throws IOException
-        {
+public class OutgoingFileMessage extends StreamMessage {
+
+    private static final org.slf4j.Logger serialize_logger = org.slf4j.LoggerFactory.getLogger("serialize.logger");
+
+    private java.lang.ThreadLocal<Boolean> isSerializeLoggingActive = new ThreadLocal<Boolean>() {
+
+        @Override
+        protected Boolean initialValue() {
+            return false;
+        }
+    };
+
+    public static Serializer<OutgoingFileMessage> serializer = new Serializer<OutgoingFileMessage>() {
+
+        public OutgoingFileMessage deserialize(ReadableByteChannel in, int version, StreamSession session) throws IOException {
             throw new UnsupportedOperationException("Not allowed to call deserialize on an outgoing file");
         }
 
-        public void serialize(OutgoingFileMessage message, DataOutputStreamPlus out, int version, StreamSession session) throws IOException
-        {
+        public void serialize(OutgoingFileMessage message, DataOutputStreamPlus out, int version, StreamSession session) throws IOException {
             message.startTransfer();
-            try
-            {
+            try {
                 message.serialize(out, version, session);
                 session.fileSent(message.header);
-            }
-            finally
-            {
+            } finally {
                 message.finishTransfer();
             }
         }
     };
 
     public final FileMessageHeader header;
+
     private final Ref<SSTableReader> ref;
+
     private final String filename;
+
     private boolean completed = false;
+
     private boolean transferring = false;
 
-    public OutgoingFileMessage(Ref<SSTableReader> ref, int sequenceNumber, long estimatedKeys, List<Pair<Long, Long>> sections, long repairedAt, boolean keepSSTableLevel)
-    {
+    public OutgoingFileMessage(Ref<SSTableReader> ref, int sequenceNumber, long estimatedKeys, List<Pair<Long, Long>> sections, long repairedAt, boolean keepSSTableLevel) {
         super(Type.FILE);
         this.ref = ref;
-
         SSTableReader sstable = ref.get();
         filename = sstable.getFilename();
-        this.header = new FileMessageHeader(sstable.metadata.cfId,
-                                            sequenceNumber,
-                                            sstable.descriptor.version.toString(),
-                                            sstable.descriptor.formatType,
-                                            estimatedKeys,
-                                            sections,
-                                            sstable.compression ? sstable.getCompressionMetadata() : null,
-                                            repairedAt,
-                                            keepSSTableLevel ? sstable.getSSTableLevel() : 0);
+        this.header = new FileMessageHeader(sstable.metadata.cfId, sequenceNumber, sstable.descriptor.version.toString(), sstable.descriptor.formatType, estimatedKeys, sections, sstable.compression ? sstable.getCompressionMetadata() : null, repairedAt, keepSSTableLevel ? sstable.getSSTableLevel() : 0);
     }
 
-    public synchronized void serialize(DataOutputStreamPlus out, int version, StreamSession session) throws IOException
-    {
-        if (completed)
-        {
+    public synchronized void serialize(DataOutputStreamPlus out, int version, StreamSession session) throws IOException {
+        if (completed) {
             return;
         }
-
+        if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+            if (!isSerializeLoggingActive.get()) {
+                isSerializeLoggingActive.set(true);
+                serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(this, this.header, "this.header").toJsonString());
+                isSerializeLoggingActive.set(false);
+            }
+        }
         CompressionInfo compressionInfo = FileMessageHeader.serializer.serialize(header, out, version);
-
         final SSTableReader reader = ref.get();
-        StreamWriter writer = compressionInfo == null ?
-                                      new StreamWriter(reader, header.sections, session) :
-                                      new CompressedStreamWriter(reader, header.sections,
-                                                                 compressionInfo, session);
+        StreamWriter writer = compressionInfo == null ? new StreamWriter(reader, header.sections, session) : new CompressedStreamWriter(reader, header.sections, compressionInfo, session);
         writer.write(out);
     }
 
     @VisibleForTesting
-    public synchronized void finishTransfer()
-    {
+    public synchronized void finishTransfer() {
         transferring = false;
         //session was aborted mid-transfer, now it's safe to release
-        if (completed)
-        {
+        if (completed) {
             ref.release();
         }
     }
 
     @VisibleForTesting
-    public synchronized void startTransfer()
-    {
+    public synchronized void startTransfer() {
         if (completed)
-            throw new RuntimeException(String.format("Transfer of file %s already completed or aborted (perhaps session failed?).",
-                                                     filename));
+            throw new RuntimeException(String.format("Transfer of file %s already completed or aborted (perhaps session failed?).", filename));
         transferring = true;
     }
 
-    public synchronized void complete()
-    {
-        if (!completed)
-        {
+    public synchronized void complete() {
+        if (!completed) {
             completed = true;
             //release only if not transferring
-            if (!transferring)
-            {
+            if (!transferring) {
                 ref.release();
             }
         }
     }
 
     @Override
-    public String toString()
-    {
+    public String toString() {
         return "File (" + header + ", file: " + filename + ")";
     }
 }
-

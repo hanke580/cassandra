@@ -18,9 +18,7 @@
 package org.apache.cassandra.repair;
 
 import java.net.InetAddress;
-
 import com.google.common.util.concurrent.AbstractFuture;
-
 import org.apache.cassandra.exceptions.RepairException;
 import org.apache.cassandra.net.MessagingService;
 import org.apache.cassandra.repair.messages.ValidationRequest;
@@ -30,14 +28,25 @@ import org.apache.cassandra.utils.MerkleTree;
  * ValidationTask sends {@link ValidationRequest} to a replica.
  * When a replica sends back message, task completes.
  */
-public class ValidationTask extends AbstractFuture<TreeResponse> implements Runnable
-{
+public class ValidationTask extends AbstractFuture<TreeResponse> implements Runnable {
+
+    private static final org.slf4j.Logger serialize_logger = org.slf4j.LoggerFactory.getLogger("serialize.logger");
+
+    private java.lang.ThreadLocal<Boolean> isSerializeLoggingActive = new ThreadLocal<Boolean>() {
+
+        @Override
+        protected Boolean initialValue() {
+            return false;
+        }
+    };
+
     private final RepairJobDesc desc;
+
     private final InetAddress endpoint;
+
     private final int gcBefore;
 
-    public ValidationTask(RepairJobDesc desc, InetAddress endpoint, int gcBefore)
-    {
+    public ValidationTask(RepairJobDesc desc, InetAddress endpoint, int gcBefore) {
         this.desc = desc;
         this.endpoint = endpoint;
         this.gcBefore = gcBefore;
@@ -46,8 +55,14 @@ public class ValidationTask extends AbstractFuture<TreeResponse> implements Runn
     /**
      * Send ValidationRequest to replica
      */
-    public void run()
-    {
+    public void run() {
+        if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+            if (!isSerializeLoggingActive.get()) {
+                isSerializeLoggingActive.set(true);
+                serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(this, this.gcBefore, "this.gcBefore").toJsonString());
+                isSerializeLoggingActive.set(false);
+            }
+        }
         ValidationRequest request = new ValidationRequest(desc, gcBefore);
         MessagingService.instance().sendOneWay(request.createMessage(), endpoint);
     }
@@ -57,14 +72,10 @@ public class ValidationTask extends AbstractFuture<TreeResponse> implements Runn
      *
      * @param tree MerkleTree that is sent from replica. Null if validation failed on replica node.
      */
-    public void treeReceived(MerkleTree tree)
-    {
-        if (tree == null)
-        {
+    public void treeReceived(MerkleTree tree) {
+        if (tree == null) {
             setException(new RepairException(desc, "Validation failed in " + endpoint));
-        }
-        else
-        {
+        } else {
             set(new TreeResponse(endpoint, tree));
         }
     }

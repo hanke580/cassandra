@@ -20,7 +20,6 @@ package org.apache.cassandra.db.compaction;
 import com.google.common.base.Throwables;
 import com.google.common.collect.Sets;
 import org.apache.cassandra.db.*;
-
 import org.apache.cassandra.io.sstable.Component;
 import org.apache.cassandra.io.sstable.CorruptSSTableException;
 import org.apache.cassandra.io.sstable.SSTableIdentityIterator;
@@ -34,7 +33,6 @@ import org.apache.cassandra.utils.ByteBufferUtil;
 import org.apache.cassandra.utils.JVMStabilityInspector;
 import org.apache.cassandra.utils.OutputHandler;
 import org.apache.cassandra.utils.UUIDGen;
-
 import java.io.Closeable;
 import java.io.File;
 import java.io.IOError;
@@ -42,242 +40,194 @@ import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.util.*;
 
-public class Verifier implements Closeable
-{
+public class Verifier implements Closeable {
+
+    private static final org.slf4j.Logger serialize_logger = org.slf4j.LoggerFactory.getLogger("serialize.logger");
+
+    private java.lang.ThreadLocal<Boolean> isSerializeLoggingActive = new ThreadLocal<Boolean>() {
+
+        @Override
+        protected Boolean initialValue() {
+            return false;
+        }
+    };
+
     private final ColumnFamilyStore cfs;
+
     private final SSTableReader sstable;
 
     private final CompactionController controller;
 
-
     private final RandomAccessReader dataFile;
+
     private final RandomAccessReader indexFile;
+
     private final VerifyInfo verifyInfo;
+
     private final RowIndexEntry.IndexSerializer rowIndexEntrySerializer;
 
     private int goodRows;
+
     private int badRows;
 
     private final OutputHandler outputHandler;
+
     private FileDigestValidator validator;
 
-    public Verifier(ColumnFamilyStore cfs, SSTableReader sstable, boolean isOffline) throws IOException
-    {
+    public Verifier(ColumnFamilyStore cfs, SSTableReader sstable, boolean isOffline) throws IOException {
         this(cfs, sstable, new OutputHandler.LogOutput(), isOffline);
     }
 
-    public Verifier(ColumnFamilyStore cfs, SSTableReader sstable, OutputHandler outputHandler, boolean isOffline) throws IOException
-    {
+    public Verifier(ColumnFamilyStore cfs, SSTableReader sstable, OutputHandler outputHandler, boolean isOffline) throws IOException {
         this.cfs = cfs;
         this.sstable = sstable;
         this.outputHandler = outputHandler;
         this.rowIndexEntrySerializer = sstable.descriptor.version.getSSTableFormat().getIndexSerializer(sstable.metadata);
-
         this.controller = new VerifyController(cfs);
-
-        this.dataFile = isOffline
-                        ? sstable.openDataReader()
-                        : sstable.openDataReader(CompactionManager.instance.getRateLimiter());
+        this.dataFile = isOffline ? sstable.openDataReader() : sstable.openDataReader(CompactionManager.instance.getRateLimiter());
         this.indexFile = RandomAccessReader.open(new File(sstable.descriptor.filenameFor(Component.PRIMARY_INDEX)));
         this.verifyInfo = new VerifyInfo(dataFile, sstable);
     }
 
-    public void verify(boolean extended) throws IOException
-    {
+    public void verify(boolean extended) throws IOException {
         long rowStart = 0;
-
         outputHandler.output(String.format("Verifying %s (%s bytes)", sstable, dataFile.length()));
         outputHandler.output(String.format("Checking computed hash of %s ", sstable));
-
-
         // Verify will use the adler32 Digest files, which works for both compressed and uncompressed sstables
-        try
-        {
+        try {
             validator = null;
-
-            if (new File(sstable.descriptor.filenameFor(Component.DIGEST)).exists())
-            {
+            if (new File(sstable.descriptor.filenameFor(Component.DIGEST)).exists()) {
                 validator = DataIntegrityMetadata.fileDigestValidator(sstable.descriptor);
                 validator.validate();
-            }
-            else
-            {
+            } else {
                 outputHandler.output("Data digest missing, assuming extended verification of disk atoms");
                 extended = true;
             }
-        }
-        catch (IOException e)
-        {
+        } catch (IOException e) {
             outputHandler.debug(e.getMessage());
             markAndThrow();
-        }
-        finally
-        {
+        } finally {
             FileUtils.closeQuietly(validator);
         }
-
-        if ( !extended )
+        if (!extended)
             return;
-
         outputHandler.output("Extended Verify requested, proceeding to inspect atoms");
-
-
-        try
-        {
+        try {
             ByteBuffer nextIndexKey = ByteBufferUtil.readWithShortLength(indexFile);
             {
                 long firstRowPositionFromIndex = rowIndexEntrySerializer.deserialize(indexFile, sstable.descriptor.version).position;
                 if (firstRowPositionFromIndex != 0)
                     markAndThrow();
             }
-
             DecoratedKey prevKey = null;
-
-            while (!dataFile.isEOF())
-            {
-
+            while (!dataFile.isEOF()) {
                 if (verifyInfo.isStopRequested())
                     throw new CompactionInterruptedException(verifyInfo.getCompactionInfo());
-
                 rowStart = dataFile.getFilePointer();
                 outputHandler.debug("Reading row at " + rowStart);
-
                 DecoratedKey key = null;
-                try
-                {
+                try {
                     key = sstable.partitioner.decorateKey(ByteBufferUtil.readWithShortLength(dataFile));
-                }
-                catch (Throwable th)
-                {
+                } catch (Throwable th) {
                     throwIfFatal(th);
                     // check for null key below
                 }
-
                 ByteBuffer currentIndexKey = nextIndexKey;
                 long nextRowPositionFromIndex = 0;
-                try
-                {
+                try {
                     nextIndexKey = indexFile.isEOF() ? null : ByteBufferUtil.readWithShortLength(indexFile);
-                    nextRowPositionFromIndex = indexFile.isEOF()
-                                             ? dataFile.length()
-                                             : rowIndexEntrySerializer.deserialize(indexFile, sstable.descriptor.version).position;
-                }
-                catch (Throwable th)
-                {
+                    nextRowPositionFromIndex = indexFile.isEOF() ? dataFile.length() : rowIndexEntrySerializer.deserialize(indexFile, sstable.descriptor.version).position;
+                } catch (Throwable th) {
                     markAndThrow();
                 }
-
                 long dataStart = dataFile.getFilePointer();
-                long dataStartFromIndex = currentIndexKey == null
-                                        ? -1
-                                        : rowStart + 2 + currentIndexKey.remaining();
-
+                long dataStartFromIndex = currentIndexKey == null ? -1 : rowStart + 2 + currentIndexKey.remaining();
                 long dataSize = nextRowPositionFromIndex - dataStartFromIndex;
                 // avoid an NPE if key is null
                 String keyName = key == null ? "(unreadable key)" : ByteBufferUtil.bytesToHex(key.getKey());
                 outputHandler.debug(String.format("row %s is %s bytes", keyName, dataSize));
-
                 assert currentIndexKey != null || indexFile.isEOF();
-
-                try
-                {
+                try {
                     if (key == null || dataSize > dataFile.length())
                         markAndThrow();
-
                     //mimic the scrub read path
                     new SSTableIdentityIterator(sstable, dataFile, key, true);
-                    if ( (prevKey != null && prevKey.compareTo(key) > 0) || !key.getKey().equals(currentIndexKey) || dataStart != dataStartFromIndex )
+                    if ((prevKey != null && prevKey.compareTo(key) > 0) || !key.getKey().equals(currentIndexKey) || dataStart != dataStartFromIndex)
                         markAndThrow();
-                    
                     goodRows++;
                     prevKey = key;
-
-
                     outputHandler.debug(String.format("Row %s at %s valid, moving to next row at %s ", goodRows, rowStart, nextRowPositionFromIndex));
                     dataFile.seek(nextRowPositionFromIndex);
-                }
-                catch (Throwable th)
-                {
+                } catch (Throwable th) {
                     badRows++;
                     markAndThrow();
                 }
             }
-        }
-        catch (Throwable t)
-        {
+        } catch (Throwable t) {
             throw Throwables.propagate(t);
-        }
-        finally
-        {
+        } finally {
             controller.close();
         }
-
         outputHandler.output("Verify of " + sstable + " succeeded. All " + goodRows + " rows read successfully");
     }
 
-    public void close()
-    {
+    public void close() {
         FileUtils.closeQuietly(dataFile);
         FileUtils.closeQuietly(indexFile);
     }
 
-    private void throwIfFatal(Throwable th)
-    {
+    private void throwIfFatal(Throwable th) {
         if (th instanceof Error && !(th instanceof AssertionError || th instanceof IOError))
             throw (Error) th;
     }
 
-    private void markAndThrow() throws IOException
-    {
+    private void markAndThrow() throws IOException {
         sstable.descriptor.getMetadataSerializer().mutateRepairedAt(sstable.descriptor, ActiveRepairService.UNREPAIRED_SSTABLE);
         throw new CorruptSSTableException(new Exception(String.format("Invalid SSTable %s, please force repair", sstable.getFilename())), sstable.getFilename());
     }
 
-    public CompactionInfo.Holder getVerifyInfo()
-    {
+    public CompactionInfo.Holder getVerifyInfo() {
+        if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+            if (!isSerializeLoggingActive.get()) {
+                isSerializeLoggingActive.set(true);
+                serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(this, this.verifyInfo, "this.verifyInfo").toJsonString());
+                isSerializeLoggingActive.set(false);
+            }
+        }
         return verifyInfo;
     }
 
-    private static class VerifyInfo extends CompactionInfo.Holder
-    {
+    private static class VerifyInfo extends CompactionInfo.Holder {
+
         private final RandomAccessReader dataFile;
+
         private final SSTableReader sstable;
+
         private final UUID verificationCompactionId;
 
-        public VerifyInfo(RandomAccessReader dataFile, SSTableReader sstable)
-        {
+        public VerifyInfo(RandomAccessReader dataFile, SSTableReader sstable) {
             this.dataFile = dataFile;
             this.sstable = sstable;
             verificationCompactionId = UUIDGen.getTimeUUID();
         }
 
-        public CompactionInfo getCompactionInfo()
-        {
-            try
-            {
-                return new CompactionInfo(sstable.metadata,
-                                          OperationType.VERIFY,
-                                          dataFile.getFilePointer(),
-                                          dataFile.length(),
-                                          verificationCompactionId);
-            }
-            catch (Exception e)
-            {
+        public CompactionInfo getCompactionInfo() {
+            try {
+                return new CompactionInfo(sstable.metadata, OperationType.VERIFY, dataFile.getFilePointer(), dataFile.length(), verificationCompactionId);
+            } catch (Exception e) {
                 throw new RuntimeException();
             }
         }
     }
 
-    private static class VerifyController extends CompactionController
-    {
-        public VerifyController(ColumnFamilyStore cfs)
-        {
+    private static class VerifyController extends CompactionController {
+
+        public VerifyController(ColumnFamilyStore cfs) {
             super(cfs, Integer.MAX_VALUE);
         }
 
         @Override
-        public long maxPurgeableTimestamp(DecoratedKey key)
-        {
+        public long maxPurgeableTimestamp(DecoratedKey key) {
             return Long.MIN_VALUE;
         }
     }

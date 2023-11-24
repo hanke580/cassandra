@@ -19,37 +19,41 @@ package org.apache.cassandra.db.composites;
 
 import java.nio.ByteBuffer;
 import java.util.List;
-
 import org.apache.cassandra.db.marshal.AbstractType;
 
 /**
  * A not truly-composite CType.
  */
-public class SimpleCType extends AbstractCType
-{
+public class SimpleCType extends AbstractCType {
+
+    private static final org.slf4j.Logger serialize_logger = org.slf4j.LoggerFactory.getLogger("serialize.logger");
+
+    private java.lang.ThreadLocal<Boolean> isSerializeLoggingActive = new ThreadLocal<Boolean>() {
+
+        @Override
+        protected Boolean initialValue() {
+            return false;
+        }
+    };
+
     protected final AbstractType<?> type;
 
-    public SimpleCType(AbstractType<?> type)
-    {
+    public SimpleCType(AbstractType<?> type) {
         super(type.isByteOrderComparable());
         this.type = type;
     }
 
-    public boolean isCompound()
-    {
+    public boolean isCompound() {
         return false;
     }
 
-    public int size()
-    {
+    public int size() {
         return 1;
     }
 
-    public int compare(Composite c1, Composite c2)
-    {
+    public int compare(Composite c1, Composite c2) {
         if (isByteOrderComparable)
             return AbstractSimpleCellNameType.compareUnsigned(c1, c2);
-
         assert !(c1.isEmpty() | c2.isEmpty());
         // This method assumes that simple composites never have an EOC != NONE. This assumption
         // stands in particular on the fact that a Composites.EMPTY never has a non-NONE EOC. If
@@ -57,95 +61,93 @@ public class SimpleCType extends AbstractCType
         return type.compare(c1.get(0), c2.get(0));
     }
 
-    public AbstractType<?> subtype(int i)
-    {
+    public AbstractType<?> subtype(int i) {
         if (i != 0)
             throw new IndexOutOfBoundsException();
+        if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+            if (!isSerializeLoggingActive.get()) {
+                isSerializeLoggingActive.set(true);
+                serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(this, this.type, "this.type").toJsonString());
+                isSerializeLoggingActive.set(false);
+            }
+        }
         return type;
     }
 
-    public Composite fromByteBuffer(ByteBuffer bytes)
-    {
+    public Composite fromByteBuffer(ByteBuffer bytes) {
+        if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+            if (!isSerializeLoggingActive.get()) {
+                isSerializeLoggingActive.set(true);
+                serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(org.apache.cassandra.db.composites.Composites.class, org.apache.cassandra.db.composites.Composites.EMPTY, "org.apache.cassandra.db.composites.Composites.EMPTY").toJsonString());
+                isSerializeLoggingActive.set(false);
+            }
+        }
         return !bytes.hasRemaining() ? Composites.EMPTY : new SimpleComposite(bytes);
     }
 
-    public CBuilder builder()
-    {
+    public CBuilder builder() {
         return new SimpleCBuilder(this);
     }
 
-    public CType setSubtype(int position, AbstractType<?> newType)
-    {
+    public CType setSubtype(int position, AbstractType<?> newType) {
         if (position != 0)
             throw new IndexOutOfBoundsException();
         return new SimpleCType(newType);
     }
 
     // Use sparingly, it defeats the purpose
-    public AbstractType<?> asAbstractType()
-    {
+    public AbstractType<?> asAbstractType() {
         return type;
     }
 
-    public static class SimpleCBuilder implements CBuilder
-    {
+    public static class SimpleCBuilder implements CBuilder {
+
         private final CType type;
+
         private ByteBuffer value;
 
-        public SimpleCBuilder(CType type)
-        {
+        public SimpleCBuilder(CType type) {
             this.type = type;
         }
 
-        public int remainingCount()
-        {
+        public int remainingCount() {
             return value == null ? 1 : 0;
         }
 
-        public CBuilder add(ByteBuffer value)
-        {
+        public CBuilder add(ByteBuffer value) {
             if (this.value != null)
                 throw new IllegalStateException();
             this.value = value;
             return this;
         }
 
-        public CBuilder add(Object value)
-        {
-            return add(((AbstractType)type.subtype(0)).decompose(value));
+        public CBuilder add(Object value) {
+            return add(((AbstractType) type.subtype(0)).decompose(value));
         }
 
-        public Composite build()
-        {
+        public Composite build() {
             if (value == null || !value.hasRemaining())
                 return Composites.EMPTY;
-
             // If we're building a dense cell name, then we can directly allocate the
             // CellName object as it's complete.
-            if (type instanceof CellNameType && ((CellNameType)type).isDense())
+            if (type instanceof CellNameType && ((CellNameType) type).isDense())
                 return new SimpleDenseCellName(value);
-
             return new SimpleComposite(value);
         }
 
-        public Composite buildWith(ByteBuffer value)
-        {
+        public Composite buildWith(ByteBuffer value) {
             if (this.value != null)
                 throw new IllegalStateException();
-
             if (value == null || !value.hasRemaining())
                 return Composites.EMPTY;
-
             // If we're building a dense cell name, then we can directly allocate the
             // CellName object as it's complete.
-            if (type instanceof CellNameType && ((CellNameType)type).isDense())
+            if (type instanceof CellNameType && ((CellNameType) type).isDense())
                 return new SimpleDenseCellName(value);
-
             return new SimpleComposite(value);
         }
 
-        public Composite buildWith(List<ByteBuffer> values)
-        {
+        public Composite buildWith(List<ByteBuffer> values) {
             if (values.size() > 1)
                 throw new IllegalStateException();
             if (values.isEmpty())

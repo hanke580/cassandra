@@ -16,6 +16,7 @@
  * limitations under the License.
  */
 package org.apache.cassandra.db.columniterator;
+
 /*
  * 
  * Licensed to the Apache Software Foundation (ASF) under one
@@ -36,15 +37,11 @@ package org.apache.cassandra.db.columniterator;
  * under the License.
  * 
  */
-
-
 import com.google.common.collect.AbstractIterator;
 import org.apache.cassandra.db.ColumnFamily;
 import org.apache.cassandra.db.DecoratedKey;
 import org.apache.cassandra.db.OnDiskAtom;
-
 import java.io.IOException;
-
 
 /*
  * The goal of this encapsulating OnDiskAtomIterator is to delay the use of
@@ -56,44 +53,56 @@ import java.io.IOException;
  * this IColumnIterator make sure getKey() can be called without triggering
  * the use of the filter itself.
  */
-public class LazyColumnIterator extends AbstractIterator<OnDiskAtom> implements OnDiskAtomIterator
-{
+public class LazyColumnIterator extends AbstractIterator<OnDiskAtom> implements OnDiskAtomIterator {
+
+    private static final org.slf4j.Logger serialize_logger = org.slf4j.LoggerFactory.getLogger("serialize.logger");
+
+    private java.lang.ThreadLocal<Boolean> isSerializeLoggingActive = new ThreadLocal<Boolean>() {
+
+        @Override
+        protected Boolean initialValue() {
+            return false;
+        }
+    };
+
     private final DecoratedKey key;
+
     private final IColumnIteratorFactory subIteratorFactory;
 
     private OnDiskAtomIterator subIterator;
 
-    public LazyColumnIterator(DecoratedKey key, IColumnIteratorFactory subIteratorFactory)
-    {
+    public LazyColumnIterator(DecoratedKey key, IColumnIteratorFactory subIteratorFactory) {
         this.key = key;
         this.subIteratorFactory = subIteratorFactory;
     }
 
-    private OnDiskAtomIterator getSubIterator()
-    {
+    private OnDiskAtomIterator getSubIterator() {
         if (subIterator == null)
             subIterator = subIteratorFactory.create();
         return subIterator;
     }
 
-    protected OnDiskAtom computeNext()
-    {
+    protected OnDiskAtom computeNext() {
         getSubIterator();
         return subIterator.hasNext() ? subIterator.next() : endOfData();
     }
 
-    public ColumnFamily getColumnFamily()
-    {
+    public ColumnFamily getColumnFamily() {
         return getSubIterator().getColumnFamily();
     }
 
-    public DecoratedKey getKey()
-    {
+    public DecoratedKey getKey() {
+        if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+            if (!isSerializeLoggingActive.get()) {
+                isSerializeLoggingActive.set(true);
+                serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(this, this.key, "this.key").toJsonString());
+                isSerializeLoggingActive.set(false);
+            }
+        }
         return key;
     }
 
-    public void close() throws IOException
-    {
+    public void close() throws IOException {
         if (subIterator != null)
             subIterator.close();
     }

@@ -18,7 +18,6 @@
 package org.apache.cassandra.io.sstable.format.big;
 
 import java.io.IOException;
-
 import org.apache.cassandra.db.ColumnFamily;
 import org.apache.cassandra.db.DecoratedKey;
 import org.apache.cassandra.db.OnDiskAtom;
@@ -31,13 +30,23 @@ import org.apache.cassandra.io.util.FileDataInput;
 /**
  *  A Cell Iterator over SSTable
  */
-class SSTableSliceIterator implements OnDiskAtomIterator
-{
+class SSTableSliceIterator implements OnDiskAtomIterator {
+
+    private static final org.slf4j.Logger serialize_logger = org.slf4j.LoggerFactory.getLogger("serialize.logger");
+
+    private java.lang.ThreadLocal<Boolean> isSerializeLoggingActive = new ThreadLocal<Boolean>() {
+
+        @Override
+        protected Boolean initialValue() {
+            return false;
+        }
+    };
+
     private final OnDiskAtomIterator reader;
+
     private final DecoratedKey key;
 
-    public SSTableSliceIterator(SSTableReader sstable, DecoratedKey key, ColumnSlice[] slices, boolean reversed)
-    {
+    public SSTableSliceIterator(SSTableReader sstable, DecoratedKey key, ColumnSlice[] slices, boolean reversed) {
         this.key = key;
         RowIndexEntry indexEntry = sstable.getPosition(key, SSTableReader.Operator.EQ);
         this.reader = indexEntry == null ? null : createReader(sstable, indexEntry, null, slices, reversed);
@@ -55,48 +64,44 @@ class SSTableSliceIterator implements OnDiskAtomIterator
      * @param reversed Results are returned in reverse order iff reversed is true.
      * @param indexEntry position of the row
      */
-    public SSTableSliceIterator(SSTableReader sstable, FileDataInput file, DecoratedKey key, ColumnSlice[] slices, boolean reversed, RowIndexEntry indexEntry)
-    {
+    public SSTableSliceIterator(SSTableReader sstable, FileDataInput file, DecoratedKey key, ColumnSlice[] slices, boolean reversed, RowIndexEntry indexEntry) {
         this.key = key;
         reader = createReader(sstable, indexEntry, file, slices, reversed);
     }
 
-    private static OnDiskAtomIterator createReader(SSTableReader sstable, RowIndexEntry indexEntry, FileDataInput file, ColumnSlice[] slices, boolean reversed)
-    {
-        return slices.length == 1 && slices[0].start.isEmpty() && !reversed
-             ? new SimpleSliceReader(sstable, indexEntry, file, slices[0].finish)
-             : new IndexedSliceReader(sstable, indexEntry, file, slices, reversed);
+    private static OnDiskAtomIterator createReader(SSTableReader sstable, RowIndexEntry indexEntry, FileDataInput file, ColumnSlice[] slices, boolean reversed) {
+        return slices.length == 1 && slices[0].start.isEmpty() && !reversed ? new SimpleSliceReader(sstable, indexEntry, file, slices[0].finish) : new IndexedSliceReader(sstable, indexEntry, file, slices, reversed);
     }
 
-    public DecoratedKey getKey()
-    {
+    public DecoratedKey getKey() {
+        if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+            if (!isSerializeLoggingActive.get()) {
+                isSerializeLoggingActive.set(true);
+                serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(this, this.key, "this.key").toJsonString());
+                isSerializeLoggingActive.set(false);
+            }
+        }
         return key;
     }
 
-    public ColumnFamily getColumnFamily()
-    {
+    public ColumnFamily getColumnFamily() {
         return reader == null ? null : reader.getColumnFamily();
     }
 
-    public boolean hasNext()
-    {
+    public boolean hasNext() {
         return reader != null && reader.hasNext();
     }
 
-    public OnDiskAtom next()
-    {
+    public OnDiskAtom next() {
         return reader.next();
     }
 
-    public void remove()
-    {
+    public void remove() {
         throw new UnsupportedOperationException();
     }
 
-    public void close() throws IOException
-    {
+    public void close() throws IOException {
         if (reader != null)
             reader.close();
     }
-
 }

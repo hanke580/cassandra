@@ -18,7 +18,6 @@
 package org.apache.cassandra.dht;
 
 import java.util.Set;
-
 import org.apache.cassandra.db.SystemKeyspace;
 import org.apache.cassandra.streaming.StreamEvent;
 import org.apache.cassandra.streaming.StreamEventHandler;
@@ -28,10 +27,19 @@ import org.apache.cassandra.streaming.StreamState;
 /**
  * Store and update available ranges (data already received) to system keyspace.
  */
-public class StreamStateStore implements StreamEventHandler
-{
-    public Set<Range<Token>> getAvailableRanges(String keyspace, IPartitioner partitioner)
-    {
+public class StreamStateStore implements StreamEventHandler {
+
+    private static final org.slf4j.Logger serialize_logger = org.slf4j.LoggerFactory.getLogger("serialize.logger");
+
+    private java.lang.ThreadLocal<Boolean> isSerializeLoggingActive = new ThreadLocal<Boolean>() {
+
+        @Override
+        protected Boolean initialValue() {
+            return false;
+        }
+    };
+
+    public Set<Range<Token>> getAvailableRanges(String keyspace, IPartitioner partitioner) {
         return SystemKeyspace.getAvailableRanges(keyspace, partitioner);
     }
 
@@ -42,11 +50,9 @@ public class StreamStateStore implements StreamEventHandler
      * @param token token to check
      * @return true if given token in the keyspace is already streamed and ready to be served.
      */
-    public boolean isDataAvailable(String keyspace, Token token)
-    {
+    public boolean isDataAvailable(String keyspace, Token token) {
         Set<Range<Token>> availableRanges = getAvailableRanges(keyspace, token.getPartitioner());
-        for (Range<Token> range : availableRanges)
-        {
+        for (Range<Token> range : availableRanges) {
             if (range.contains(token))
                 return true;
         }
@@ -59,15 +65,25 @@ public class StreamStateStore implements StreamEventHandler
      * @param event Stream event.
      */
     @Override
-    public void handleStreamEvent(StreamEvent event)
-    {
-        if (event.eventType == StreamEvent.Type.STREAM_COMPLETE)
-        {
+    public void handleStreamEvent(StreamEvent event) {
+        if (event.eventType == StreamEvent.Type.STREAM_COMPLETE) {
             StreamEvent.SessionCompleteEvent se = (StreamEvent.SessionCompleteEvent) event;
-            if (se.success)
-            {
-                for (StreamRequest request : se.requests)
-                {
+            if (se.success) {
+                if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+                    if (!isSerializeLoggingActive.get()) {
+                        isSerializeLoggingActive.set(true);
+                        serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(se, se.requests, "se.requests").toJsonString());
+                        isSerializeLoggingActive.set(false);
+                    }
+                }
+                for (StreamRequest request : se.requests) {
+                    if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+                        if (!isSerializeLoggingActive.get()) {
+                            isSerializeLoggingActive.set(true);
+                            serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(se.requests, request, "request").toJsonString());
+                            isSerializeLoggingActive.set(false);
+                        }
+                    }
                     SystemKeyspace.updateAvailableRanges(request.keyspace, request.ranges);
                 }
             }
@@ -75,8 +91,10 @@ public class StreamStateStore implements StreamEventHandler
     }
 
     @Override
-    public void onSuccess(StreamState streamState) {}
+    public void onSuccess(StreamState streamState) {
+    }
 
     @Override
-    public void onFailure(Throwable throwable) {}
+    public void onFailure(Throwable throwable) {
+    }
 }

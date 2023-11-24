@@ -18,22 +18,36 @@
 package org.apache.cassandra.db;
 
 import java.nio.ByteBuffer;
-
 import org.apache.cassandra.dht.Token;
 
-public class BufferDecoratedKey extends DecoratedKey
-{
+public class BufferDecoratedKey extends DecoratedKey {
+
+    private static final org.slf4j.Logger serialize_logger = org.slf4j.LoggerFactory.getLogger("serialize.logger");
+
+    private java.lang.ThreadLocal<Boolean> isSerializeLoggingActive = new ThreadLocal<Boolean>() {
+
+        @Override
+        protected Boolean initialValue() {
+            return false;
+        }
+    };
+
     private final ByteBuffer key;
 
-    public BufferDecoratedKey(Token token, ByteBuffer key)
-    {
+    public BufferDecoratedKey(Token token, ByteBuffer key) {
         super(token);
         assert key != null;
         this.key = key;
     }
 
-    public ByteBuffer getKey()
-    {
+    public ByteBuffer getKey() {
+        if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+            if (!isSerializeLoggingActive.get()) {
+                isSerializeLoggingActive.set(true);
+                serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(this, this.key, "this.key").toJsonString());
+                isSerializeLoggingActive.set(false);
+            }
+        }
         return key;
     }
 }

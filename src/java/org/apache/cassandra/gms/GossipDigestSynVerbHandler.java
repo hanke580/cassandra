@@ -19,67 +19,62 @@ package org.apache.cassandra.gms;
 
 import java.net.InetAddress;
 import java.util.*;
-
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-
 import org.apache.cassandra.config.DatabaseDescriptor;
 import org.apache.cassandra.net.IVerbHandler;
 import org.apache.cassandra.net.MessageIn;
 import org.apache.cassandra.net.MessageOut;
 import org.apache.cassandra.net.MessagingService;
 
-public class GossipDigestSynVerbHandler implements IVerbHandler<GossipDigestSyn>
-{
+public class GossipDigestSynVerbHandler implements IVerbHandler<GossipDigestSyn> {
+
+    private static final org.slf4j.Logger serialize_logger = org.slf4j.LoggerFactory.getLogger("serialize.logger");
+
+    private java.lang.ThreadLocal<Boolean> isSerializeLoggingActive = new ThreadLocal<Boolean>() {
+
+        @Override
+        protected Boolean initialValue() {
+            return false;
+        }
+    };
+
     private static final Logger logger = LoggerFactory.getLogger(GossipDigestSynVerbHandler.class);
 
-    public void doVerb(MessageIn<GossipDigestSyn> message, int id)
-    {
+    public void doVerb(MessageIn<GossipDigestSyn> message, int id) {
         InetAddress from = message.from;
         if (logger.isTraceEnabled())
             logger.trace("Received a GossipDigestSynMessage from {}", from);
-        if (!Gossiper.instance.isEnabled())
-        {
+        if (!Gossiper.instance.isEnabled()) {
             if (logger.isTraceEnabled())
                 logger.trace("Ignoring GossipDigestSynMessage because gossip is disabled");
             return;
         }
-
         GossipDigestSyn gDigestMessage = message.payload;
         /* If the message is from a different cluster throw it away. */
-        if (!gDigestMessage.clusterId.equals(DatabaseDescriptor.getClusterName()))
-        {
+        if (!gDigestMessage.clusterId.equals(DatabaseDescriptor.getClusterName())) {
             logger.warn("ClusterName mismatch from {} {}!={}", from, gDigestMessage.clusterId, DatabaseDescriptor.getClusterName());
             return;
         }
-
-        if (gDigestMessage.partioner != null && !gDigestMessage.partioner.equals(DatabaseDescriptor.getPartitionerName()))
-        {
+        if (gDigestMessage.partioner != null && !gDigestMessage.partioner.equals(DatabaseDescriptor.getPartitionerName())) {
             logger.warn("Partitioner mismatch from {} {}!={}", from, gDigestMessage.partioner, DatabaseDescriptor.getPartitionerName());
             return;
         }
-
         List<GossipDigest> gDigestList = gDigestMessage.getGossipDigests();
-        if (logger.isTraceEnabled())
-        {
+        if (logger.isTraceEnabled()) {
             StringBuilder sb = new StringBuilder();
-            for (GossipDigest gDigest : gDigestList)
-            {
+            for (GossipDigest gDigest : gDigestList) {
                 sb.append(gDigest);
                 sb.append(" ");
             }
             logger.trace("Gossip syn digests are : {}", sb);
         }
-
         doSort(gDigestList);
-
         List<GossipDigest> deltaGossipDigestList = new ArrayList<GossipDigest>();
         Map<InetAddress, EndpointState> deltaEpStateMap = new HashMap<InetAddress, EndpointState>();
         Gossiper.instance.examineGossiper(gDigestList, deltaGossipDigestList, deltaEpStateMap);
         logger.trace("sending {} digests and {} deltas", deltaGossipDigestList.size(), deltaEpStateMap.size());
-        MessageOut<GossipDigestAck> gDigestAckMessage = new MessageOut<GossipDigestAck>(MessagingService.Verb.GOSSIP_DIGEST_ACK,
-                                                                                        new GossipDigestAck(deltaGossipDigestList, deltaEpStateMap),
-                                                                                        GossipDigestAck.serializer);
+        MessageOut<GossipDigestAck> gDigestAckMessage = new MessageOut<GossipDigestAck>(MessagingService.Verb.GOSSIP_DIGEST_ACK, new GossipDigestAck(deltaGossipDigestList, deltaEpStateMap), GossipDigestAck.serializer);
         if (logger.isTraceEnabled())
             logger.trace("Sending a GossipDigestAckMessage to {}", from);
         MessagingService.instance().sendOneWay(gDigestAckMessage, from);
@@ -92,29 +87,31 @@ public class GossipDigestSynVerbHandler implements IVerbHandler<GossipDigestSyn>
      * Sort this list. Now loop through the sorted list and retrieve the GossipDigest corresponding
      * to the endpoint from the map that was initially constructed.
     */
-    private void doSort(List<GossipDigest> gDigestList)
-    {
+    private void doSort(List<GossipDigest> gDigestList) {
         /* Construct a map of endpoint to GossipDigest. */
         Map<InetAddress, GossipDigest> epToDigestMap = new HashMap<InetAddress, GossipDigest>();
-        for (GossipDigest gDigest : gDigestList)
-        {
+        for (GossipDigest gDigest : gDigestList) {
+            if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+                if (!isSerializeLoggingActive.get()) {
+                    isSerializeLoggingActive.set(true);
+                    serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(gDigestList, gDigest, "gDigest").toJsonString());
+                    isSerializeLoggingActive.set(false);
+                }
+            }
             epToDigestMap.put(gDigest.getEndpoint(), gDigest);
         }
-
         /*
          * These digests have their maxVersion set to the difference of the version
          * of the local EndpointState and the version found in the GossipDigest.
         */
         List<GossipDigest> diffDigests = new ArrayList<GossipDigest>(gDigestList.size());
-        for (GossipDigest gDigest : gDigestList)
-        {
+        for (GossipDigest gDigest : gDigestList) {
             InetAddress ep = gDigest.getEndpoint();
             EndpointState epState = Gossiper.instance.getEndpointStateForEndpoint(ep);
             int version = (epState != null) ? Gossiper.instance.getMaxEndpointStateVersion(epState) : 0;
             int diffVersion = Math.abs(version - gDigest.getMaxVersion());
             diffDigests.add(new GossipDigest(ep, gDigest.getGeneration(), diffVersion));
         }
-
         gDigestList.clear();
         Collections.sort(diffDigests);
         int size = diffDigests.size();
@@ -122,8 +119,7 @@ public class GossipDigestSynVerbHandler implements IVerbHandler<GossipDigestSyn>
          * Report the digests in descending order. This takes care of the endpoints
          * that are far behind w.r.t this local endpoint
         */
-        for (int i = size - 1; i >= 0; --i)
-        {
+        for (int i = size - 1; i >= 0; --i) {
             gDigestList.add(epToDigestMap.get(diffDigests.get(i).getEndpoint()));
         }
     }

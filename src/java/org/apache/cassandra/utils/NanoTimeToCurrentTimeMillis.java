@@ -18,23 +18,32 @@
 package org.apache.cassandra.utils;
 
 import java.util.concurrent.TimeUnit;
-
 import org.apache.cassandra.config.Config;
-
 import com.google.common.annotations.VisibleForTesting;
 
 /*
  * Convert from nanotime to non-monotonic current time millis. Beware of weaker ordering guarantees.
  */
-public class NanoTimeToCurrentTimeMillis
-{
+public class NanoTimeToCurrentTimeMillis {
+
+    private static java.lang.ThreadLocal<Boolean> isSerializeLoggingActiveStatic = new ThreadLocal<Boolean>() {
+
+        @Override
+        protected Boolean initialValue() {
+            return false;
+        }
+    };
+
+    private static final org.slf4j.Logger serialize_logger = org.slf4j.LoggerFactory.getLogger("serialize.logger");
+
     /*
      * How often to pull a new timestamp from the system.
      */
     private static final String TIMESTAMP_UPDATE_INTERVAL_PROPERTY = Config.PROPERTY_PREFIX + "NANOTIMETOMILLIS_TIMESTAMP_UPDATE_INTERVAL";
+
     private static final long TIMESTAMP_UPDATE_INTERVAL = Long.getLong(TIMESTAMP_UPDATE_INTERVAL_PROPERTY, 10000);
 
-    private static volatile long TIMESTAMP_BASE[] = new long[] { System.currentTimeMillis(), System.nanoTime() };
+    private static volatile long[] TIMESTAMP_BASE = new long[] { System.currentTimeMillis(), System.nanoTime() };
 
     @VisibleForTesting
     public static final Object TIMESTAMP_UPDATE = new Object();
@@ -48,37 +57,33 @@ public class NanoTimeToCurrentTimeMillis
      * These timestamps don't order with System.currentTimeMillis() because currentTimeMillis() can tick over
      * before this one does. I have seen it behind by as much as 2ms on Linux and 25ms on Windows.
      */
-    public static final long convert(long nanoTime)
-    {
-        final long timestampBase[] = TIMESTAMP_BASE;
+    public static final long convert(long nanoTime) {
+        if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+            if (!isSerializeLoggingActiveStatic.get()) {
+                isSerializeLoggingActiveStatic.set(true);
+                serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(org.apache.cassandra.utils.NanoTimeToCurrentTimeMillis.class, org.apache.cassandra.utils.NanoTimeToCurrentTimeMillis.TIMESTAMP_BASE, "org.apache.cassandra.utils.NanoTimeToCurrentTimeMillis.TIMESTAMP_BASE").toJsonString());
+                isSerializeLoggingActiveStatic.set(false);
+            }
+        }
+        final long[] timestampBase = TIMESTAMP_BASE;
         return timestampBase[0] + TimeUnit.NANOSECONDS.toMillis(nanoTime - timestampBase[1]);
     }
 
-    static
-    {
+    static {
         //Pick up updates from NTP periodically
-        Thread t = new Thread("NanoTimeToCurrentTimeMillis updater")
-        {
+        Thread t = new Thread("NanoTimeToCurrentTimeMillis updater") {
+
             @Override
-            public void run()
-            {
-                while (true)
-                {
-                    try
-                    {
-                        synchronized (TIMESTAMP_UPDATE)
-                        {
+            public void run() {
+                while (true) {
+                    try {
+                        synchronized (TIMESTAMP_UPDATE) {
                             TIMESTAMP_UPDATE.wait(TIMESTAMP_UPDATE_INTERVAL);
                         }
-                    }
-                    catch (InterruptedException e)
-                    {
+                    } catch (InterruptedException e) {
                         return;
                     }
-
-                    TIMESTAMP_BASE = new long[] {
-                            Math.max(TIMESTAMP_BASE[0], System.currentTimeMillis()),
-                            Math.max(TIMESTAMP_BASE[1], System.nanoTime()) };
+                    TIMESTAMP_BASE = new long[] { Math.max(TIMESTAMP_BASE[0], System.currentTimeMillis()), Math.max(TIMESTAMP_BASE[1], System.nanoTime()) };
                 }
             }
         };

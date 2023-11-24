@@ -22,9 +22,7 @@ import java.io.IOException;
 import java.io.UTFDataFormatException;
 import java.nio.ByteBuffer;
 import java.nio.channels.WritableByteChannel;
-
 import org.apache.cassandra.utils.memory.MemoryUtil;
-
 import com.google.common.base.Function;
 
 /**
@@ -35,24 +33,39 @@ import com.google.common.base.Function;
  * Currently necessary because SequentialWriter implements its own buffering along with mark/reset/truncate.
  * </p>
  */
-public abstract class UnbufferedDataOutputStreamPlus extends DataOutputStreamPlus
-{
+public abstract class UnbufferedDataOutputStreamPlus extends DataOutputStreamPlus {
+
+    private static java.lang.ThreadLocal<Boolean> isSerializeLoggingActiveStatic = new ThreadLocal<Boolean>() {
+
+        @Override
+        protected Boolean initialValue() {
+            return false;
+        }
+    };
+
+    private static final org.slf4j.Logger serialize_logger = org.slf4j.LoggerFactory.getLogger("serialize.logger");
+
+    private java.lang.ThreadLocal<Boolean> isSerializeLoggingActive = new ThreadLocal<Boolean>() {
+
+        @Override
+        protected Boolean initialValue() {
+            return false;
+        }
+    };
+
     private static final byte[] zeroBytes = new byte[2];
 
-    protected UnbufferedDataOutputStreamPlus()
-    {
+    protected UnbufferedDataOutputStreamPlus() {
         super();
     }
 
-    protected UnbufferedDataOutputStreamPlus(WritableByteChannel channel)
-    {
+    protected UnbufferedDataOutputStreamPlus(WritableByteChannel channel) {
         super(channel);
     }
 
     /*
     !! DataOutput methods below are copied from the implementation in Apache Harmony RandomAccessFile.
     */
-
     /**
      * Writes the entire contents of the byte array <code>buffer</code> to
      * this RandomAccessFile starting at the current file pointer.
@@ -60,8 +73,7 @@ public abstract class UnbufferedDataOutputStreamPlus extends DataOutputStreamPlu
      * @param buffer the buffer to be written.
      * @throws IOException If an error occurs trying to write to this RandomAccessFile.
      */
-    public void write(byte[] buffer) throws IOException
-    {
+    public void write(byte[] buffer) throws IOException {
         write(buffer, 0, buffer.length);
     }
 
@@ -97,8 +109,7 @@ public abstract class UnbufferedDataOutputStreamPlus extends DataOutputStreamPlu
      * @throws IOException If an error occurs attempting to write to this
      *                     DataOutputStream.
      */
-    public final void writeBoolean(boolean val) throws IOException
-    {
+    public final void writeBoolean(boolean val) throws IOException {
         write(val ? 1 : 0);
     }
 
@@ -109,8 +120,7 @@ public abstract class UnbufferedDataOutputStreamPlus extends DataOutputStreamPlu
      * @throws java.io.IOException If an error occurs attempting to write to this
      *                             DataOutputStream.
      */
-    public final void writeByte(int val) throws IOException
-    {
+    public final void writeByte(int val) throws IOException {
         write(val & 0xFF);
     }
 
@@ -121,11 +131,9 @@ public abstract class UnbufferedDataOutputStreamPlus extends DataOutputStreamPlu
      * @throws IOException If an error occurs attempting to write to this
      *                     DataOutputStream.
      */
-    public final void writeBytes(String str) throws IOException
-    {
-        byte bytes[] = new byte[str.length()];
-        for (int index = 0; index < str.length(); index++)
-        {
+    public final void writeBytes(String str) throws IOException {
+        byte[] bytes = new byte[str.length()];
+        for (int index = 0; index < str.length(); index++) {
             bytes[index] = (byte) (str.charAt(index) & 0xFF);
         }
         write(bytes);
@@ -140,8 +148,7 @@ public abstract class UnbufferedDataOutputStreamPlus extends DataOutputStreamPlu
      * @throws IOException If an error occurs attempting to write to this
      *                     DataOutputStream.
      */
-    public final void writeChar(int val) throws IOException
-    {
+    public final void writeChar(int val) throws IOException {
         write((val >>> 8) & 0xFF);
         write((val >>> 0) & 0xFF);
     }
@@ -156,11 +163,9 @@ public abstract class UnbufferedDataOutputStreamPlus extends DataOutputStreamPlu
      * @throws IOException If an error occurs attempting to write to this
      *                     DataOutputStream.
      */
-    public final void writeChars(String str) throws IOException
-    {
-        byte newBytes[] = new byte[str.length() * 2];
-        for (int index = 0; index < str.length(); index++)
-        {
+    public final void writeChars(String str) throws IOException {
+        byte[] newBytes = new byte[str.length() * 2];
+        for (int index = 0; index < str.length(); index++) {
             int newIndex = index == 0 ? index : index * 2;
             newBytes[newIndex] = (byte) ((str.charAt(index) >> 8) & 0xFF);
             newBytes[newIndex + 1] = (byte) (str.charAt(index) & 0xFF);
@@ -176,8 +181,7 @@ public abstract class UnbufferedDataOutputStreamPlus extends DataOutputStreamPlu
      * @throws IOException If an error occurs attempting to write to this
      *                     DataOutputStream.
      */
-    public final void writeDouble(double val) throws IOException
-    {
+    public final void writeDouble(double val) throws IOException {
         writeLong(Double.doubleToLongBits(val));
     }
 
@@ -189,8 +193,7 @@ public abstract class UnbufferedDataOutputStreamPlus extends DataOutputStreamPlu
      * @throws IOException If an error occurs attempting to write to this
      *                     DataOutputStream.
      */
-    public final void writeFloat(float val) throws IOException
-    {
+    public final void writeFloat(float val) throws IOException {
         writeInt(Float.floatToIntBits(val));
     }
 
@@ -202,8 +205,7 @@ public abstract class UnbufferedDataOutputStreamPlus extends DataOutputStreamPlu
      * @throws IOException If an error occurs attempting to write to this
      *                     DataOutputStream.
      */
-    public void writeInt(int val) throws IOException
-    {
+    public void writeInt(int val) throws IOException {
         write((val >>> 24) & 0xFF);
         write((val >>> 16) & 0xFF);
         write((val >>> 8) & 0xFF);
@@ -218,8 +220,7 @@ public abstract class UnbufferedDataOutputStreamPlus extends DataOutputStreamPlu
      * @throws IOException If an error occurs attempting to write to this
      *                     DataOutputStream.
      */
-    public void writeLong(long val) throws IOException
-    {
+    public void writeLong(long val) throws IOException {
         write((int) (val >>> 56) & 0xFF);
         write((int) (val >>> 48) & 0xFF);
         write((int) (val >>> 40) & 0xFF);
@@ -238,8 +239,7 @@ public abstract class UnbufferedDataOutputStreamPlus extends DataOutputStreamPlu
      * @throws IOException If an error occurs attempting to write to this
      *                     DataOutputStream.
      */
-    public void writeShort(int val) throws IOException
-    {
+    public void writeShort(int val) throws IOException {
         writeChar(val);
     }
 
@@ -251,19 +251,22 @@ public abstract class UnbufferedDataOutputStreamPlus extends DataOutputStreamPlu
      * @throws IOException If an error occurs attempting to write to this
      *                     DataOutputStream.
      */
-    public static void writeUTF(String str, DataOutput out) throws IOException
-    {
+    public static void writeUTF(String str, DataOutput out) throws IOException {
         int length = str.length();
-        if (length == 0)
-        {
+        if (length == 0) {
+            if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+                if (!isSerializeLoggingActiveStatic.get()) {
+                    isSerializeLoggingActiveStatic.set(true);
+                    serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(org.apache.cassandra.io.util.UnbufferedDataOutputStreamPlus.class, org.apache.cassandra.io.util.UnbufferedDataOutputStreamPlus.zeroBytes, "org.apache.cassandra.io.util.UnbufferedDataOutputStreamPlus.zeroBytes").toJsonString());
+                    isSerializeLoggingActiveStatic.set(false);
+                }
+            }
             out.write(zeroBytes);
             return;
         }
-
         int utfCount = 0;
         int maxSize = 2;
-        for (int i = 0 ; i < length ; i++)
-        {
+        for (int i = 0; i < length; i++) {
             int ch = str.charAt(i);
             if ((ch > 0) & (ch <= 127))
                 utfCount += 1;
@@ -272,70 +275,51 @@ public abstract class UnbufferedDataOutputStreamPlus extends DataOutputStreamPlu
             else
                 utfCount += maxSize = 3;
         }
-
         if (utfCount > 65535)
-            throw new UTFDataFormatException(); //$NON-NLS-1$
-
+            //$NON-NLS-1$
+            throw new UTFDataFormatException();
         byte[] utfBytes = retrieveTemporaryBuffer(utfCount + 2);
-
         int bufferLength = utfBytes.length;
-        if (utfCount == length)
-        {
+        if (utfCount == length) {
             utfBytes[0] = (byte) (utfCount >> 8);
             utfBytes[1] = (byte) utfCount;
             int firstIndex = 2;
-            for (int offset = 0 ; offset < length ; offset += bufferLength)
-            {
+            for (int offset = 0; offset < length; offset += bufferLength) {
                 int runLength = Math.min(bufferLength - firstIndex, length - offset) + firstIndex;
                 offset -= firstIndex;
-                for (int i = firstIndex ; i < runLength; i++)
-                    utfBytes[i] = (byte) str.charAt(offset + i);
+                for (int i = firstIndex; i < runLength; i++) utfBytes[i] = (byte) str.charAt(offset + i);
                 out.write(utfBytes, 0, runLength);
                 firstIndex = 0;
             }
-        }
-        else
-        {
+        } else {
             int utfIndex = 2;
             int offset = 0;
             utfBytes[0] = (byte) (utfCount >> 8);
             utfBytes[1] = (byte) utfCount;
-
-            while (length > 0)
-            {
+            while (length > 0) {
                 int charRunLength = (utfBytes.length - utfIndex) / maxSize;
-                if (charRunLength < 128 && charRunLength < length)
-                {
+                if (charRunLength < 128 && charRunLength < length) {
                     out.write(utfBytes, 0, utfIndex);
                     utfIndex = 0;
                 }
                 if (charRunLength > length)
                     charRunLength = length;
-
-                for (int i = 0 ; i < charRunLength ; i++)
-                {
+                for (int i = 0; i < charRunLength; i++) {
                     char ch = str.charAt(offset + i);
-                    if ((ch > 0) & (ch <= 127))
-                    {
+                    if ((ch > 0) & (ch <= 127)) {
                         utfBytes[utfIndex++] = (byte) ch;
-                    }
-                    else if (ch <= 2047)
-                    {
+                    } else if (ch <= 2047) {
                         utfBytes[utfIndex++] = (byte) (0xc0 | (0x1f & (ch >> 6)));
                         utfBytes[utfIndex++] = (byte) (0x80 | (0x3f & ch));
-                    }
-                    else
-                    {
+                    } else {
                         utfBytes[utfIndex++] = (byte) (0xe0 | (0x0f & (ch >> 12)));
                         utfBytes[utfIndex++] = (byte) (0x80 | (0x3f & (ch >> 6)));
                         utfBytes[utfIndex++] = (byte) (0x80 | (0x3f & ch));
                     }
                 }
-
                 offset += charRunLength;
                 length -= charRunLength;
             }
-
             out.write(utfBytes, 0, utfIndex);
         }
     }
@@ -347,8 +331,7 @@ public abstract class UnbufferedDataOutputStreamPlus extends DataOutputStreamPlu
      * @throws IOException If an error occurs attempting to write to this
      *                     DataOutputStream.
      */
-    public final void writeUTF(String str) throws IOException
-    {
+    public final void writeUTF(String str) throws IOException {
         writeUTF(str, this);
     }
 
@@ -356,30 +339,38 @@ public abstract class UnbufferedDataOutputStreamPlus extends DataOutputStreamPlu
     private final ByteBuffer hollowBufferD = MemoryUtil.getHollowDirectByteBuffer();
 
     @Override
-    public void write(ByteBuffer buf) throws IOException
-    {
-        if (buf.hasArray())
-        {
+    public void write(ByteBuffer buf) throws IOException {
+        if (buf.hasArray()) {
             write(buf.array(), buf.arrayOffset() + buf.position(), buf.remaining());
-        }
-        else
-        {
+        } else {
             assert buf.isDirect();
             MemoryUtil.duplicateDirectByteBuffer(buf, hollowBufferD);
-            while (hollowBufferD.hasRemaining())
-                channel.write(hollowBufferD);
+            while (hollowBufferD.hasRemaining()) channel.write(hollowBufferD);
         }
     }
 
-    public void write(Memory memory, long offset, long length) throws IOException
-    {
-        for (ByteBuffer buffer : memory.asByteBuffers(offset, length))
+    public void write(Memory memory, long offset, long length) throws IOException {
+        for (ByteBuffer buffer : memory.asByteBuffers(offset, length)) {
+            if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+                if (!isSerializeLoggingActive.get()) {
+                    isSerializeLoggingActive.set(true);
+                    serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(memory.asByteBuffers(offset, length), buffer, "buffer").toJsonString());
+                    isSerializeLoggingActive.set(false);
+                }
+            }
             write(buffer);
+        }
     }
 
     @Override
-    public <R> R applyToChannel(Function<WritableByteChannel, R> f) throws IOException
-    {
+    public <R> R applyToChannel(Function<WritableByteChannel, R> f) throws IOException {
+        if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+            if (!isSerializeLoggingActive.get()) {
+                isSerializeLoggingActive.set(true);
+                serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(this, this.channel, "this.channel").toJsonString());
+                isSerializeLoggingActive.set(false);
+            }
+        }
         return f.apply(channel);
     }
 }

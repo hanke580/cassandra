@@ -18,48 +18,56 @@
 package org.apache.cassandra.db.compaction;
 
 import java.util.*;
-
 import org.apache.cassandra.io.sstable.format.SSTableReader;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-
 import org.apache.cassandra.db.ColumnFamily;
 import org.apache.cassandra.db.ColumnFamilyStore;
 import org.apache.cassandra.db.DecoratedKey;
 import org.apache.cassandra.db.Memtable;
 import org.apache.cassandra.db.RowPosition;
 import org.apache.cassandra.utils.AlwaysPresentFilter;
-
 import org.apache.cassandra.utils.OverlapIterator;
 import org.apache.cassandra.utils.concurrent.Refs;
-
 import static org.apache.cassandra.db.lifecycle.SSTableIntervalTree.buildIntervals;
 
 /**
  * Manage compaction options.
  */
-public class CompactionController implements AutoCloseable
-{
+public class CompactionController implements AutoCloseable {
+
+    private static java.lang.ThreadLocal<Boolean> isSerializeLoggingActiveStatic = new ThreadLocal<Boolean>() {
+
+        @Override
+        protected Boolean initialValue() {
+            return false;
+        }
+    };
+
+    private static final org.slf4j.Logger serialize_logger = org.slf4j.LoggerFactory.getLogger("serialize.logger");
+
     private static final Logger logger = LoggerFactory.getLogger(CompactionController.class);
+
     static final boolean NEVER_PURGE_TOMBSTONES = Boolean.getBoolean("cassandra.never_purge_tombstones");
 
     public final ColumnFamilyStore cfs;
+
     // note that overlapIterator and overlappingSSTables will be null if NEVER_PURGE_TOMBSTONES is set - this is a
     // good thing so that noone starts using them and thinks that if overlappingSSTables is empty, there
     // is no overlap.
     private Refs<SSTableReader> overlappingSSTables;
+
     private OverlapIterator<RowPosition, SSTableReader> overlapIterator;
+
     private final Iterable<SSTableReader> compacting;
 
     public final int gcBefore;
 
-    protected CompactionController(ColumnFamilyStore cfs, int maxValue)
-    {
+    protected CompactionController(ColumnFamilyStore cfs, int maxValue) {
         this(cfs, null, maxValue);
     }
 
-    public CompactionController(ColumnFamilyStore cfs, Set<SSTableReader> compacting, int gcBefore)
-    {
+    public CompactionController(ColumnFamilyStore cfs, Set<SSTableReader> compacting, int gcBefore) {
         assert cfs != null;
         this.cfs = cfs;
         this.gcBefore = gcBefore;
@@ -69,32 +77,24 @@ public class CompactionController implements AutoCloseable
             logger.warn("You are running with -Dcassandra.never_purge_tombstones=true, this is dangerous!");
     }
 
-    void maybeRefreshOverlaps()
-    {
-        if (NEVER_PURGE_TOMBSTONES)
-        {
+    void maybeRefreshOverlaps() {
+        if (NEVER_PURGE_TOMBSTONES) {
             logger.debug("not refreshing overlaps - running with -Dcassandra.never_purge_tombstones=true");
             return;
         }
-
-        for (SSTableReader reader : overlappingSSTables)
-        {
-            if (reader.isMarkedCompacted())
-            {
+        for (SSTableReader reader : overlappingSSTables) {
+            if (reader.isMarkedCompacted()) {
                 refreshOverlaps();
                 return;
             }
         }
     }
 
-    private void refreshOverlaps()
-    {
+    private void refreshOverlaps() {
         if (NEVER_PURGE_TOMBSTONES)
             return;
-
         if (this.overlappingSSTables != null)
             overlappingSSTables.release();
-
         if (compacting == null)
             overlappingSSTables = Refs.tryRef(Collections.<SSTableReader>emptyList());
         else
@@ -102,8 +102,7 @@ public class CompactionController implements AutoCloseable
         this.overlapIterator = new OverlapIterator<>(buildIntervals(overlappingSSTables));
     }
 
-    public Set<SSTableReader> getFullyExpiredSSTables()
-    {
+    public Set<SSTableReader> getFullyExpiredSSTables() {
         return getFullyExpiredSSTables(cfs, compacting, overlappingSSTables, gcBefore);
     }
 
@@ -123,65 +122,60 @@ public class CompactionController implements AutoCloseable
      * @param gcBefore
      * @return
      */
-    public static Set<SSTableReader> getFullyExpiredSSTables(ColumnFamilyStore cfStore, Iterable<SSTableReader> compacting, Iterable<SSTableReader> overlapping, int gcBefore)
-    {
+    public static Set<SSTableReader> getFullyExpiredSSTables(ColumnFamilyStore cfStore, Iterable<SSTableReader> compacting, Iterable<SSTableReader> overlapping, int gcBefore) {
         logger.trace("Checking droppable sstables in {}", cfStore);
-
         if (compacting == null || NEVER_PURGE_TOMBSTONES)
             return Collections.<SSTableReader>emptySet();
-
         List<SSTableReader> candidates = new ArrayList<>();
-
         long minTimestamp = Long.MAX_VALUE;
-
-        for (SSTableReader sstable : overlapping)
-        {
+        for (SSTableReader sstable : overlapping) {
+            if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+                if (!isSerializeLoggingActiveStatic.get()) {
+                    isSerializeLoggingActiveStatic.set(true);
+                    serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(overlapping, sstable, "sstable").toJsonString());
+                    isSerializeLoggingActiveStatic.set(false);
+                }
+            }
             // Overlapping might include fully expired sstables. What we care about here is
             // the min timestamp of the overlapping sstables that actually contain live data.
             if (sstable.getSSTableMetadata().maxLocalDeletionTime >= gcBefore)
                 minTimestamp = Math.min(minTimestamp, sstable.getMinTimestamp());
         }
-
-        for (SSTableReader candidate : compacting)
-        {
+        for (SSTableReader candidate : compacting) {
+            if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+                if (!isSerializeLoggingActiveStatic.get()) {
+                    isSerializeLoggingActiveStatic.set(true);
+                    serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(compacting, candidate, "candidate").toJsonString());
+                    isSerializeLoggingActiveStatic.set(false);
+                }
+            }
             if (candidate.getSSTableMetadata().maxLocalDeletionTime < gcBefore)
                 candidates.add(candidate);
             else
                 minTimestamp = Math.min(minTimestamp, candidate.getMinTimestamp());
         }
-
-        for (Memtable memtable : cfStore.getTracker().getView().getAllMemtables())
-            minTimestamp = Math.min(minTimestamp, memtable.getMinTimestamp());
-
+        for (Memtable memtable : cfStore.getTracker().getView().getAllMemtables()) minTimestamp = Math.min(minTimestamp, memtable.getMinTimestamp());
         // At this point, minTimestamp denotes the lowest timestamp of any relevant
         // SSTable or Memtable that contains a constructive value. candidates contains all the
         // candidates with no constructive values. The ones out of these that have
         // (getMaxTimestamp() < minTimestamp) serve no purpose anymore.
-
         Iterator<SSTableReader> iterator = candidates.iterator();
-        while (iterator.hasNext())
-        {
+        while (iterator.hasNext()) {
             SSTableReader candidate = iterator.next();
-            if (candidate.getMaxTimestamp() >= minTimestamp)
-            {
+            if (candidate.getMaxTimestamp() >= minTimestamp) {
                 iterator.remove();
-            }
-            else
-            {
-               logger.trace("Dropping expired SSTable {} (maxLocalDeletionTime={}, gcBefore={})",
-                        candidate, candidate.getSSTableMetadata().maxLocalDeletionTime, gcBefore);
+            } else {
+                logger.trace("Dropping expired SSTable {} (maxLocalDeletionTime={}, gcBefore={})", candidate, candidate.getSSTableMetadata().maxLocalDeletionTime, gcBefore);
             }
         }
         return new HashSet<>(candidates);
     }
 
-    public String getKeyspace()
-    {
+    public String getKeyspace() {
         return cfs.keyspace.getName();
     }
 
-    public String getColumnFamily()
-    {
+    public String getColumnFamily() {
         return cfs.name;
     }
 
@@ -192,15 +186,12 @@ public class CompactionController implements AutoCloseable
      * participating in this compaction, or memtable that contains this partition,
      * or LONG.MAX_VALUE if no SSTable or memtable exist.
      */
-    public long maxPurgeableTimestamp(DecoratedKey key)
-    {
+    public long maxPurgeableTimestamp(DecoratedKey key) {
         if (NEVER_PURGE_TOMBSTONES)
             return Long.MIN_VALUE;
-
         long min = Long.MAX_VALUE;
         overlapIterator.update(key);
-        for (SSTableReader sstable : overlapIterator.overlaps())
-        {
+        for (SSTableReader sstable : overlapIterator.overlaps()) {
             // if we don't have bloom filter(bf_fp_chance=1.0 or filter file is missing),
             // we check index file instead.
             if (sstable.getBloomFilter() instanceof AlwaysPresentFilter && sstable.getPosition(key, SSTableReader.Operator.EQ, false) != null)
@@ -208,9 +199,7 @@ public class CompactionController implements AutoCloseable
             else if (sstable.getBloomFilter().isPresent(key))
                 min = Math.min(min, sstable.getMinTimestamp());
         }
-
-        for (Memtable memtable : cfs.getTracker().getView().getAllMemtables())
-        {
+        for (Memtable memtable : cfs.getTracker().getView().getAllMemtables()) {
             ColumnFamily cf = memtable.getColumnFamily(key);
             if (cf != null)
                 min = Math.min(min, memtable.getMinTimestamp());
@@ -218,10 +207,8 @@ public class CompactionController implements AutoCloseable
         return min;
     }
 
-    public void close()
-    {
+    public void close() {
         if (overlappingSSTables != null)
             overlappingSSTables.release();
     }
-
 }

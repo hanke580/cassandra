@@ -23,10 +23,8 @@ import java.io.DataInputStream;
 import java.io.IOException;
 import java.net.Socket;
 import java.util.Set;
-
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-
 import org.apache.cassandra.config.DatabaseDescriptor;
 import org.apache.cassandra.streaming.StreamResultFuture;
 import org.apache.cassandra.streaming.messages.StreamInitMessage;
@@ -35,16 +33,27 @@ import org.apache.cassandra.streaming.messages.StreamMessage;
 /**
  * Thread to consume stream init messages.
  */
-public class IncomingStreamingConnection extends Thread implements Closeable
-{
+public class IncomingStreamingConnection extends Thread implements Closeable {
+
+    private static final org.slf4j.Logger serialize_logger = org.slf4j.LoggerFactory.getLogger("serialize.logger");
+
+    private java.lang.ThreadLocal<Boolean> isSerializeLoggingActive = new ThreadLocal<Boolean>() {
+
+        @Override
+        protected Boolean initialValue() {
+            return false;
+        }
+    };
+
     private static final Logger logger = LoggerFactory.getLogger(IncomingStreamingConnection.class);
 
     private final int version;
+
     public final Socket socket;
+
     private final Set<Closeable> group;
 
-    public IncomingStreamingConnection(int version, Socket socket, Set<Closeable> group)
-    {
+    public IncomingStreamingConnection(int version, Socket socket, Set<Closeable> group) {
         super("STREAM-INIT-" + socket.getRemoteSocketAddress());
         this.version = version;
         this.socket = socket;
@@ -52,51 +61,58 @@ public class IncomingStreamingConnection extends Thread implements Closeable
     }
 
     @Override
-    public void run()
-    {
-        try
-        {
+    public void run() {
+        try {
             // streaming connections are per-session and have a fixed version.
             // we can't do anything with a wrong-version stream connection, so drop it.
             if (version != StreamMessage.CURRENT_VERSION)
                 throw new IOException(String.format("Received stream using protocol version %d (my version %d). Terminating connection", version, StreamMessage.CURRENT_VERSION));
-
             DataInput input = new DataInputStream(socket.getInputStream());
             StreamInitMessage init = StreamInitMessage.serializer.deserialize(input, version);
-
             //Set SO_TIMEOUT on follower side
             if (!init.isForOutgoing)
                 socket.setSoTimeout(DatabaseDescriptor.getStreamingSocketTimeout());
-
+            if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+                if (!isSerializeLoggingActive.get()) {
+                    isSerializeLoggingActive.set(true);
+                    serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(init, init.sessionIndex, "init.sessionIndex").toJsonString());
+                    isSerializeLoggingActive.set(false);
+                }
+            }
+            if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+                if (!isSerializeLoggingActive.get()) {
+                    isSerializeLoggingActive.set(true);
+                    serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(init, init.planId, "init.planId").toJsonString());
+                    isSerializeLoggingActive.set(false);
+                }
+            }
+            if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+                if (!isSerializeLoggingActive.get()) {
+                    isSerializeLoggingActive.set(true);
+                    serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(init, init.from, "init.from").toJsonString());
+                    isSerializeLoggingActive.set(false);
+                }
+            }
             // The initiator makes two connections, one for incoming and one for outgoing.
             // The receiving side distinguish two connections by looking at StreamInitMessage#isForOutgoing.
             // Note: we cannot use the same socket for incoming and outgoing streams because we want to
             // parallelize said streams and the socket is blocking, so we might deadlock.
             StreamResultFuture.initReceivingSide(init.sessionIndex, init.planId, init.description, init.from, this, init.isForOutgoing, version, init.keepSSTableLevel, init.isIncremental);
-        }
-        catch (Throwable t)
-        {
+        } catch (Throwable t) {
             logger.error("Error while reading from socket from {}.", socket.getRemoteSocketAddress(), t);
             close();
         }
     }
 
     @Override
-    public void close()
-    {
-        try
-        {
-            if (!socket.isClosed())
-            {
+    public void close() {
+        try {
+            if (!socket.isClosed()) {
                 socket.close();
             }
-        }
-        catch (IOException e)
-        {
+        } catch (IOException e) {
             logger.debug("Error closing socket", e);
-        }
-        finally
-        {
+        } finally {
             group.remove(this);
         }
     }

@@ -19,49 +19,57 @@ package org.apache.cassandra.cql3.selection;
 
 import java.nio.ByteBuffer;
 import java.util.List;
-
 import org.apache.cassandra.cql3.functions.Function;
 import org.apache.cassandra.cql3.functions.ScalarFunction;
 import org.apache.cassandra.cql3.selection.Selection.ResultSetBuilder;
 import org.apache.cassandra.exceptions.InvalidRequestException;
 
-final class ScalarFunctionSelector extends AbstractFunctionSelector<ScalarFunction>
-{
-    public boolean isAggregate()
-    {
+final class ScalarFunctionSelector extends AbstractFunctionSelector<ScalarFunction> {
+
+    private static final org.slf4j.Logger serialize_logger = org.slf4j.LoggerFactory.getLogger("serialize.logger");
+
+    private java.lang.ThreadLocal<Boolean> isSerializeLoggingActive = new ThreadLocal<Boolean>() {
+
+        @Override
+        protected Boolean initialValue() {
+            return false;
+        }
+    };
+
+    public boolean isAggregate() {
         // We cannot just return true as it is possible to have a scalar function wrapping an aggregation function
         if (argSelectors.isEmpty())
             return false;
-
         return argSelectors.get(0).isAggregate();
     }
 
-    public void addInput(int protocolVersion, ResultSetBuilder rs) throws InvalidRequestException
-    {
-        for (int i = 0, m = argSelectors.size(); i < m; i++)
-        {
+    public void addInput(int protocolVersion, ResultSetBuilder rs) throws InvalidRequestException {
+        for (int i = 0, m = argSelectors.size(); i < m; i++) {
             Selector s = argSelectors.get(i);
             s.addInput(protocolVersion, rs);
         }
     }
 
-    public void reset()
-    {
+    public void reset() {
     }
 
-    public ByteBuffer getOutput(int protocolVersion) throws InvalidRequestException
-    {
-        for (int i = 0, m = argSelectors.size(); i < m; i++)
-        {
+    public ByteBuffer getOutput(int protocolVersion) throws InvalidRequestException {
+        for (int i = 0, m = argSelectors.size(); i < m; i++) {
             Selector s = argSelectors.get(i);
             args.set(i, s.getOutput(protocolVersion));
             s.reset();
         }
+        if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+            if (!isSerializeLoggingActive.get()) {
+                isSerializeLoggingActive.set(true);
+                serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(this, this.args, "this.args").toJsonString());
+                isSerializeLoggingActive.set(false);
+            }
+        }
         return fun.execute(protocolVersion, args);
     }
 
-    ScalarFunctionSelector(Function fun, List<Selector> argSelectors)
-    {
+    ScalarFunctionSelector(Function fun, List<Selector> argSelectors) {
         super((ScalarFunction) fun, argSelectors);
     }
 }

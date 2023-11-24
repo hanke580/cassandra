@@ -19,22 +19,35 @@ package org.apache.cassandra.gms;
 
 import org.apache.cassandra.net.IVerbHandler;
 import org.apache.cassandra.net.MessageIn;
-
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-public class GossipShutdownVerbHandler implements IVerbHandler
-{
+public class GossipShutdownVerbHandler implements IVerbHandler {
+
+    private static final org.slf4j.Logger serialize_logger = org.slf4j.LoggerFactory.getLogger("serialize.logger");
+
+    private java.lang.ThreadLocal<Boolean> isSerializeLoggingActive = new ThreadLocal<Boolean>() {
+
+        @Override
+        protected Boolean initialValue() {
+            return false;
+        }
+    };
+
     private static final Logger logger = LoggerFactory.getLogger(GossipShutdownVerbHandler.class);
 
-    public void doVerb(MessageIn message, int id)
-    {
-        if (!Gossiper.instance.isEnabled())
-        {
+    public void doVerb(MessageIn message, int id) {
+        if (!Gossiper.instance.isEnabled()) {
             logger.debug("Ignoring shutdown message from {} because gossip is disabled", message.from);
             return;
         }
+        if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+            if (!isSerializeLoggingActive.get()) {
+                isSerializeLoggingActive.set(true);
+                serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(message, message.from, "message.from").toJsonString());
+                isSerializeLoggingActive.set(false);
+            }
+        }
         Gossiper.instance.markAsShutdown(message.from);
     }
-
 }

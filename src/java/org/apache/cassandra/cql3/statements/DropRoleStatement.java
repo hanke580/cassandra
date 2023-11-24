@@ -24,48 +24,56 @@ import org.apache.cassandra.exceptions.*;
 import org.apache.cassandra.service.ClientState;
 import org.apache.cassandra.transport.messages.ResultMessage;
 
-public class DropRoleStatement extends AuthenticationStatement
-{
+public class DropRoleStatement extends AuthenticationStatement {
+
+    private static final org.slf4j.Logger serialize_logger = org.slf4j.LoggerFactory.getLogger("serialize.logger");
+
+    private java.lang.ThreadLocal<Boolean> isSerializeLoggingActive = new ThreadLocal<Boolean>() {
+
+        @Override
+        protected Boolean initialValue() {
+            return false;
+        }
+    };
+
     private final RoleResource role;
+
     private final boolean ifExists;
 
-    public DropRoleStatement(RoleName name, boolean ifExists)
-    {
+    public DropRoleStatement(RoleName name, boolean ifExists) {
         this.role = RoleResource.role(name.getName());
         this.ifExists = ifExists;
     }
 
-    public void checkAccess(ClientState state) throws UnauthorizedException
-    {
+    public void checkAccess(ClientState state) throws UnauthorizedException {
+        if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+            if (!isSerializeLoggingActive.get()) {
+                isSerializeLoggingActive.set(true);
+                serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(org.apache.cassandra.auth.Permission.class, org.apache.cassandra.auth.Permission.DROP, "org.apache.cassandra.auth.Permission.DROP").toJsonString());
+                isSerializeLoggingActive.set(false);
+            }
+        }
         super.checkPermission(state, Permission.DROP, role);
-
         // We only check superuser status for existing roles to avoid
         // caching info about roles which don't exist (CASSANDRA-9189)
-        if (DatabaseDescriptor.getRoleManager().isExistingRole(role)
-            && Roles.hasSuperuserStatus(role)
-            && !state.getUser().isSuper())
+        if (DatabaseDescriptor.getRoleManager().isExistingRole(role) && Roles.hasSuperuserStatus(role) && !state.getUser().isSuper())
             throw new UnauthorizedException("Only superusers can drop a role with superuser status");
     }
 
-    public void validate(ClientState state) throws RequestValidationException
-    {
+    public void validate(ClientState state) throws RequestValidationException {
         // validate login here before checkAccess to avoid leaking user existence to anonymous users.
         state.ensureNotAnonymous();
-
         if (!ifExists && !DatabaseDescriptor.getRoleManager().isExistingRole(role))
             throw new InvalidRequestException(String.format("%s doesn't exist", role.getRoleName()));
-
         AuthenticatedUser user = state.getUser();
         if (user != null && user.getName().equals(role.getRoleName()))
             throw new InvalidRequestException("Cannot DROP primary role for current login");
     }
 
-    public ResultMessage execute(ClientState state) throws RequestValidationException, RequestExecutionException
-    {
+    public ResultMessage execute(ClientState state) throws RequestValidationException, RequestExecutionException {
         // not rejected in validate()
         if (ifExists && !DatabaseDescriptor.getRoleManager().isExistingRole(role))
             return null;
-
         // clean up grants and permissions of/on the dropped role.
         DatabaseDescriptor.getRoleManager().dropRole(state.getUser(), role);
         DatabaseDescriptor.getAuthorizer().revokeAllFrom(role);

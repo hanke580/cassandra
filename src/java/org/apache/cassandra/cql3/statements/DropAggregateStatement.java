@@ -19,7 +19,6 @@ package org.apache.cassandra.cql3.statements;
 
 import java.util.ArrayList;
 import java.util.List;
-
 import org.apache.cassandra.auth.Permission;
 import org.apache.cassandra.cql3.CQL3Type;
 import org.apache.cassandra.cql3.functions.*;
@@ -35,121 +34,119 @@ import org.apache.cassandra.transport.Event;
 /**
  * A <code>DROP AGGREGATE</code> statement parsed from a CQL query.
  */
-public final class DropAggregateStatement extends SchemaAlteringStatement
-{
+public final class DropAggregateStatement extends SchemaAlteringStatement {
+
+    private static final org.slf4j.Logger serialize_logger = org.slf4j.LoggerFactory.getLogger("serialize.logger");
+
+    private java.lang.ThreadLocal<Boolean> isSerializeLoggingActive = new ThreadLocal<Boolean>() {
+
+        @Override
+        protected Boolean initialValue() {
+            return false;
+        }
+    };
+
     private FunctionName functionName;
+
     private final boolean ifExists;
+
     private final List<CQL3Type.Raw> argRawTypes;
+
     private final boolean argsPresent;
 
     private Function old;
 
-    public DropAggregateStatement(FunctionName functionName,
-                                  List<CQL3Type.Raw> argRawTypes,
-                                  boolean argsPresent,
-                                  boolean ifExists)
-    {
+    public DropAggregateStatement(FunctionName functionName, List<CQL3Type.Raw> argRawTypes, boolean argsPresent, boolean ifExists) {
         this.functionName = functionName;
         this.argRawTypes = argRawTypes;
         this.argsPresent = argsPresent;
         this.ifExists = ifExists;
     }
 
-    public void prepareKeyspace(ClientState state) throws InvalidRequestException
-    {
+    public void prepareKeyspace(ClientState state) throws InvalidRequestException {
         if (!functionName.hasKeyspace() && state.getRawKeyspace() != null)
             functionName = new FunctionName(state.getKeyspace(), functionName.name);
-
         if (!functionName.hasKeyspace())
             throw new InvalidRequestException("Functions must be fully qualified with a keyspace name if a keyspace is not set for the session");
-
         ThriftValidation.validateKeyspaceNotSystem(functionName.keyspace);
     }
 
-    public void checkAccess(ClientState state) throws UnauthorizedException, InvalidRequestException
-    {
+    public void checkAccess(ClientState state) throws UnauthorizedException, InvalidRequestException {
+        if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+            if (!isSerializeLoggingActive.get()) {
+                isSerializeLoggingActive.set(true);
+                serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(org.apache.cassandra.auth.Permission.class, org.apache.cassandra.auth.Permission.DROP, "org.apache.cassandra.auth.Permission.DROP").toJsonString());
+                isSerializeLoggingActive.set(false);
+            }
+        }
         // TODO CASSANDRA-7557 (function DDL permission)
-
         state.hasKeyspaceAccess(functionName.keyspace, Permission.DROP);
     }
 
-    public void validate(ClientState state) throws RequestValidationException
-    {
+    public void validate(ClientState state) throws RequestValidationException {
     }
 
-    public Event.SchemaChange changeEvent()
-    {
-        return new Event.SchemaChange(Event.SchemaChange.Change.DROPPED, Event.SchemaChange.Target.AGGREGATE,
-                                      old.name().keyspace, old.name().name, AbstractType.asCQLTypeStringList(old.argTypes()));
+    public Event.SchemaChange changeEvent() {
+        return new Event.SchemaChange(Event.SchemaChange.Change.DROPPED, Event.SchemaChange.Target.AGGREGATE, old.name().keyspace, old.name().name, AbstractType.asCQLTypeStringList(old.argTypes()));
     }
 
-    public boolean announceMigration(boolean isLocalOnly) throws RequestValidationException
-    {
+    public boolean announceMigration(boolean isLocalOnly) throws RequestValidationException {
+        if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+            if (!isSerializeLoggingActive.get()) {
+                isSerializeLoggingActive.set(true);
+                serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(this, this.functionName, "this.functionName").toJsonString());
+                isSerializeLoggingActive.set(false);
+            }
+        }
         List<Function> olds = Functions.find(functionName);
-
         if (!argsPresent && olds != null && olds.size() > 1)
-            throw new InvalidRequestException(String.format("'DROP AGGREGATE %s' matches multiple function definitions; " +
-                                                            "specify the argument types by issuing a statement like " +
-                                                            "'DROP AGGREGATE %s (type, type, ...)'. Hint: use cqlsh " +
-                                                            "'DESCRIBE AGGREGATE %s' command to find all overloads",
-                                                            functionName, functionName, functionName));
-
+            throw new InvalidRequestException(String.format("'DROP AGGREGATE %s' matches multiple function definitions; " + "specify the argument types by issuing a statement like " + "'DROP AGGREGATE %s (type, type, ...)'. Hint: use cqlsh " + "'DESCRIBE AGGREGATE %s' command to find all overloads", functionName, functionName, functionName));
         List<AbstractType<?>> argTypes = new ArrayList<>(argRawTypes.size());
-        for (CQL3Type.Raw rawType : argRawTypes)
-            argTypes.add(prepareType("arguments", rawType));
-
+        for (CQL3Type.Raw rawType : argRawTypes) argTypes.add(prepareType("arguments", rawType));
         Function old;
-        if (argsPresent)
-        {
+        if (argsPresent) {
+            if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+                if (!isSerializeLoggingActive.get()) {
+                    isSerializeLoggingActive.set(true);
+                    serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(this, this.functionName, "this.functionName").toJsonString());
+                    isSerializeLoggingActive.set(false);
+                }
+            }
             old = Functions.find(functionName, argTypes);
-            if (old == null || !(old instanceof AggregateFunction))
-            {
+            if (old == null || !(old instanceof AggregateFunction)) {
                 if (ifExists)
                     return false;
                 // just build a nicer error message
                 StringBuilder sb = new StringBuilder();
-                for (CQL3Type.Raw rawType : argRawTypes)
-                {
+                for (CQL3Type.Raw rawType : argRawTypes) {
                     if (sb.length() > 0)
                         sb.append(", ");
                     sb.append(rawType);
                 }
-                throw new InvalidRequestException(String.format("Cannot drop non existing aggregate '%s(%s)'",
-                                                                functionName, sb));
+                throw new InvalidRequestException(String.format("Cannot drop non existing aggregate '%s(%s)'", functionName, sb));
             }
-        }
-        else
-        {
-            if (olds == null || olds.isEmpty() || !(olds.get(0) instanceof AggregateFunction))
-            {
+        } else {
+            if (olds == null || olds.isEmpty() || !(olds.get(0) instanceof AggregateFunction)) {
                 if (ifExists)
                     return false;
                 throw new InvalidRequestException(String.format("Cannot drop non existing aggregate '%s'", functionName));
             }
             old = olds.get(0);
         }
-
         if (old.isNative())
-            throw new InvalidRequestException(String.format("Cannot drop aggregate '%s' because it is a " +
-                                                            "native (built-in) function", functionName));
-
+            throw new InvalidRequestException(String.format("Cannot drop aggregate '%s' because it is a " + "native (built-in) function", functionName));
         this.old = old;
-
-        MigrationManager.announceAggregateDrop((UDAggregate)old, isLocalOnly);
-
+        MigrationManager.announceAggregateDrop((UDAggregate) old, isLocalOnly);
         return true;
     }
 
-    private AbstractType<?> prepareType(String typeName, CQL3Type.Raw rawType)
-    {
+    private AbstractType<?> prepareType(String typeName, CQL3Type.Raw rawType) {
         if (rawType.isFrozen())
             throw new InvalidRequestException(String.format("The function %s should not be frozen; remove the frozen<> modifier", typeName));
-
         // UDT are not supported non frozen but we do not allow the frozen keyword for argument. So for the moment we
         // freeze them here
         if (!rawType.canBeNonFrozen())
             rawType.freeze();
-
         AbstractType<?> type = rawType.prepare(functionName.keyspace).getType();
         return type;
     }

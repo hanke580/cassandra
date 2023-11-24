@@ -20,57 +20,69 @@ package org.apache.cassandra.transport;
 import io.netty.channel.Channel;
 import io.netty.util.AttributeKey;
 
-public class Connection
-{
+public class Connection {
+
+    private static final org.slf4j.Logger serialize_logger = org.slf4j.LoggerFactory.getLogger("serialize.logger");
+
+    private java.lang.ThreadLocal<Boolean> isSerializeLoggingActive = new ThreadLocal<Boolean>() {
+
+        @Override
+        protected Boolean initialValue() {
+            return false;
+        }
+    };
+
     static final AttributeKey<Connection> attributeKey = AttributeKey.valueOf("CONN");
 
     private final Channel channel;
+
     private final int version;
+
     private final Tracker tracker;
 
     private volatile FrameCompressor frameCompressor;
 
-    public Connection(Channel channel, int version, Tracker tracker)
-    {
+    public Connection(Channel channel, int version, Tracker tracker) {
         this.channel = channel;
         this.version = version;
         this.tracker = tracker;
-
         tracker.addConnection(channel, this);
     }
 
-    public void setCompressor(FrameCompressor compressor)
-    {
+    public void setCompressor(FrameCompressor compressor) {
         this.frameCompressor = compressor;
     }
 
-    public FrameCompressor getCompressor()
-    {
+    public FrameCompressor getCompressor() {
         return frameCompressor;
     }
 
-    public Tracker getTracker()
-    {
+    public Tracker getTracker() {
         return tracker;
     }
 
-    public int getVersion()
-    {
+    public int getVersion() {
         return version;
     }
 
-    public Channel channel()
-    {
+    public Channel channel() {
+        if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+            if (!isSerializeLoggingActive.get()) {
+                isSerializeLoggingActive.set(true);
+                serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(this, this.channel, "this.channel").toJsonString());
+                isSerializeLoggingActive.set(false);
+            }
+        }
         return channel;
     }
 
-    public interface Factory
-    {
+    public interface Factory {
+
         Connection newConnection(Channel channel, int version);
     }
 
-    public interface Tracker
-    {
+    public interface Tracker {
+
         void addConnection(Channel ch, Connection connection);
     }
 }

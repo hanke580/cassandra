@@ -15,40 +15,50 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
 package org.apache.cassandra.serializers;
 
 import org.apache.cassandra.utils.ByteBufferUtil;
-
 import java.nio.ByteBuffer;
 
-public class EmptySerializer implements TypeSerializer<Void>
-{
+public class EmptySerializer implements TypeSerializer<Void> {
+
+    private static final org.slf4j.Logger serialize_logger = org.slf4j.LoggerFactory.getLogger("serialize.logger");
+
+    private java.lang.ThreadLocal<Boolean> isSerializeLoggingActive = new ThreadLocal<Boolean>() {
+
+        @Override
+        protected Boolean initialValue() {
+            return false;
+        }
+    };
+
     public static final EmptySerializer instance = new EmptySerializer();
 
-    public Void deserialize(ByteBuffer bytes)
-    {
+    public Void deserialize(ByteBuffer bytes) {
         return null;
     }
 
-    public ByteBuffer serialize(Void value)
-    {
+    public ByteBuffer serialize(Void value) {
+        if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+            if (!isSerializeLoggingActive.get()) {
+                isSerializeLoggingActive.set(true);
+                serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(org.apache.cassandra.utils.ByteBufferUtil.class, org.apache.cassandra.utils.ByteBufferUtil.EMPTY_BYTE_BUFFER, "org.apache.cassandra.utils.ByteBufferUtil.EMPTY_BYTE_BUFFER").toJsonString());
+                isSerializeLoggingActive.set(false);
+            }
+        }
         return ByteBufferUtil.EMPTY_BYTE_BUFFER;
     }
 
-    public void validate(ByteBuffer bytes) throws MarshalException
-    {
+    public void validate(ByteBuffer bytes) throws MarshalException {
         if (bytes.remaining() > 0)
             throw new MarshalException("EmptyType only accept empty values");
     }
 
-    public String toString(Void value)
-    {
+    public String toString(Void value) {
         return "";
     }
 
-    public Class<Void> getType()
-    {
+    public Class<Void> getType() {
         return Void.class;
     }
 }

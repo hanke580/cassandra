@@ -19,18 +19,19 @@ package org.apache.cassandra.db.composites;
 
 import java.nio.ByteBuffer;
 import java.util.List;
-
 import org.apache.cassandra.config.CFMetaData;
 import org.apache.cassandra.db.filter.ColumnSlice;
 import org.apache.cassandra.utils.ByteBufferUtil;
 import org.apache.cassandra.utils.memory.AbstractAllocator;
-
 import com.google.common.base.Function;
 import com.google.common.collect.Lists;
 
-public abstract class Composites
-{
-    private Composites() {}
+public abstract class Composites {
+
+    private static final org.slf4j.Logger serialize_logger = org.slf4j.LoggerFactory.getLogger("serialize.logger");
+
+    private Composites() {
+    }
 
     public static final Composite EMPTY = new EmptyComposite();
 
@@ -40,110 +41,130 @@ public abstract class Composites
      * @param composites the composites to convert.
      * @return the <code>ByteBuffer</code>s corresponding to the specified <code>Composites</code>.
      */
-    public static List<ByteBuffer> toByteBuffers(List<Composite> composites)
-    {
-        return Lists.transform(composites, new Function<Composite, ByteBuffer>()
-        {
-            public ByteBuffer apply(Composite composite)
-            {
+    public static List<ByteBuffer> toByteBuffers(List<Composite> composites) {
+        return Lists.transform(composites, new Function<Composite, ByteBuffer>() {
+
+            public ByteBuffer apply(Composite composite) {
                 return composite.toByteBuffer();
             }
         });
     }
 
-    static final CBuilder EMPTY_BUILDER = new CBuilder()
-    {
-        public int remainingCount() { return 0; }
+    static final CBuilder EMPTY_BUILDER = new CBuilder() {
 
-        public CBuilder add(ByteBuffer value) { throw new IllegalStateException(); }
-        public CBuilder add(Object value) { throw new IllegalStateException(); }
-
-        public Composite build() { return EMPTY; }
-        public Composite buildWith(ByteBuffer value) { throw new IllegalStateException(); }
-        public Composite buildWith(List<ByteBuffer> values) { throw new IllegalStateException(); }
-    };
-
-    private static class EmptyComposite implements Composite
-    {
-        public boolean isEmpty()
-        {
-            return true;
-        }
-
-        public int size()
-        {
+        public int remainingCount() {
             return 0;
         }
 
-        public ByteBuffer get(int i)
-        {
+        public CBuilder add(ByteBuffer value) {
+            throw new IllegalStateException();
+        }
+
+        public CBuilder add(Object value) {
+            throw new IllegalStateException();
+        }
+
+        public Composite build() {
+            return EMPTY;
+        }
+
+        public Composite buildWith(ByteBuffer value) {
+            throw new IllegalStateException();
+        }
+
+        public Composite buildWith(List<ByteBuffer> values) {
+            throw new IllegalStateException();
+        }
+    };
+
+    private static class EmptyComposite implements Composite {
+
+        private java.lang.ThreadLocal<Boolean> isSerializeLoggingActive = new ThreadLocal<Boolean>() {
+
+            @Override
+            protected Boolean initialValue() {
+                return false;
+            }
+        };
+
+        public boolean isEmpty() {
+            return true;
+        }
+
+        public int size() {
+            return 0;
+        }
+
+        public ByteBuffer get(int i) {
             if (i > 0)
                 throw new IndexOutOfBoundsException();
-
+            if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+                if (!isSerializeLoggingActive.get()) {
+                    isSerializeLoggingActive.set(true);
+                    serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(org.apache.cassandra.utils.ByteBufferUtil.class, org.apache.cassandra.utils.ByteBufferUtil.EMPTY_BYTE_BUFFER, "org.apache.cassandra.utils.ByteBufferUtil.EMPTY_BYTE_BUFFER").toJsonString());
+                    isSerializeLoggingActive.set(false);
+                }
+            }
             return ByteBufferUtil.EMPTY_BYTE_BUFFER;
         }
 
-        public EOC eoc()
-        {
+        public EOC eoc() {
             return EOC.NONE;
         }
 
-        public Composite start()
-        {
+        public Composite start() {
             // Note that SimpleCType/AbstractSimpleCellNameType compare method
             // indirectly rely on the fact that EMPTY == EMPTY.start() == EMPTY.end()
             // (or more precisely on the fact that the EOC is NONE for all of those).
             return this;
         }
 
-        public Composite end()
-        {
+        public Composite end() {
             // Note that SimpleCType/AbstractSimpleCellNameType compare method
             // indirectly rely on the fact that EMPTY == EMPTY.start() == EMPTY.end()
             // (or more precisely on the fact that the EOC is NONE for all of those).
             return this;
         }
 
-        public Composite withEOC(EOC newEoc)
-        {
+        public Composite withEOC(EOC newEoc) {
             // Note that SimpleCType/AbstractSimpleCellNameType compare method
             // indirectly rely on the fact that EMPTY == EMPTY.start() == EMPTY.end()
             // (or more precisely on the fact that the EOC is NONE for all of those).
             return this;
         }
 
-        public ColumnSlice slice()
-        {
+        public ColumnSlice slice() {
             return ColumnSlice.ALL_COLUMNS;
         }
 
-        public ByteBuffer toByteBuffer()
-        {
+        public ByteBuffer toByteBuffer() {
+            if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+                if (!isSerializeLoggingActive.get()) {
+                    isSerializeLoggingActive.set(true);
+                    serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(org.apache.cassandra.utils.ByteBufferUtil.class, org.apache.cassandra.utils.ByteBufferUtil.EMPTY_BYTE_BUFFER, "org.apache.cassandra.utils.ByteBufferUtil.EMPTY_BYTE_BUFFER").toJsonString());
+                    isSerializeLoggingActive.set(false);
+                }
+            }
             return ByteBufferUtil.EMPTY_BYTE_BUFFER;
         }
 
-        public boolean isStatic()
-        {
+        public boolean isStatic() {
             return false;
         }
 
-        public int dataSize()
-        {
+        public int dataSize() {
             return 0;
         }
 
-        public long unsharedHeapSize()
-        {
+        public long unsharedHeapSize() {
             return 0;
         }
 
-        public boolean isPrefixOf(CType type, Composite c)
-        {
+        public boolean isPrefixOf(CType type, Composite c) {
             return true;
         }
 
-        public Composite copy(CFMetaData cfm, AbstractAllocator allocator)
-        {
+        public Composite copy(CFMetaData cfm, AbstractAllocator allocator) {
             return this;
         }
     }

@@ -19,7 +19,6 @@ package org.apache.cassandra.repair.messages;
 
 import java.io.DataInput;
 import java.io.IOException;
-
 import org.apache.cassandra.io.IVersionedSerializer;
 import org.apache.cassandra.io.util.DataOutputPlus;
 import org.apache.cassandra.net.MessageOut;
@@ -31,14 +30,17 @@ import org.apache.cassandra.repair.RepairJobDesc;
  *
  * @since 2.0
  */
-public abstract class RepairMessage
-{
+public abstract class RepairMessage {
+
+    private static final org.slf4j.Logger serialize_logger = org.slf4j.LoggerFactory.getLogger("serialize.logger");
+
     public static final IVersionedSerializer<RepairMessage> serializer = new RepairMessageSerializer();
 
-    public static interface MessageSerializer<T extends RepairMessage> extends IVersionedSerializer<T> {}
+    public static interface MessageSerializer<T extends RepairMessage> extends IVersionedSerializer<T> {
+    }
 
-    public static enum Type
-    {
+    public static enum Type {
+
         VALIDATION_REQUEST(0, ValidationRequest.serializer),
         VALIDATION_COMPLETE(1, ValidationComplete.serializer),
         SYNC_REQUEST(2, SyncRequest.serializer),
@@ -50,56 +52,66 @@ public abstract class RepairMessage
         CLEANUP(7, CleanupMessage.serializer);
 
         private final byte type;
+
         private final MessageSerializer<RepairMessage> serializer;
 
-        private Type(int type, MessageSerializer<RepairMessage> serializer)
-        {
+        private Type(int type, MessageSerializer<RepairMessage> serializer) {
             this.type = (byte) type;
             this.serializer = serializer;
         }
 
-        public static Type fromByte(byte b)
-        {
-            for (Type t : values())
-            {
-               if (t.type == b)
-                   return t;
+        public static Type fromByte(byte b) {
+            for (Type t : values()) {
+                if (t.type == b)
+                    return t;
             }
             throw new IllegalArgumentException("Unknown RepairMessage.Type: " + b);
         }
     }
 
     public final Type messageType;
+
     public final RepairJobDesc desc;
 
-    protected RepairMessage(Type messageType, RepairJobDesc desc)
-    {
+    protected RepairMessage(Type messageType, RepairJobDesc desc) {
         this.messageType = messageType;
         this.desc = desc;
     }
 
-    public MessageOut<RepairMessage> createMessage()
-    {
+    public MessageOut<RepairMessage> createMessage() {
         return new MessageOut<>(MessagingService.Verb.REPAIR_MESSAGE, this, RepairMessage.serializer);
     }
 
-    public static class RepairMessageSerializer implements MessageSerializer<RepairMessage>
-    {
-        public void serialize(RepairMessage message, DataOutputPlus out, int version) throws IOException
-        {
+    public static class RepairMessageSerializer implements MessageSerializer<RepairMessage> {
+
+        private java.lang.ThreadLocal<Boolean> isSerializeLoggingActive = new ThreadLocal<Boolean>() {
+
+            @Override
+            protected Boolean initialValue() {
+                return false;
+            }
+        };
+
+        public void serialize(RepairMessage message, DataOutputPlus out, int version) throws IOException {
+            if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+                if (!isSerializeLoggingActive.get()) {
+                    isSerializeLoggingActive.set(true);
+                    serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(message, message.messageType, "message.messageType").toJsonString());
+                    isSerializeLoggingActive.set(false);
+                }
+            }
             out.write(message.messageType.type);
             message.messageType.serializer.serialize(message, out, version);
         }
 
-        public RepairMessage deserialize(DataInput in, int version) throws IOException
-        {
+        public RepairMessage deserialize(DataInput in, int version) throws IOException {
             RepairMessage.Type messageType = RepairMessage.Type.fromByte(in.readByte());
             return messageType.serializer.deserialize(in, version);
         }
 
-        public long serializedSize(RepairMessage message, int version)
-        {
-            long size = 1; // for messageType byte
+        public long serializedSize(RepairMessage message, int version) {
+            // for messageType byte
+            long size = 1;
             size += message.messageType.serializer.serializedSize(message, version);
             return size;
         }

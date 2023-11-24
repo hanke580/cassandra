@@ -20,31 +20,28 @@ package org.apache.cassandra.db;
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.util.*;
-
 import com.google.common.annotations.VisibleForTesting;
-
 import org.apache.cassandra.config.DatabaseDescriptor;
 import org.apache.cassandra.db.composites.Composite;
 import org.apache.cassandra.io.sstable.IndexHelper;
 import org.apache.cassandra.io.util.DataOutputPlus;
 import org.apache.cassandra.utils.ByteBufferUtil;
 
-public class ColumnIndex
-{
+public class ColumnIndex {
+
+    private static final org.slf4j.Logger serialize_logger = org.slf4j.LoggerFactory.getLogger("serialize.logger");
+
     public final List<IndexHelper.IndexInfo> columnsIndex;
 
     private static final ColumnIndex EMPTY = new ColumnIndex(Collections.<IndexHelper.IndexInfo>emptyList());
 
-    private ColumnIndex(List<IndexHelper.IndexInfo> columnsIndex)
-    {
+    private ColumnIndex(List<IndexHelper.IndexInfo> columnsIndex) {
         assert columnsIndex != null;
-
         this.columnsIndex = columnsIndex;
     }
 
     @VisibleForTesting
-    public static ColumnIndex nothing()
-    {
+    public static ColumnIndex nothing() {
         return EMPTY;
     }
 
@@ -52,40 +49,53 @@ public class ColumnIndex
      * Help to create an index for a column family based on size of columns,
      * and write said columns to disk.
      */
-    public static class Builder
-    {
+    public static class Builder {
+
+        private java.lang.ThreadLocal<Boolean> isSerializeLoggingActive = new ThreadLocal<Boolean>() {
+
+            @Override
+            protected Boolean initialValue() {
+                return false;
+            }
+        };
+
         private final ColumnIndex result;
+
         private final long indexOffset;
+
         private long startPosition = -1;
+
         private long endPosition = 0;
+
         private long blockSize;
+
         private OnDiskAtom firstColumn;
+
         private OnDiskAtom lastColumn;
+
         private OnDiskAtom lastBlockClosing;
+
         private final DataOutputPlus output;
+
         private final RangeTombstone.Tracker tombstoneTracker;
+
         private int atomCount;
+
         private final ByteBuffer key;
-        private final DeletionInfo deletionInfo; // only used for serializing and calculating row header size
+
+        // only used for serializing and calculating row header size
+        private final DeletionInfo deletionInfo;
 
         private final OnDiskAtom.SerializerForWriting atomSerializer;
 
-        public Builder(ColumnFamily cf,
-                       ByteBuffer key,
-                       DataOutputPlus output)
-        {
+        public Builder(ColumnFamily cf, ByteBuffer key, DataOutputPlus output) {
             this(cf, key, output, cf.getComparator().onDiskAtomSerializer());
         }
 
-        public Builder(ColumnFamily cf,
-                ByteBuffer key,
-                DataOutputPlus output,
-                OnDiskAtom.SerializerForWriting serializer)
-        {
+        public Builder(ColumnFamily cf, ByteBuffer key, DataOutputPlus output, OnDiskAtom.SerializerForWriting serializer) {
             assert cf != null;
             assert key != null;
             assert output != null;
-
             this.key = key;
             deletionInfo = cf.deletionInfo();
             this.indexOffset = rowHeaderSize(key, deletionInfo);
@@ -99,22 +109,19 @@ public class ColumnIndex
          * Returns the number of bytes between the beginning of the row and the
          * first serialized column.
          */
-        private static long rowHeaderSize(ByteBuffer key, DeletionInfo delInfo)
-        {
+        private static long rowHeaderSize(ByteBuffer key, DeletionInfo delInfo) {
             TypeSizes typeSizes = TypeSizes.NATIVE;
             // TODO fix constantSize when changing the nativeconststs.
             int keysize = key.remaining();
-            return typeSizes.sizeof((short) keysize) + keysize          // Row key
-                 + DeletionTime.serializer.serializedSize(delInfo.getTopLevelDeletion(), typeSizes);
+            return // Row key
+            typeSizes.sizeof((short) keysize) + keysize + DeletionTime.serializer.serializedSize(delInfo.getTopLevelDeletion(), typeSizes);
         }
 
-        public RangeTombstone.Tracker tombstoneTracker()
-        {
+        public RangeTombstone.Tracker tombstoneTracker() {
             return tombstoneTracker;
         }
 
-        public int writtenAtomCount()
-        {
+        public int writtenAtomCount() {
             return atomCount + tombstoneTracker.writtenAtom();
         }
 
@@ -126,40 +133,38 @@ public class ColumnIndex
          *
          * @return information about index - it's Bloom Filter, block size and IndexInfo list
          */
-        public ColumnIndex build(ColumnFamily cf) throws IOException
-        {
+        public ColumnIndex build(ColumnFamily cf) throws IOException {
             // cf has disentangled the columns and range tombstones, we need to re-interleave them in comparator order
             Comparator<Composite> comparator = cf.getComparator();
             DeletionInfo.InOrderTester tester = cf.deletionInfo().inOrderTester();
             Iterator<RangeTombstone> rangeIter = cf.deletionInfo().rangeIterator();
             RangeTombstone tombstone = rangeIter.hasNext() ? rangeIter.next() : null;
-
-            for (Cell c : cf)
-            {
-                while (tombstone != null && comparator.compare(c.name(), tombstone.min) >= 0)
-                {
+            for (Cell c : cf) {
+                if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+                    if (!isSerializeLoggingActive.get()) {
+                        isSerializeLoggingActive.set(true);
+                        serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(cf, c, "c").toJsonString());
+                        isSerializeLoggingActive.set(false);
+                    }
+                }
+                while (tombstone != null && comparator.compare(c.name(), tombstone.min) >= 0) {
                     // skip range tombstones that are shadowed by partition tombstones
                     if (!cf.deletionInfo().getTopLevelDeletion().isDeleted(tombstone))
                         add(tombstone);
                     tombstone = rangeIter.hasNext() ? rangeIter.next() : null;
                 }
-
                 // We can skip any cell if it's shadowed by a tombstone already. This is a more
                 // general case than was handled by CASSANDRA-2589.
                 if (!tester.isDeleted(c))
                     add(c);
             }
-
-            while (tombstone != null)
-            {
+            while (tombstone != null) {
                 add(tombstone);
                 tombstone = rangeIter.hasNext() ? rangeIter.next() : null;
             }
             finishAddingAtoms();
             ColumnIndex index = build();
-
             maybeWriteEmptyRowHeader();
-
             return index;
         }
 
@@ -169,49 +174,37 @@ public class ColumnIndex
          * columns shadowed by expired tombstone).  Thus, it is the caller's responsibility
          * to decide whether to write the header for an empty row.
          */
-        public ColumnIndex buildForCompaction(Iterator<OnDiskAtom> columns) throws IOException
-        {
-            while (columns.hasNext())
-            {
-                OnDiskAtom c =  columns.next();
+        public ColumnIndex buildForCompaction(Iterator<OnDiskAtom> columns) throws IOException {
+            while (columns.hasNext()) {
+                OnDiskAtom c = columns.next();
                 add(c);
             }
             finishAddingAtoms();
-
             return build();
         }
 
-        public void add(OnDiskAtom column) throws IOException
-        {
+        public void add(OnDiskAtom column) throws IOException {
             atomCount++;
-
-            if (firstColumn == null)
-            {
+            if (firstColumn == null) {
                 firstColumn = column;
                 startPosition = endPosition;
                 // TODO: have that use the firstColumn as min + make sure we optimize that on read
                 endPosition += tombstoneTracker.writeOpenedMarkers(firstColumn.name(), output, atomSerializer);
-                blockSize = 0; // We don't count repeated tombstone marker in the block size, to avoid a situation
-                               // where we wouldn't make any progress because a block is filled by said marker
-
+                // We don't count repeated tombstone marker in the block size, to avoid a situation
+                blockSize = 0;
+                // where we wouldn't make any progress because a block is filled by said marker
                 maybeWriteRowHeader();
             }
-
-            if (tombstoneTracker.update(column, false))
-            {
+            if (tombstoneTracker.update(column, false)) {
                 long size = tombstoneTracker.writeUnwrittenTombstones(output, atomSerializer);
                 size += atomSerializer.serializedSizeForSSTable(column);
                 endPosition += size;
                 blockSize += size;
-
                 atomSerializer.serializeForSSTable(column, output);
             }
-
             lastColumn = column;
-
             // if we hit the column index size that we have to index after, go ahead and index it.
-            if (blockSize >= DatabaseDescriptor.getColumnIndexSize())
-            {
+            if (blockSize >= DatabaseDescriptor.getColumnIndexSize()) {
                 IndexHelper.IndexInfo cIndexInfo = new IndexHelper.IndexInfo(firstColumn.name(), column.name(), indexOffset + startPosition, endPosition - startPosition);
                 result.columnsIndex.add(cIndexInfo);
                 firstColumn = null;
@@ -219,43 +212,43 @@ public class ColumnIndex
             }
         }
 
-        private void maybeWriteRowHeader() throws IOException
-        {
-            if (lastColumn == null)
-            {
+        private void maybeWriteRowHeader() throws IOException {
+            if (lastColumn == null) {
+                if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+                    if (!isSerializeLoggingActive.get()) {
+                        isSerializeLoggingActive.set(true);
+                        serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(this, this.key, "this.key").toJsonString());
+                        isSerializeLoggingActive.set(false);
+                    }
+                }
                 ByteBufferUtil.writeWithShortLength(key, output);
                 DeletionTime.serializer.serialize(deletionInfo.getTopLevelDeletion(), output);
             }
         }
 
-        public void finishAddingAtoms() throws IOException
-        {
+        public void finishAddingAtoms() throws IOException {
             long size = tombstoneTracker.writeUnwrittenTombstones(output, atomSerializer);
             endPosition += size;
             blockSize += size;
         }
 
-        public ColumnIndex build()
-        {
-            assert !tombstoneTracker.hasUnwrittenTombstones();  // finishAddingAtoms must be called before building.
+        public ColumnIndex build() {
+            // finishAddingAtoms must be called before building.
+            assert !tombstoneTracker.hasUnwrittenTombstones();
             // all columns were GC'd after all
             if (lastColumn == null)
                 return ColumnIndex.EMPTY;
-
             // the last column may have fallen on an index boundary already.  if not, index it explicitly.
-            if (result.columnsIndex.isEmpty() || lastBlockClosing != lastColumn)
-            {
+            if (result.columnsIndex.isEmpty() || lastBlockClosing != lastColumn) {
                 IndexHelper.IndexInfo cIndexInfo = new IndexHelper.IndexInfo(firstColumn.name(), lastColumn.name(), indexOffset + startPosition, endPosition - startPosition);
                 result.columnsIndex.add(cIndexInfo);
             }
-
             // we should always have at least one computed index block, but we only write it out if there is more than that.
             assert result.columnsIndex.size() > 0;
             return result;
         }
 
-        public void maybeWriteEmptyRowHeader() throws IOException
-        {
+        public void maybeWriteEmptyRowHeader() throws IOException {
             if (!deletionInfo.isLive())
                 maybeWriteRowHeader();
         }

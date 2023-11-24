@@ -18,7 +18,6 @@
 package org.apache.cassandra.db;
 
 import java.util.List;
-
 import org.apache.cassandra.config.DatabaseDescriptor;
 import org.apache.cassandra.db.filter.*;
 import org.apache.cassandra.db.index.*;
@@ -26,20 +25,33 @@ import org.apache.cassandra.dht.AbstractBounds;
 import org.apache.cassandra.net.MessageOut;
 import org.apache.cassandra.service.IReadCommand;
 
-public abstract class AbstractRangeCommand implements IReadCommand
-{
+public abstract class AbstractRangeCommand implements IReadCommand {
+
+    private static final org.slf4j.Logger serialize_logger = org.slf4j.LoggerFactory.getLogger("serialize.logger");
+
+    private java.lang.ThreadLocal<Boolean> isSerializeLoggingActive = new ThreadLocal<Boolean>() {
+
+        @Override
+        protected Boolean initialValue() {
+            return false;
+        }
+    };
+
     public final String keyspace;
+
     public final String columnFamily;
+
     public final long timestamp;
 
     public final AbstractBounds<RowPosition> keyRange;
+
     public final IDiskAtomFilter predicate;
+
     public final List<IndexExpression> rowFilter;
 
     public final SecondaryIndexSearcher searcher;
 
-    public AbstractRangeCommand(String keyspace, String columnFamily, long timestamp, AbstractBounds<RowPosition> keyRange, IDiskAtomFilter predicate, List<IndexExpression> rowFilter)
-    {
+    public AbstractRangeCommand(String keyspace, String columnFamily, long timestamp, AbstractBounds<RowPosition> keyRange, IDiskAtomFilter predicate, List<IndexExpression> rowFilter) {
         this.keyspace = keyspace;
         this.columnFamily = columnFamily;
         this.timestamp = timestamp;
@@ -50,52 +62,55 @@ public abstract class AbstractRangeCommand implements IReadCommand
         this.searcher = indexManager.getHighestSelectivityIndexSearcher(rowFilter);
     }
 
-    public boolean requiresScanningAllRanges()
-    {
+    public boolean requiresScanningAllRanges() {
         return searcher != null && searcher.requiresScanningAllRanges(rowFilter);
     }
 
-    public List<Row> postReconciliationProcessing(List<Row> rows)
-    {
+    public List<Row> postReconciliationProcessing(List<Row> rows) {
         return searcher == null ? trim(rows) : trim(searcher.postReconciliationProcessing(rowFilter, rows));
     }
 
-    private List<Row> trim(List<Row> rows)
-    {
+    private List<Row> trim(List<Row> rows) {
         if (countCQL3Rows() || ignoredTombstonedPartitions())
             return rows;
         else
             return rows.size() > limit() ? rows.subList(0, limit()) : rows;
     }
 
-    public String getKeyspace()
-    {
+    public String getKeyspace() {
+        if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+            if (!isSerializeLoggingActive.get()) {
+                isSerializeLoggingActive.set(true);
+                serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(this, this.keyspace, "this.keyspace").toJsonString());
+                isSerializeLoggingActive.set(false);
+            }
+        }
         return keyspace;
     }
 
     public abstract MessageOut<? extends AbstractRangeCommand> createMessage();
+
     public abstract AbstractRangeCommand forSubRange(AbstractBounds<RowPosition> range);
+
     public abstract AbstractRangeCommand withUpdatedLimit(int newLimit);
 
     public abstract int limit();
+
     public abstract boolean countCQL3Rows();
 
     /**
      * Returns true if tombstoned partitions should not be included in results or count towards the limit.
      * See CASSANDRA-8490 for more details on why this is needed (and done this way).
-     * */
-    public boolean ignoredTombstonedPartitions()
-    {
+     */
+    public boolean ignoredTombstonedPartitions() {
         if (!(predicate instanceof SliceQueryFilter))
             return false;
-
         return ((SliceQueryFilter) predicate).compositesToGroup == SliceQueryFilter.IGNORE_TOMBSTONED_PARTITIONS;
     }
 
     public abstract List<Row> executeLocally();
 
-    public long getTimeout()
-    {
+    public long getTimeout() {
         return DatabaseDescriptor.getRangeRpcTimeout();
     }
 }

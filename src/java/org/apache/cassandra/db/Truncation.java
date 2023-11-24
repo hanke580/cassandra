@@ -19,7 +19,6 @@ package org.apache.cassandra.db;
 
 import java.io.DataInput;
 import java.io.IOException;
-
 import org.apache.cassandra.io.IVersionedSerializer;
 import org.apache.cassandra.io.util.DataOutputPlus;
 import org.apache.cassandra.net.MessageOut;
@@ -28,47 +27,68 @@ import org.apache.cassandra.net.MessagingService;
 /**
  * A truncate operation descriptor
  */
-public class Truncation
-{
+public class Truncation {
+
+    private static final org.slf4j.Logger serialize_logger = org.slf4j.LoggerFactory.getLogger("serialize.logger");
+
     public static final IVersionedSerializer<Truncation> serializer = new TruncationSerializer();
 
     public final String keyspace;
+
     public final String columnFamily;
 
-    public Truncation(String keyspace, String columnFamily)
-    {
+    public Truncation(String keyspace, String columnFamily) {
         this.keyspace = keyspace;
         this.columnFamily = columnFamily;
     }
 
-    public MessageOut<Truncation> createMessage()
-    {
+    public MessageOut<Truncation> createMessage() {
         return new MessageOut<Truncation>(MessagingService.Verb.TRUNCATE, this, serializer);
     }
 
-    public String toString()
-    {
+    public String toString() {
         return "Truncation(" + "keyspace='" + keyspace + '\'' + ", cf='" + columnFamily + "\')";
     }
 }
 
-class TruncationSerializer implements IVersionedSerializer<Truncation>
-{
-    public void serialize(Truncation t, DataOutputPlus out, int version) throws IOException
-    {
+class TruncationSerializer implements IVersionedSerializer<Truncation> {
+
+    private static final org.slf4j.Logger serialize_logger = org.slf4j.LoggerFactory.getLogger("serialize.logger");
+
+    private java.lang.ThreadLocal<Boolean> isSerializeLoggingActive = new ThreadLocal<Boolean>() {
+
+        @Override
+        protected Boolean initialValue() {
+            return false;
+        }
+    };
+
+    public void serialize(Truncation t, DataOutputPlus out, int version) throws IOException {
+        if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+            if (!isSerializeLoggingActive.get()) {
+                isSerializeLoggingActive.set(true);
+                serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(t, t.keyspace, "t.keyspace").toJsonString());
+                isSerializeLoggingActive.set(false);
+            }
+        }
         out.writeUTF(t.keyspace);
+        if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+            if (!isSerializeLoggingActive.get()) {
+                isSerializeLoggingActive.set(true);
+                serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(t, t.columnFamily, "t.columnFamily").toJsonString());
+                isSerializeLoggingActive.set(false);
+            }
+        }
         out.writeUTF(t.columnFamily);
     }
 
-    public Truncation deserialize(DataInput in, int version) throws IOException
-    {
+    public Truncation deserialize(DataInput in, int version) throws IOException {
         String keyspace = in.readUTF();
         String columnFamily = in.readUTF();
         return new Truncation(keyspace, columnFamily);
     }
 
-    public long serializedSize(Truncation truncation, int version)
-    {
+    public long serializedSize(Truncation truncation, int version) {
         return TypeSizes.NATIVE.sizeof(truncation.keyspace) + TypeSizes.NATIVE.sizeof(truncation.columnFamily);
     }
 }

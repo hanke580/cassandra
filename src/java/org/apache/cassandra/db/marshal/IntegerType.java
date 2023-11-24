@@ -19,7 +19,6 @@ package org.apache.cassandra.db.marshal;
 
 import java.math.BigInteger;
 import java.nio.ByteBuffer;
-
 import org.apache.cassandra.cql3.CQL3Type;
 import org.apache.cassandra.cql3.Constants;
 import org.apache.cassandra.cql3.Term;
@@ -28,28 +27,34 @@ import org.apache.cassandra.serializers.IntegerSerializer;
 import org.apache.cassandra.serializers.MarshalException;
 import org.apache.cassandra.utils.ByteBufferUtil;
 
-public final class IntegerType extends AbstractType<BigInteger>
-{
+public final class IntegerType extends AbstractType<BigInteger> {
+
+    private static final org.slf4j.Logger serialize_logger = org.slf4j.LoggerFactory.getLogger("serialize.logger");
+
+    private java.lang.ThreadLocal<Boolean> isSerializeLoggingActive = new ThreadLocal<Boolean>() {
+
+        @Override
+        protected Boolean initialValue() {
+            return false;
+        }
+    };
+
     public static final IntegerType instance = new IntegerType();
 
-    private static int findMostSignificantByte(ByteBuffer bytes)
-    {
+    private static int findMostSignificantByte(ByteBuffer bytes) {
         int len = bytes.remaining() - 1;
         int i = 0;
-        for (; i < len; i++)
-        {
+        for (; i < len; i++) {
             byte b0 = bytes.get(bytes.position() + i);
             if (b0 != 0 && b0 != -1)
                 break;
             byte b1 = bytes.get(bytes.position() + i + 1);
-            if (b0 == 0 && b1 != 0)
-            {
+            if (b0 == 0 && b1 != 0) {
                 if (b1 > 0)
                     i++;
                 break;
             }
-            if (b0 == -1 && b1 != -1)
-            {
+            if (b0 == -1 && b1 != -1) {
                 if (b1 < 0)
                     i++;
                 break;
@@ -58,38 +63,32 @@ public final class IntegerType extends AbstractType<BigInteger>
         return i;
     }
 
-    IntegerType() {/* singleton */}
+    IntegerType() {
+        /* singleton */
+    }
 
-    public boolean isEmptyValueMeaningless()
-    {
+    public boolean isEmptyValueMeaningless() {
         return true;
     }
 
-    public int compare(ByteBuffer lhs, ByteBuffer rhs)
-    {
+    public int compare(ByteBuffer lhs, ByteBuffer rhs) {
         return IntegerType.compareIntegers(lhs, rhs);
     }
 
-    public static int compareIntegers(ByteBuffer lhs, ByteBuffer rhs)
-    {
+    public static int compareIntegers(ByteBuffer lhs, ByteBuffer rhs) {
         int lhsLen = lhs.remaining();
         int rhsLen = rhs.remaining();
-
         if (lhsLen == 0)
             return rhsLen == 0 ? 0 : -1;
         if (rhsLen == 0)
             return 1;
-
         int lhsMsbIdx = findMostSignificantByte(lhs);
         int rhsMsbIdx = findMostSignificantByte(rhs);
-
         //diffs contain number of "meaningful" bytes (i.e. ignore padding)
         int lhsLenDiff = lhsLen - lhsMsbIdx;
         int rhsLenDiff = rhsLen - rhsMsbIdx;
-
         byte lhsMsb = lhs.get(lhs.position() + lhsMsbIdx);
         byte rhsMsb = rhs.get(rhs.position() + rhsMsbIdx);
-
         /*         +    -
          *      -----------
          *    + | -d |  1 |
@@ -100,87 +99,72 @@ public final class IntegerType extends AbstractType<BigInteger>
          *
          * d = difference of length in significant bytes
          */
-        if (lhsLenDiff != rhsLenDiff)
-        {
+        if (lhsLenDiff != rhsLenDiff) {
             if (lhsMsb < 0)
                 return rhsMsb < 0 ? rhsLenDiff - lhsLenDiff : -1;
             if (rhsMsb < 0)
                 return 1;
             return lhsLenDiff - rhsLenDiff;
         }
-
         // msb uses signed comparison
         if (lhsMsb != rhsMsb)
             return lhsMsb - rhsMsb;
         lhsMsbIdx++;
         rhsMsbIdx++;
-
         // remaining bytes are compared unsigned
-        while (lhsMsbIdx < lhsLen)
-        {
+        while (lhsMsbIdx < lhsLen) {
             lhsMsb = lhs.get(lhs.position() + lhsMsbIdx++);
             rhsMsb = rhs.get(rhs.position() + rhsMsbIdx++);
-
             if (lhsMsb != rhsMsb)
                 return (lhsMsb & 0xFF) - (rhsMsb & 0xFF);
         }
-
         return 0;
     }
 
-    public ByteBuffer fromString(String source) throws MarshalException
-    {
+    public ByteBuffer fromString(String source) throws MarshalException {
         // Return an empty ByteBuffer for an empty string.
         if (source.isEmpty())
             return ByteBufferUtil.EMPTY_BYTE_BUFFER;
-
         BigInteger integerType;
-
-        try
-        {
+        try {
             integerType = new BigInteger(source);
-        }
-        catch (Exception e)
-        {
+        } catch (Exception e) {
             throw new MarshalException(String.format("unable to make int from '%s'", source), e);
         }
-
         return decompose(integerType);
     }
 
     @Override
-    public Term fromJSONObject(Object parsed) throws MarshalException
-    {
-        try
-        {
+    public Term fromJSONObject(Object parsed) throws MarshalException {
+        try {
             return new Constants.Value(getSerializer().serialize(new BigInteger(parsed.toString())));
-        }
-        catch (NumberFormatException exc)
-        {
-            throw new MarshalException(String.format(
-                    "Value '%s' is not a valid representation of a varint value", parsed));
+        } catch (NumberFormatException exc) {
+            throw new MarshalException(String.format("Value '%s' is not a valid representation of a varint value", parsed));
         }
     }
 
     @Override
-    public String toJSONString(ByteBuffer buffer, int protocolVersion)
-    {
+    public String toJSONString(ByteBuffer buffer, int protocolVersion) {
         return getSerializer().deserialize(buffer).toString();
     }
 
     @Override
-    public boolean isValueCompatibleWithInternal(AbstractType<?> otherType)
-    {
+    public boolean isValueCompatibleWithInternal(AbstractType<?> otherType) {
         return this == otherType || Int32Type.instance.isValueCompatibleWith(otherType) || LongType.instance.isValueCompatibleWith(otherType);
     }
 
-    public CQL3Type asCQL3Type()
-    {
+    public CQL3Type asCQL3Type() {
         return CQL3Type.Native.VARINT;
     }
 
-    public TypeSerializer<BigInteger> getSerializer()
-    {
+    public TypeSerializer<BigInteger> getSerializer() {
+        if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+            if (!isSerializeLoggingActive.get()) {
+                isSerializeLoggingActive.set(true);
+                serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(org.apache.cassandra.serializers.IntegerSerializer.class, org.apache.cassandra.serializers.IntegerSerializer.instance, "org.apache.cassandra.serializers.IntegerSerializer.instance").toJsonString());
+                isSerializeLoggingActive.set(false);
+            }
+        }
         return IntegerSerializer.instance;
     }
 }

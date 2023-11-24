@@ -1,4 +1,5 @@
 package org.apache.cassandra.gms;
+
 /*
  * 
  * Licensed to the Apache Software Foundation (ASF) under one
@@ -19,37 +20,47 @@ package org.apache.cassandra.gms;
  * under the License.
  * 
  */
-
-
 import java.io.DataInput;
 import java.io.IOException;
-
 import org.apache.cassandra.io.IVersionedSerializer;
 import org.apache.cassandra.io.util.DataOutputPlus;
 
-public final class EchoMessage
-{
-	public static final EchoMessage instance = new EchoMessage();
-	
+public final class EchoMessage {
+
+    private static final org.slf4j.Logger serialize_logger = org.slf4j.LoggerFactory.getLogger("serialize.logger");
+
+    public static final EchoMessage instance = new EchoMessage();
+
     public static final IVersionedSerializer<EchoMessage> serializer = new EchoMessageSerializer();
 
-	private EchoMessage()
-	{
-	}
-	
-    public static class EchoMessageSerializer implements IVersionedSerializer<EchoMessage>
-    {
-        public void serialize(EchoMessage t, DataOutputPlus out, int version) throws IOException
-        {
+    private EchoMessage() {
+    }
+
+    public static class EchoMessageSerializer implements IVersionedSerializer<EchoMessage> {
+
+        private java.lang.ThreadLocal<Boolean> isSerializeLoggingActive = new ThreadLocal<Boolean>() {
+
+            @Override
+            protected Boolean initialValue() {
+                return false;
+            }
+        };
+
+        public void serialize(EchoMessage t, DataOutputPlus out, int version) throws IOException {
         }
 
-        public EchoMessage deserialize(DataInput in, int version) throws IOException
-        {
+        public EchoMessage deserialize(DataInput in, int version) throws IOException {
+            if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+                if (!isSerializeLoggingActive.get()) {
+                    isSerializeLoggingActive.set(true);
+                    serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(org.apache.cassandra.gms.EchoMessage.class, org.apache.cassandra.gms.EchoMessage.instance, "org.apache.cassandra.gms.EchoMessage.instance").toJsonString());
+                    isSerializeLoggingActive.set(false);
+                }
+            }
             return EchoMessage.instance;
         }
 
-        public long serializedSize(EchoMessage t, int version)
-        {
+        public long serializedSize(EchoMessage t, int version) {
             return 0;
         }
     }

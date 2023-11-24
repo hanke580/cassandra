@@ -19,7 +19,6 @@ package org.apache.cassandra.cql3.statements;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-
 import org.apache.cassandra.config.CFMetaData;
 import org.apache.cassandra.config.Schema;
 import org.apache.cassandra.cql3.CFName;
@@ -32,36 +31,48 @@ import org.apache.cassandra.service.MigrationManager;
 import org.apache.cassandra.thrift.ThriftValidation;
 import org.apache.cassandra.transport.Event;
 
-public class DropTriggerStatement extends SchemaAlteringStatement
-{
+public class DropTriggerStatement extends SchemaAlteringStatement {
+
+    private static final org.slf4j.Logger serialize_logger = org.slf4j.LoggerFactory.getLogger("serialize.logger");
+
+    private java.lang.ThreadLocal<Boolean> isSerializeLoggingActive = new ThreadLocal<Boolean>() {
+
+        @Override
+        protected Boolean initialValue() {
+            return false;
+        }
+    };
+
     private static final Logger logger = LoggerFactory.getLogger(DropTriggerStatement.class);
 
     private final String triggerName;
 
     private final boolean ifExists;
 
-    public DropTriggerStatement(CFName name, String triggerName, boolean ifExists)
-    {
+    public DropTriggerStatement(CFName name, String triggerName, boolean ifExists) {
         super(name);
         this.triggerName = triggerName;
         this.ifExists = ifExists;
     }
 
-    public void checkAccess(ClientState state) throws UnauthorizedException
-    {
+    public void checkAccess(ClientState state) throws UnauthorizedException {
         state.ensureIsSuper("Only superusers are allowed to perfrom DROP TRIGGER queries");
     }
 
-    public void validate(ClientState state) throws RequestValidationException
-    {
+    public void validate(ClientState state) throws RequestValidationException {
         ThriftValidation.validateColumnFamily(keyspace(), columnFamily());
     }
 
-    public boolean announceMigration(boolean isLocalOnly) throws ConfigurationException, InvalidRequestException
-    {
+    public boolean announceMigration(boolean isLocalOnly) throws ConfigurationException, InvalidRequestException {
         CFMetaData cfm = Schema.instance.getCFMetaData(keyspace(), columnFamily()).copy();
-        if (cfm.removeTrigger(triggerName))
-        {
+        if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+            if (!isSerializeLoggingActive.get()) {
+                isSerializeLoggingActive.set(true);
+                serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(this, this.triggerName, "this.triggerName").toJsonString());
+                isSerializeLoggingActive.set(false);
+            }
+        }
+        if (cfm.removeTrigger(triggerName)) {
             logger.info("Dropping trigger with name {}", triggerName);
             MigrationManager.announceColumnFamilyUpdate(cfm, isLocalOnly);
             return true;
@@ -71,8 +82,7 @@ public class DropTriggerStatement extends SchemaAlteringStatement
         return false;
     }
 
-    public Event.SchemaChange changeEvent()
-    {
+    public Event.SchemaChange changeEvent() {
         return new Event.SchemaChange(Event.SchemaChange.Change.UPDATED, Event.SchemaChange.Target.TABLE, keyspace(), columnFamily());
     }
 }

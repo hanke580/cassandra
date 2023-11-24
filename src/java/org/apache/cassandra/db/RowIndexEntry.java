@@ -23,9 +23,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
-
 import com.google.common.primitives.Ints;
-
 import org.apache.cassandra.cache.IMeasurableMemory;
 import org.apache.cassandra.io.ISerializer;
 import org.apache.cassandra.io.sstable.IndexHelper;
@@ -34,27 +32,25 @@ import org.apache.cassandra.io.util.DataOutputPlus;
 import org.apache.cassandra.io.util.FileUtils;
 import org.apache.cassandra.utils.ObjectSizes;
 
-public class RowIndexEntry<T> implements IMeasurableMemory
-{
+public class RowIndexEntry<T> implements IMeasurableMemory {
+
+    private static final org.slf4j.Logger serialize_logger = org.slf4j.LoggerFactory.getLogger("serialize.logger");
+
     private static final long EMPTY_SIZE = ObjectSizes.measure(new RowIndexEntry(0));
 
     public final long position;
 
-    public RowIndexEntry(long position)
-    {
+    public RowIndexEntry(long position) {
         this.position = position;
     }
 
-    public int promotedSize(ISerializer<T> idxSerializer)
-    {
+    public int promotedSize(ISerializer<T> idxSerializer) {
         return 0;
     }
 
-    public static RowIndexEntry<IndexHelper.IndexInfo> create(long position, DeletionTime deletionTime, ColumnIndex index)
-    {
+    public static RowIndexEntry<IndexHelper.IndexInfo> create(long position, DeletionTime deletionTime, ColumnIndex index) {
         assert index != null;
         assert deletionTime != null;
-
         // we only consider the columns summary when determining whether to create an IndexedEntry,
         // since if there are insufficient columns to be worth indexing we're going to seek to
         // the beginning of the row anyway, so we might as well read the tombstone there as well.
@@ -68,13 +64,11 @@ public class RowIndexEntry<T> implements IMeasurableMemory
      * @return true if this index entry contains the row-level tombstone and column summary.  Otherwise,
      * caller should fetch these from the row header.
      */
-    public boolean isIndexed()
-    {
+    public boolean isIndexed() {
         return !columnsIndex().isEmpty();
     }
 
-    public DeletionTime deletionTime()
-    {
+    public DeletionTime deletionTime() {
         throw new UnsupportedOperationException();
     }
 
@@ -82,104 +76,103 @@ public class RowIndexEntry<T> implements IMeasurableMemory
      * @return the offset to the start of the header information for this row.
      * For some formats this may not be the start of the row.
      */
-    public long headerOffset()
-    {
+    public long headerOffset() {
         return 0;
     }
 
-    public List<T> columnsIndex()
-    {
+    public List<T> columnsIndex() {
         return Collections.emptyList();
     }
 
-    public long unsharedHeapSize()
-    {
+    public long unsharedHeapSize() {
         return EMPTY_SIZE;
     }
 
-    public static interface IndexSerializer<T>
-    {
+    public static interface IndexSerializer<T> {
+
         void serialize(RowIndexEntry<T> rie, DataOutputPlus out) throws IOException;
+
         RowIndexEntry<T> deserialize(DataInput in, Version version) throws IOException;
+
         public int serializedSize(RowIndexEntry<T> rie);
     }
 
-    public static class Serializer implements IndexSerializer<IndexHelper.IndexInfo>
-    {
+    public static class Serializer implements IndexSerializer<IndexHelper.IndexInfo> {
+
+        private java.lang.ThreadLocal<Boolean> isSerializeLoggingActive = new ThreadLocal<Boolean>() {
+
+            @Override
+            protected Boolean initialValue() {
+                return false;
+            }
+        };
+
         private final ISerializer<IndexHelper.IndexInfo> idxSerializer;
 
-        public Serializer(ISerializer<IndexHelper.IndexInfo> idxSerializer)
-        {
+        public Serializer(ISerializer<IndexHelper.IndexInfo> idxSerializer) {
             this.idxSerializer = idxSerializer;
         }
 
-        public void serialize(RowIndexEntry<IndexHelper.IndexInfo> rie, DataOutputPlus out) throws IOException
-        {
+        public void serialize(RowIndexEntry<IndexHelper.IndexInfo> rie, DataOutputPlus out) throws IOException {
+            if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+                if (!isSerializeLoggingActive.get()) {
+                    isSerializeLoggingActive.set(true);
+                    serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(rie, rie.position, "rie.position").toJsonString());
+                    isSerializeLoggingActive.set(false);
+                }
+            }
             out.writeLong(rie.position);
             out.writeInt(rie.promotedSize(idxSerializer));
-
-            if (rie.isIndexed())
-            {
+            if (rie.isIndexed()) {
                 DeletionTime.serializer.serialize(rie.deletionTime(), out);
                 out.writeInt(rie.columnsIndex().size());
-                for (IndexHelper.IndexInfo info : rie.columnsIndex())
+                for (IndexHelper.IndexInfo info : rie.columnsIndex()) {
+                    if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+                        if (!isSerializeLoggingActive.get()) {
+                            isSerializeLoggingActive.set(true);
+                            serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(rie.columnsIndex(), info, "info").toJsonString());
+                            isSerializeLoggingActive.set(false);
+                        }
+                    }
                     idxSerializer.serialize(info, out);
+                }
             }
         }
 
-        public RowIndexEntry<IndexHelper.IndexInfo> deserialize(DataInput in, Version version) throws IOException
-        {
+        public RowIndexEntry<IndexHelper.IndexInfo> deserialize(DataInput in, Version version) throws IOException {
             long position = in.readLong();
-
             int size = in.readInt();
-            if (size > 0)
-            {
+            if (size > 0) {
                 DeletionTime deletionTime = DeletionTime.serializer.deserialize(in);
-
                 int entries = in.readInt();
                 List<IndexHelper.IndexInfo> columnsIndex = new ArrayList<>(entries);
-                for (int i = 0; i < entries; i++)
-                    columnsIndex.add(idxSerializer.deserialize(in));
-
+                for (int i = 0; i < entries; i++) columnsIndex.add(idxSerializer.deserialize(in));
                 return new IndexedEntry(position, deletionTime, columnsIndex);
-            }
-            else
-            {
+            } else {
                 return new RowIndexEntry<>(position);
             }
         }
 
-        public static void skip(DataInput in) throws IOException
-        {
+        public static void skip(DataInput in) throws IOException {
             in.readLong();
             skipPromotedIndex(in);
         }
 
-        private static void skipPromotedIndex(DataInput in) throws IOException
-        {
+        private static void skipPromotedIndex(DataInput in) throws IOException {
             int size = in.readInt();
             if (size <= 0)
                 return;
-
             FileUtils.skipBytesFully(in, size);
         }
 
-        public int serializedSize(RowIndexEntry<IndexHelper.IndexInfo> rie)
-        {
+        public int serializedSize(RowIndexEntry<IndexHelper.IndexInfo> rie) {
             int size = TypeSizes.NATIVE.sizeof(rie.position) + TypeSizes.NATIVE.sizeof(rie.promotedSize(idxSerializer));
-
-            if (rie.isIndexed())
-            {
+            if (rie.isIndexed()) {
                 List<IndexHelper.IndexInfo> index = rie.columnsIndex();
-
                 size += DeletionTime.serializer.serializedSize(rie.deletionTime(), TypeSizes.NATIVE);
                 size += TypeSizes.NATIVE.sizeof(index.size());
-
-                for (IndexHelper.IndexInfo info : index)
-                    size += idxSerializer.serializedSize(info, TypeSizes.NATIVE);
+                for (IndexHelper.IndexInfo info : index) size += idxSerializer.serializedSize(info, TypeSizes.NATIVE);
             }
-
-
             return size;
         }
     }
@@ -187,16 +180,23 @@ public class RowIndexEntry<T> implements IMeasurableMemory
     /**
      * An entry in the row index for a row whose columns are indexed.
      */
-    private static class IndexedEntry extends RowIndexEntry<IndexHelper.IndexInfo>
-    {
-        private final DeletionTime deletionTime;
-        private final List<IndexHelper.IndexInfo> columnsIndex;
-        private static final long BASE_SIZE =
-                ObjectSizes.measure(new IndexedEntry(0, DeletionTime.LIVE, Arrays.<IndexHelper.IndexInfo>asList(null, null)))
-              + ObjectSizes.measure(new ArrayList<>(1));
+    private static class IndexedEntry extends RowIndexEntry<IndexHelper.IndexInfo> {
 
-        private IndexedEntry(long position, DeletionTime deletionTime, List<IndexHelper.IndexInfo> columnsIndex)
-        {
+        private java.lang.ThreadLocal<Boolean> isSerializeLoggingActive = new ThreadLocal<Boolean>() {
+
+            @Override
+            protected Boolean initialValue() {
+                return false;
+            }
+        };
+
+        private final DeletionTime deletionTime;
+
+        private final List<IndexHelper.IndexInfo> columnsIndex;
+
+        private static final long BASE_SIZE = ObjectSizes.measure(new IndexedEntry(0, DeletionTime.LIVE, Arrays.<IndexHelper.IndexInfo>asList(null, null))) + ObjectSizes.measure(new ArrayList<>(1));
+
+        private IndexedEntry(long position, DeletionTime deletionTime, List<IndexHelper.IndexInfo> columnsIndex) {
             super(position);
             assert deletionTime != null;
             assert columnsIndex != null && columnsIndex.size() > 1;
@@ -205,40 +205,44 @@ public class RowIndexEntry<T> implements IMeasurableMemory
         }
 
         @Override
-        public DeletionTime deletionTime()
-        {
+        public DeletionTime deletionTime() {
+            if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+                if (!isSerializeLoggingActive.get()) {
+                    isSerializeLoggingActive.set(true);
+                    serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(this, this.deletionTime, "this.deletionTime").toJsonString());
+                    isSerializeLoggingActive.set(false);
+                }
+            }
             return deletionTime;
         }
 
         @Override
-        public List<IndexHelper.IndexInfo> columnsIndex()
-        {
+        public List<IndexHelper.IndexInfo> columnsIndex() {
+            if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+                if (!isSerializeLoggingActive.get()) {
+                    isSerializeLoggingActive.set(true);
+                    serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(this, this.columnsIndex, "this.columnsIndex").toJsonString());
+                    isSerializeLoggingActive.set(false);
+                }
+            }
             return columnsIndex;
         }
 
         @Override
-        public int promotedSize(ISerializer<IndexHelper.IndexInfo> idxSerializer)
-        {
+        public int promotedSize(ISerializer<IndexHelper.IndexInfo> idxSerializer) {
             TypeSizes typeSizes = TypeSizes.NATIVE;
             long size = DeletionTime.serializer.serializedSize(deletionTime, typeSizes);
-            size += typeSizes.sizeof(columnsIndex.size()); // number of entries
-            for (IndexHelper.IndexInfo info : columnsIndex)
-                size += idxSerializer.serializedSize(info, typeSizes);
-
+            // number of entries
+            size += typeSizes.sizeof(columnsIndex.size());
+            for (IndexHelper.IndexInfo info : columnsIndex) size += idxSerializer.serializedSize(info, typeSizes);
             return Ints.checkedCast(size);
         }
 
         @Override
-        public long unsharedHeapSize()
-        {
+        public long unsharedHeapSize() {
             long entrySize = 0;
-            for (IndexHelper.IndexInfo idx : columnsIndex)
-                entrySize += idx.unsharedHeapSize();
-
-            return BASE_SIZE
-                   + entrySize
-                   + deletionTime.unsharedHeapSize()
-                   + ObjectSizes.sizeOfReferenceArray(columnsIndex.size());
+            for (IndexHelper.IndexInfo idx : columnsIndex) entrySize += idx.unsharedHeapSize();
+            return BASE_SIZE + entrySize + deletionTime.unsharedHeapSize() + ObjectSizes.sizeOfReferenceArray(columnsIndex.size());
         }
     }
 }

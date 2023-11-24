@@ -21,7 +21,6 @@ import java.io.*;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.List;
-
 import org.apache.cassandra.db.composites.CType;
 import org.apache.cassandra.db.composites.Composite;
 import org.apache.cassandra.db.TypeSizes;
@@ -34,10 +33,11 @@ import org.apache.cassandra.utils.*;
 /**
  * Provides helper to serialize, deserialize and use column indexes.
  */
-public class IndexHelper
-{
-    public static void skipBloomFilter(DataInput in) throws IOException
-    {
+public class IndexHelper {
+
+    private static final org.slf4j.Logger serialize_logger = org.slf4j.LoggerFactory.getLogger("serialize.logger");
+
+    public static void skipBloomFilter(DataInput in) throws IOException {
         int size = in.readInt();
         FileUtils.skipBytesFully(in, size);
     }
@@ -47,17 +47,13 @@ public class IndexHelper
      * @param in the data input from which the index should be skipped
      * @throws IOException if an I/O error occurs.
      */
-    public static void skipIndex(DataInput in) throws IOException
-    {
+    public static void skipIndex(DataInput in) throws IOException {
         /* read only the column index list */
         int columnIndexSize = in.readInt();
         /* skip the column index data */
-        if (in instanceof FileDataInput)
-        {
+        if (in instanceof FileDataInput) {
             FileUtils.skipBytesFully(in, columnIndexSize);
-        }
-        else
-        {
+        } else {
             // skip bytes
             byte[] skip = new byte[columnIndexSize];
             in.readFully(skip);
@@ -81,14 +77,11 @@ public class IndexHelper
      *
      * @return int index
      */
-    public static int indexFor(Composite name, List<IndexInfo> indexList, CType comparator, boolean reversed, int lastIndex)
-    {
+    public static int indexFor(Composite name, List<IndexInfo> indexList, CType comparator, boolean reversed, int lastIndex) {
         if (name.isEmpty())
             return lastIndex >= 0 ? lastIndex : reversed ? indexList.size() - 1 : 0;
-
         if (lastIndex >= indexList.size())
             return -1;
-
         IndexInfo target = new IndexInfo(name, name, 0, 0);
         /*
         Take the example from the unit test, and say your index looks like this:
@@ -105,14 +98,10 @@ public class IndexHelper
         */
         int startIdx = 0;
         List<IndexInfo> toSearch = indexList;
-        if (lastIndex >= 0)
-        {
-            if (reversed)
-            {
+        if (lastIndex >= 0) {
+            if (reversed) {
                 toSearch = indexList.subList(0, lastIndex + 1);
-            }
-            else
-            {
+            } else {
                 startIdx = lastIndex;
                 toSearch = indexList.subList(lastIndex, indexList.size());
             }
@@ -121,64 +110,76 @@ public class IndexHelper
         return startIdx + (index < 0 ? -index - (reversed ? 2 : 1) : index);
     }
 
-    public static Comparator<IndexInfo> getComparator(final CType nameComparator, boolean reversed)
-    {
+    public static Comparator<IndexInfo> getComparator(final CType nameComparator, boolean reversed) {
         return reversed ? nameComparator.indexReverseComparator() : nameComparator.indexComparator();
     }
 
-    public static class IndexInfo
-    {
+    public static class IndexInfo {
+
         private static final long EMPTY_SIZE = ObjectSizes.measure(new IndexInfo(null, null, 0, 0));
 
         public final long width;
+
         public final Composite lastName;
+
         public final Composite firstName;
+
         public final long offset;
 
-        public IndexInfo(Composite firstName, Composite lastName, long offset, long width)
-        {
+        public IndexInfo(Composite firstName, Composite lastName, long offset, long width) {
             this.firstName = firstName;
             this.lastName = lastName;
             this.offset = offset;
             this.width = width;
         }
 
-        public static class Serializer implements ISerializer<IndexInfo>
-        {
+        public static class Serializer implements ISerializer<IndexInfo> {
+
+            private java.lang.ThreadLocal<Boolean> isSerializeLoggingActive = new ThreadLocal<Boolean>() {
+
+                @Override
+                protected Boolean initialValue() {
+                    return false;
+                }
+            };
+
             private final CType type;
 
-            public Serializer(CType type)
-            {
+            public Serializer(CType type) {
                 this.type = type;
             }
 
-            public void serialize(IndexInfo info, DataOutputPlus out) throws IOException
-            {
+            public void serialize(IndexInfo info, DataOutputPlus out) throws IOException {
                 type.serializer().serialize(info.firstName, out);
                 type.serializer().serialize(info.lastName, out);
+                if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+                    if (!isSerializeLoggingActive.get()) {
+                        isSerializeLoggingActive.set(true);
+                        serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(info, info.offset, "info.offset").toJsonString());
+                        isSerializeLoggingActive.set(false);
+                    }
+                }
                 out.writeLong(info.offset);
+                if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+                    if (!isSerializeLoggingActive.get()) {
+                        isSerializeLoggingActive.set(true);
+                        serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(info, info.width, "info.width").toJsonString());
+                        isSerializeLoggingActive.set(false);
+                    }
+                }
                 out.writeLong(info.width);
             }
 
-            public IndexInfo deserialize(DataInput in) throws IOException
-            {
-                return new IndexInfo(type.serializer().deserialize(in),
-                                     type.serializer().deserialize(in),
-                                     in.readLong(),
-                                     in.readLong());
+            public IndexInfo deserialize(DataInput in) throws IOException {
+                return new IndexInfo(type.serializer().deserialize(in), type.serializer().deserialize(in), in.readLong(), in.readLong());
             }
 
-            public long serializedSize(IndexInfo info, TypeSizes typeSizes)
-            {
-                return type.serializer().serializedSize(info.firstName, typeSizes)
-                     + type.serializer().serializedSize(info.lastName, typeSizes)
-                     + typeSizes.sizeof(info.offset)
-                     + typeSizes.sizeof(info.width);
+            public long serializedSize(IndexInfo info, TypeSizes typeSizes) {
+                return type.serializer().serializedSize(info.firstName, typeSizes) + type.serializer().serializedSize(info.lastName, typeSizes) + typeSizes.sizeof(info.offset) + typeSizes.sizeof(info.width);
             }
         }
 
-        public long unsharedHeapSize()
-        {
+        public long unsharedHeapSize() {
             return EMPTY_SIZE + firstName.unsharedHeapSize() + lastName.unsharedHeapSize();
         }
     }

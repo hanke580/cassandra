@@ -19,7 +19,6 @@ package org.apache.cassandra.cql3.statements;
 
 import java.io.IOException;
 import java.util.concurrent.TimeoutException;
-
 import org.apache.cassandra.auth.Permission;
 import org.apache.cassandra.cql3.*;
 import org.apache.cassandra.db.ColumnFamilyStore;
@@ -31,55 +30,59 @@ import org.apache.cassandra.service.QueryState;
 import org.apache.cassandra.service.StorageProxy;
 import org.apache.cassandra.thrift.ThriftValidation;
 
-public class TruncateStatement extends CFStatement implements CQLStatement
-{
-    public TruncateStatement(CFName name)
-    {
+public class TruncateStatement extends CFStatement implements CQLStatement {
+
+    private static final org.slf4j.Logger serialize_logger = org.slf4j.LoggerFactory.getLogger("serialize.logger");
+
+    private java.lang.ThreadLocal<Boolean> isSerializeLoggingActive = new ThreadLocal<Boolean>() {
+
+        @Override
+        protected Boolean initialValue() {
+            return false;
+        }
+    };
+
+    public TruncateStatement(CFName name) {
         super(name);
     }
 
-    public int getBoundTerms()
-    {
+    public int getBoundTerms() {
         return 0;
     }
 
-    public Prepared prepare() throws InvalidRequestException
-    {
+    public Prepared prepare() throws InvalidRequestException {
         return new Prepared(this);
     }
 
-    public void checkAccess(ClientState state) throws InvalidRequestException, UnauthorizedException
-    {
+    public void checkAccess(ClientState state) throws InvalidRequestException, UnauthorizedException {
+        if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+            if (!isSerializeLoggingActive.get()) {
+                isSerializeLoggingActive.set(true);
+                serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(org.apache.cassandra.auth.Permission.class, org.apache.cassandra.auth.Permission.MODIFY, "org.apache.cassandra.auth.Permission.MODIFY").toJsonString());
+                isSerializeLoggingActive.set(false);
+            }
+        }
         state.hasColumnFamilyAccess(keyspace(), columnFamily(), Permission.MODIFY);
     }
 
-    public void validate(ClientState state) throws InvalidRequestException
-    {
+    public void validate(ClientState state) throws InvalidRequestException {
         ThriftValidation.validateColumnFamily(keyspace(), columnFamily());
     }
 
-    public ResultMessage execute(QueryState state, QueryOptions options) throws InvalidRequestException, TruncateException
-    {
-        try
-        {
+    public ResultMessage execute(QueryState state, QueryOptions options) throws InvalidRequestException, TruncateException {
+        try {
             StorageProxy.truncateBlocking(keyspace(), columnFamily());
-        }
-        catch (UnavailableException | TimeoutException | IOException e)
-        {
+        } catch (UnavailableException | TimeoutException | IOException e) {
             throw new TruncateException(e);
         }
         return null;
     }
 
-    public ResultMessage executeInternal(QueryState state, QueryOptions options)
-    {
-        try
-        {
+    public ResultMessage executeInternal(QueryState state, QueryOptions options) {
+        try {
             ColumnFamilyStore cfs = Keyspace.open(keyspace()).getColumnFamilyStore(columnFamily());
             cfs.truncateBlocking();
-        }
-        catch (Exception e)
-        {
+        } catch (Exception e) {
             throw new TruncateException(e);
         }
         return null;

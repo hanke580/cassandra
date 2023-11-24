@@ -18,63 +18,72 @@
 package org.apache.cassandra.db.composites;
 
 import java.nio.ByteBuffer;
-
 import org.apache.cassandra.config.CFMetaData;
 import org.apache.cassandra.config.ColumnDefinition;
 import org.apache.cassandra.cql3.CQL3Row;
 import org.apache.cassandra.cql3.ColumnIdentifier;
 import org.apache.cassandra.db.marshal.AbstractType;
 
-public class SimpleDenseCellNameType extends AbstractSimpleCellNameType
-{
-    public SimpleDenseCellNameType(AbstractType<?> type)
-    {
+public class SimpleDenseCellNameType extends AbstractSimpleCellNameType {
+
+    private static final org.slf4j.Logger serialize_logger = org.slf4j.LoggerFactory.getLogger("serialize.logger");
+
+    private java.lang.ThreadLocal<Boolean> isSerializeLoggingActive = new ThreadLocal<Boolean>() {
+
+        @Override
+        protected Boolean initialValue() {
+            return false;
+        }
+    };
+
+    public SimpleDenseCellNameType(AbstractType<?> type) {
         super(type);
     }
 
-    public int clusteringPrefixSize()
-    {
+    public int clusteringPrefixSize() {
         return 1;
     }
 
-    public CBuilder prefixBuilder()
-    {
+    public CBuilder prefixBuilder() {
         // Simple dense is "all" prefix
         return builder();
     }
 
-    public CellNameType setSubtype(int position, AbstractType<?> newType)
-    {
+    public CellNameType setSubtype(int position, AbstractType<?> newType) {
         if (position != 0)
             throw new IllegalArgumentException();
         return new SimpleDenseCellNameType(newType);
     }
 
-    public boolean isDense()
-    {
+    public boolean isDense() {
         return true;
     }
 
-    public CellName create(Composite prefix, ColumnDefinition column)
-    {
+    public CellName create(Composite prefix, ColumnDefinition column) {
         assert prefix.size() == 1;
         // We ignore the column because it's just the COMPACT_VALUE name which is not store in the cell name
         return new SimpleDenseCellName(prefix.get(0));
     }
 
     @Override
-    public Composite fromByteBuffer(ByteBuffer bb)
-    {
-        return !bb.hasRemaining()
-             ? Composites.EMPTY
-             : new SimpleDenseCellName(bb);
+    public Composite fromByteBuffer(ByteBuffer bb) {
+        if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+            if (!isSerializeLoggingActive.get()) {
+                isSerializeLoggingActive.set(true);
+                serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(org.apache.cassandra.db.composites.Composites.class, org.apache.cassandra.db.composites.Composites.EMPTY, "org.apache.cassandra.db.composites.Composites.EMPTY").toJsonString());
+                isSerializeLoggingActive.set(false);
+            }
+        }
+        return !bb.hasRemaining() ? Composites.EMPTY : new SimpleDenseCellName(bb);
     }
 
-    public void addCQL3Column(ColumnIdentifier id) {}
-    public void removeCQL3Column(ColumnIdentifier id) {}
+    public void addCQL3Column(ColumnIdentifier id) {
+    }
 
-    public CQL3Row.Builder CQL3RowBuilder(CFMetaData metadata, long now)
-    {
+    public void removeCQL3Column(ColumnIdentifier id) {
+    }
+
+    public CQL3Row.Builder CQL3RowBuilder(CFMetaData metadata, long now) {
         return makeDenseCQL3RowBuilder(now);
     }
 }

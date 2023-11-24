@@ -18,7 +18,6 @@
 package org.apache.cassandra.db.marshal;
 
 import java.nio.ByteBuffer;
-
 import org.apache.cassandra.cql3.CQL3Type;
 import org.apache.cassandra.cql3.Constants;
 import org.apache.cassandra.cql3.Term;
@@ -27,73 +26,77 @@ import org.apache.cassandra.serializers.SimpleDateSerializer;
 import org.apache.cassandra.serializers.TypeSerializer;
 import org.apache.cassandra.utils.ByteBufferUtil;
 
-public class SimpleDateType extends AbstractType<Integer>
-{
+public class SimpleDateType extends AbstractType<Integer> {
+
+    private static final org.slf4j.Logger serialize_logger = org.slf4j.LoggerFactory.getLogger("serialize.logger");
+
+    private java.lang.ThreadLocal<Boolean> isSerializeLoggingActive = new ThreadLocal<Boolean>() {
+
+        @Override
+        protected Boolean initialValue() {
+            return false;
+        }
+    };
+
     public static final SimpleDateType instance = new SimpleDateType();
 
-    SimpleDateType() {} // singleton
+    // singleton
+    SimpleDateType() {
+    }
 
-    public int compare(ByteBuffer o1, ByteBuffer o2)
-    {
+    public int compare(ByteBuffer o1, ByteBuffer o2) {
         // We add Integer.MIN_VALUE to overflow to allow unsigned comparison
         return ByteBufferUtil.compareUnsigned(o1, o2);
     }
 
     @Override
-    public boolean isByteOrderComparable()
-    {
+    public boolean isByteOrderComparable() {
         return true;
     }
 
-    public ByteBuffer fromString(String source) throws MarshalException
-    {
+    public ByteBuffer fromString(String source) throws MarshalException {
         return ByteBufferUtil.bytes(SimpleDateSerializer.dateStringToDays(source));
     }
 
-    public ByteBuffer fromTimeInMillis(long millis) throws MarshalException
-    {
+    public ByteBuffer fromTimeInMillis(long millis) throws MarshalException {
         return ByteBufferUtil.bytes(SimpleDateSerializer.timeInMillisToDay(millis));
     }
 
-    public long toTimeInMillis(ByteBuffer buffer) throws MarshalException
-    {
+    public long toTimeInMillis(ByteBuffer buffer) throws MarshalException {
         return SimpleDateSerializer.dayToTimeInMillis(ByteBufferUtil.toInt(buffer));
     }
 
     @Override
-    public boolean isValueCompatibleWithInternal(AbstractType<?> otherType)
-    {
+    public boolean isValueCompatibleWithInternal(AbstractType<?> otherType) {
         return this == otherType || otherType == Int32Type.instance;
     }
 
-    public Term fromJSONObject(Object parsed) throws MarshalException
-    {
-        try
-        {
+    public Term fromJSONObject(Object parsed) throws MarshalException {
+        try {
             return new Constants.Value(fromString((String) parsed));
-        }
-        catch (ClassCastException exc)
-        {
-            throw new MarshalException(String.format(
-                    "Expected a string representation of a date value, but got a %s: %s",
-                    parsed.getClass().getSimpleName(), parsed));
+        } catch (ClassCastException exc) {
+            throw new MarshalException(String.format("Expected a string representation of a date value, but got a %s: %s", parsed.getClass().getSimpleName(), parsed));
         }
     }
 
     @Override
-    public String toJSONString(ByteBuffer buffer, int protocolVersion)
-    {
+    public String toJSONString(ByteBuffer buffer, int protocolVersion) {
         return '"' + SimpleDateSerializer.instance.toString(SimpleDateSerializer.instance.deserialize(buffer)) + '"';
     }
 
     @Override
-    public CQL3Type asCQL3Type()
-    {
+    public CQL3Type asCQL3Type() {
         return CQL3Type.Native.DATE;
     }
 
-    public TypeSerializer<Integer> getSerializer()
-    {
+    public TypeSerializer<Integer> getSerializer() {
+        if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+            if (!isSerializeLoggingActive.get()) {
+                isSerializeLoggingActive.set(true);
+                serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(org.apache.cassandra.serializers.SimpleDateSerializer.class, org.apache.cassandra.serializers.SimpleDateSerializer.instance, "org.apache.cassandra.serializers.SimpleDateSerializer.instance").toJsonString());
+                isSerializeLoggingActive.set(false);
+            }
+        }
         return SimpleDateSerializer.instance;
     }
 }

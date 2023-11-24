@@ -22,7 +22,6 @@ import java.net.InetAddress;
 import java.util.Collection;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
-
 import com.google.common.base.Predicate;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Iterables;
@@ -30,28 +29,44 @@ import com.google.common.collect.Iterables;
 /**
  * Stream session info.
  */
-public final class SessionInfo implements Serializable
-{
+public final class SessionInfo implements Serializable {
+
+    private static final org.slf4j.Logger serialize_logger = org.slf4j.LoggerFactory.getLogger("serialize.logger");
+
+    private java.lang.ThreadLocal<Boolean> isSerializeLoggingActive = new ThreadLocal<Boolean>() {
+
+        @Override
+        protected Boolean initialValue() {
+            return false;
+        }
+    };
+
     public final InetAddress peer;
+
     public final int sessionIndex;
+
     public final InetAddress connecting;
-    /** Immutable collection of receiving summaries */
+
+    /**
+     * Immutable collection of receiving summaries
+     */
     public final Collection<StreamSummary> receivingSummaries;
-    /** Immutable collection of sending summaries*/
+
+    /**
+     * Immutable collection of sending summaries
+     */
     public final Collection<StreamSummary> sendingSummaries;
-    /** Current session state */
+
+    /**
+     * Current session state
+     */
     public final StreamSession.State state;
 
     private final Map<String, ProgressInfo> receivingFiles;
+
     private final Map<String, ProgressInfo> sendingFiles;
 
-    public SessionInfo(InetAddress peer,
-                       int sessionIndex,
-                       InetAddress connecting,
-                       Collection<StreamSummary> receivingSummaries,
-                       Collection<StreamSummary> sendingSummaries,
-                       StreamSession.State state)
-    {
+    public SessionInfo(InetAddress peer, int sessionIndex, InetAddress connecting, Collection<StreamSummary> receivingSummaries, Collection<StreamSummary> sendingSummaries, StreamSession.State state) {
         this.peer = peer;
         this.sessionIndex = sessionIndex;
         this.connecting = connecting;
@@ -62,8 +77,7 @@ public final class SessionInfo implements Serializable
         this.state = state;
     }
 
-    public boolean isFailed()
-    {
+    public boolean isFailed() {
         return state == StreamSession.State.FAILED;
     }
 
@@ -72,119 +86,105 @@ public final class SessionInfo implements Serializable
      *
      * @param newProgress new progress info
      */
-    public void updateProgress(ProgressInfo newProgress)
-    {
+    public void updateProgress(ProgressInfo newProgress) {
         assert peer.equals(newProgress.peer);
-
-        Map<String, ProgressInfo> currentFiles = newProgress.direction == ProgressInfo.Direction.IN
-                                                    ? receivingFiles : sendingFiles;
+        Map<String, ProgressInfo> currentFiles = newProgress.direction == ProgressInfo.Direction.IN ? receivingFiles : sendingFiles;
+        if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+            if (!isSerializeLoggingActive.get()) {
+                isSerializeLoggingActive.set(true);
+                serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(newProgress, newProgress.fileName, "newProgress.fileName").toJsonString());
+                isSerializeLoggingActive.set(false);
+            }
+        }
         currentFiles.put(newProgress.fileName, newProgress);
     }
 
-    public Collection<ProgressInfo> getReceivingFiles()
-    {
+    public Collection<ProgressInfo> getReceivingFiles() {
         return receivingFiles.values();
     }
 
-    public Collection<ProgressInfo> getSendingFiles()
-    {
+    public Collection<ProgressInfo> getSendingFiles() {
         return sendingFiles.values();
     }
 
     /**
      * @return total number of files already received.
      */
-    public long getTotalFilesReceived()
-    {
+    public long getTotalFilesReceived() {
         return getTotalFilesCompleted(receivingFiles.values());
     }
 
     /**
      * @return total number of files already sent.
      */
-    public long getTotalFilesSent()
-    {
+    public long getTotalFilesSent() {
         return getTotalFilesCompleted(sendingFiles.values());
     }
 
     /**
      * @return total size(in bytes) already received.
      */
-    public long getTotalSizeReceived()
-    {
+    public long getTotalSizeReceived() {
         return getTotalSizeInProgress(receivingFiles.values());
     }
 
     /**
      * @return total size(in bytes) already sent.
      */
-    public long getTotalSizeSent()
-    {
+    public long getTotalSizeSent() {
         return getTotalSizeInProgress(sendingFiles.values());
     }
 
     /**
      * @return total number of files to receive in the session
      */
-    public long getTotalFilesToReceive()
-    {
+    public long getTotalFilesToReceive() {
         return getTotalFiles(receivingSummaries);
     }
 
     /**
      * @return total number of files to send in the session
      */
-    public long getTotalFilesToSend()
-    {
+    public long getTotalFilesToSend() {
         return getTotalFiles(sendingSummaries);
     }
 
     /**
      * @return total size(in bytes) to receive in the session
      */
-    public long getTotalSizeToReceive()
-    {
+    public long getTotalSizeToReceive() {
         return getTotalSizes(receivingSummaries);
     }
 
     /**
      * @return total size(in bytes) to send in the session
      */
-    public long getTotalSizeToSend()
-    {
+    public long getTotalSizeToSend() {
         return getTotalSizes(sendingSummaries);
     }
 
-    private long getTotalSizeInProgress(Collection<ProgressInfo> files)
-    {
+    private long getTotalSizeInProgress(Collection<ProgressInfo> files) {
         long total = 0;
-        for (ProgressInfo file : files)
-            total += file.currentBytes;
+        for (ProgressInfo file : files) total += file.currentBytes;
         return total;
     }
 
-    private long getTotalFiles(Collection<StreamSummary> summaries)
-    {
+    private long getTotalFiles(Collection<StreamSummary> summaries) {
         long total = 0;
-        for (StreamSummary summary : summaries)
-            total += summary.files;
+        for (StreamSummary summary : summaries) total += summary.files;
         return total;
     }
 
-    private long getTotalSizes(Collection<StreamSummary> summaries)
-    {
+    private long getTotalSizes(Collection<StreamSummary> summaries) {
         long total = 0;
-        for (StreamSummary summary : summaries)
-            total += summary.totalSize;
+        for (StreamSummary summary : summaries) total += summary.totalSize;
         return total;
     }
 
-    private long getTotalFilesCompleted(Collection<ProgressInfo> files)
-    {
-        Iterable<ProgressInfo> completed = Iterables.filter(files, new Predicate<ProgressInfo>()
-        {
-            public boolean apply(ProgressInfo input)
-            {
+    private long getTotalFilesCompleted(Collection<ProgressInfo> files) {
+        Iterable<ProgressInfo> completed = Iterables.filter(files, new Predicate<ProgressInfo>() {
+
+            public boolean apply(ProgressInfo input) {
                 return input.isCompleted();
             }
         });

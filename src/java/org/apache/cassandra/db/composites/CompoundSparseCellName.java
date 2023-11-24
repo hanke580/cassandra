@@ -18,15 +18,24 @@
 package org.apache.cassandra.db.composites;
 
 import java.nio.ByteBuffer;
-
 import org.apache.cassandra.config.CFMetaData;
 import org.apache.cassandra.cql3.ColumnIdentifier;
 import org.apache.cassandra.utils.ByteBufferUtil;
 import org.apache.cassandra.utils.memory.AbstractAllocator;
 import org.apache.cassandra.utils.ObjectSizes;
 
-public class CompoundSparseCellName extends CompoundComposite implements CellName
-{
+public class CompoundSparseCellName extends CompoundComposite implements CellName {
+
+    private static final org.slf4j.Logger serialize_logger = org.slf4j.LoggerFactory.getLogger("serialize.logger");
+
+    private java.lang.ThreadLocal<Boolean> isSerializeLoggingActive = new ThreadLocal<Boolean>() {
+
+        @Override
+        protected Boolean initialValue() {
+            return false;
+        }
+    };
+
     private static final ByteBuffer[] EMPTY_PREFIX = new ByteBuffer[0];
 
     private static final long HEAP_SIZE = ObjectSizes.measure(new CompoundSparseCellName(null, false));
@@ -34,149 +43,171 @@ public class CompoundSparseCellName extends CompoundComposite implements CellNam
     protected final ColumnIdentifier columnName;
 
     // Not meant to be used directly, you should use the CellNameType method instead
-    CompoundSparseCellName(ColumnIdentifier columnName, boolean isStatic)
-    {
+    CompoundSparseCellName(ColumnIdentifier columnName, boolean isStatic) {
         this(EMPTY_PREFIX, columnName, isStatic);
     }
 
-    CompoundSparseCellName(ByteBuffer[] elements, ColumnIdentifier columnName, boolean isStatic)
-    {
+    CompoundSparseCellName(ByteBuffer[] elements, ColumnIdentifier columnName, boolean isStatic) {
         this(elements, elements.length, columnName, isStatic);
     }
 
-    CompoundSparseCellName(ByteBuffer[] elements, int size, ColumnIdentifier columnName, boolean isStatic)
-    {
+    CompoundSparseCellName(ByteBuffer[] elements, int size, ColumnIdentifier columnName, boolean isStatic) {
         super(elements, size, isStatic);
         this.columnName = columnName;
     }
 
     @Override
-    public long unsharedHeapSize()
-    {
+    public long unsharedHeapSize() {
         return HEAP_SIZE + ObjectSizes.sizeOnHeapOf(elements);
     }
 
     @Override
-    public long unsharedHeapSizeExcludingData()
-    {
+    public long unsharedHeapSizeExcludingData() {
         return HEAP_SIZE + ObjectSizes.sizeOnHeapExcludingData(elements);
     }
 
-    public int size()
-    {
+    public int size() {
+        if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+            if (!isSerializeLoggingActive.get()) {
+                isSerializeLoggingActive.set(true);
+                serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(this, this.size, "this.size").toJsonString());
+                isSerializeLoggingActive.set(false);
+            }
+        }
         return size + 1;
     }
 
-    public ByteBuffer get(int i)
-    {
+    public ByteBuffer get(int i) {
+        if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+            if (!isSerializeLoggingActive.get()) {
+                isSerializeLoggingActive.set(true);
+                serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(this, this.elements, "this.elements").toJsonString());
+                isSerializeLoggingActive.set(false);
+            }
+        }
+        if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+            if (!isSerializeLoggingActive.get()) {
+                isSerializeLoggingActive.set(true);
+                serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(this, this.columnName, "this.columnName").toJsonString());
+                isSerializeLoggingActive.set(false);
+            }
+        }
         return i == size ? columnName.bytes : elements[i];
     }
 
-    public int clusteringSize()
-    {
+    public int clusteringSize() {
         return size;
     }
 
-    public ColumnIdentifier cql3ColumnName(CFMetaData metadata)
-    {
+    public ColumnIdentifier cql3ColumnName(CFMetaData metadata) {
+        if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+            if (!isSerializeLoggingActive.get()) {
+                isSerializeLoggingActive.set(true);
+                serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(this, this.columnName, "this.columnName").toJsonString());
+                isSerializeLoggingActive.set(false);
+            }
+        }
         return columnName;
     }
 
-    public ByteBuffer collectionElement()
-    {
+    public ByteBuffer collectionElement() {
         return null;
     }
 
-    public boolean isCollectionCell()
-    {
+    public boolean isCollectionCell() {
         return false;
     }
 
-    public boolean isSameCQL3RowAs(CellNameType type, CellName other)
-    {
+    public boolean isSameCQL3RowAs(CellNameType type, CellName other) {
         if (clusteringSize() != other.clusteringSize() || other.isStatic() != isStatic())
             return false;
-
-        for (int i = 0; i < clusteringSize(); i++)
-        {
+        for (int i = 0; i < clusteringSize(); i++) {
             if (type.subtype(i).compare(elements[i], other.get(i)) != 0)
                 return false;
         }
         return true;
     }
 
-    public CellName copy(CFMetaData cfm, AbstractAllocator allocator)
-    {
+    public CellName copy(CFMetaData cfm, AbstractAllocator allocator) {
         if (elements.length == 0)
             return this;
-
         // We don't copy columnName because it's interned in SparseCellNameType
         return new CompoundSparseCellName(elementsCopy(allocator), columnName, isStatic());
     }
 
-    public static class WithCollection extends CompoundSparseCellName
-    {
+    public static class WithCollection extends CompoundSparseCellName {
+
+        private java.lang.ThreadLocal<Boolean> isSerializeLoggingActive = new ThreadLocal<Boolean>() {
+
+            @Override
+            protected Boolean initialValue() {
+                return false;
+            }
+        };
+
         private static final long HEAP_SIZE = ObjectSizes.measure(new WithCollection(null, ByteBufferUtil.EMPTY_BYTE_BUFFER, false));
 
         private final ByteBuffer collectionElement;
 
-        WithCollection(ColumnIdentifier columnName, ByteBuffer collectionElement, boolean isStatic)
-        {
+        WithCollection(ColumnIdentifier columnName, ByteBuffer collectionElement, boolean isStatic) {
             this(EMPTY_PREFIX, columnName, collectionElement, isStatic);
         }
 
-        WithCollection(ByteBuffer[] elements, ColumnIdentifier columnName, ByteBuffer collectionElement, boolean isStatic)
-        {
+        WithCollection(ByteBuffer[] elements, ColumnIdentifier columnName, ByteBuffer collectionElement, boolean isStatic) {
             this(elements, elements.length, columnName, collectionElement, isStatic);
         }
 
-        WithCollection(ByteBuffer[] elements, int size, ColumnIdentifier columnName, ByteBuffer collectionElement, boolean isStatic)
-        {
+        WithCollection(ByteBuffer[] elements, int size, ColumnIdentifier columnName, ByteBuffer collectionElement, boolean isStatic) {
             super(elements, size, columnName, isStatic);
             this.collectionElement = collectionElement;
         }
 
-        public int size()
-        {
+        public int size() {
+            if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+                if (!isSerializeLoggingActive.get()) {
+                    isSerializeLoggingActive.set(true);
+                    serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(this, this.size, "this.size").toJsonString());
+                    isSerializeLoggingActive.set(false);
+                }
+            }
             return size + 2;
         }
 
-        public ByteBuffer get(int i)
-        {
+        public ByteBuffer get(int i) {
+            if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+                if (!isSerializeLoggingActive.get()) {
+                    isSerializeLoggingActive.set(true);
+                    serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(this, this.collectionElement, "this.collectionElement").toJsonString());
+                    isSerializeLoggingActive.set(false);
+                }
+            }
             return i == size + 1 ? collectionElement : super.get(i);
         }
 
         @Override
-        public ByteBuffer collectionElement()
-        {
+        public ByteBuffer collectionElement() {
             return collectionElement;
         }
 
         @Override
-        public boolean isCollectionCell()
-        {
+        public boolean isCollectionCell() {
             return true;
         }
 
         @Override
-        public CellName copy(CFMetaData cfm, AbstractAllocator allocator)
-        {
+        public CellName copy(CFMetaData cfm, AbstractAllocator allocator) {
             // We don't copy columnName because it's interned in SparseCellNameType
             return new CompoundSparseCellName.WithCollection(elements.length == 0 ? elements : elementsCopy(allocator), size, columnName, allocator.clone(collectionElement), isStatic());
         }
 
         @Override
-        public long unsharedHeapSize()
-        {
-            return HEAP_SIZE + ObjectSizes.sizeOnHeapOf(elements)
-                   + ObjectSizes.sizeOnHeapExcludingData(collectionElement);
+        public long unsharedHeapSize() {
+            return HEAP_SIZE + ObjectSizes.sizeOnHeapOf(elements) + ObjectSizes.sizeOnHeapExcludingData(collectionElement);
         }
 
         @Override
-        public long unsharedHeapSizeExcludingData()
-        {
-            return HEAP_SIZE + ObjectSizes.sizeOnHeapExcludingData(elements)
-                   + ObjectSizes.sizeOnHeapExcludingData(collectionElement);
+        public long unsharedHeapSizeExcludingData() {
+            return HEAP_SIZE + ObjectSizes.sizeOnHeapExcludingData(elements) + ObjectSizes.sizeOnHeapExcludingData(collectionElement);
         }
     }
 }

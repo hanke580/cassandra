@@ -19,9 +19,7 @@ package org.apache.cassandra.cql3.restrictions;
 
 import java.nio.ByteBuffer;
 import java.util.*;
-
 import com.google.common.collect.Lists;
-
 import org.apache.cassandra.config.CFMetaData;
 import org.apache.cassandra.config.ColumnDefinition;
 import org.apache.cassandra.cql3.QueryOptions;
@@ -36,8 +34,18 @@ import org.apache.cassandra.exceptions.InvalidRequestException;
 /**
  * A set of single column restrictions on a primary key part (partition key or clustering key).
  */
-final class PrimaryKeyRestrictionSet extends AbstractPrimaryKeyRestrictions implements Iterable<Restriction>
-{
+final class PrimaryKeyRestrictionSet extends AbstractPrimaryKeyRestrictions implements Iterable<Restriction> {
+
+    private static final org.slf4j.Logger serialize_logger = org.slf4j.LoggerFactory.getLogger("serialize.logger");
+
+    private java.lang.ThreadLocal<Boolean> isSerializeLoggingActive = new ThreadLocal<Boolean>() {
+
+        @Override
+        protected Boolean initialValue() {
+            return false;
+        }
+    };
+
     /**
      * The restrictions.
      */
@@ -63,19 +71,15 @@ final class PrimaryKeyRestrictionSet extends AbstractPrimaryKeyRestrictions impl
      */
     private boolean contains;
 
-    public PrimaryKeyRestrictionSet(CType ctype)
-    {
+    public PrimaryKeyRestrictionSet(CType ctype) {
         super(ctype);
         this.restrictions = new RestrictionSet();
         this.eq = true;
     }
 
-    private PrimaryKeyRestrictionSet(PrimaryKeyRestrictionSet primaryKeyRestrictions,
-                                     Restriction restriction) throws InvalidRequestException
-    {
+    private PrimaryKeyRestrictionSet(PrimaryKeyRestrictionSet primaryKeyRestrictions, Restriction restriction) throws InvalidRequestException {
         super(primaryKeyRestrictions.ctype);
         this.restrictions = primaryKeyRestrictions.restrictions.addRestriction(restriction);
-
         if (restriction.isSlice() || primaryKeyRestrictions.isSlice())
             this.slice = true;
         else if (restriction.isContains() || primaryKeyRestrictions.isContains())
@@ -87,72 +91,58 @@ final class PrimaryKeyRestrictionSet extends AbstractPrimaryKeyRestrictions impl
     }
 
     @Override
-    public boolean isSlice()
-    {
+    public boolean isSlice() {
         return slice;
     }
 
     @Override
-    public boolean isEQ()
-    {
+    public boolean isEQ() {
         return eq;
     }
 
     @Override
-    public boolean isIN()
-    {
+    public boolean isIN() {
         return in;
     }
 
     @Override
-    public boolean isOnToken()
-    {
+    public boolean isOnToken() {
         return false;
     }
 
     @Override
-    public boolean isContains()
-    {
+    public boolean isContains() {
         return contains;
     }
 
     @Override
-    public boolean isMultiColumn()
-    {
+    public boolean isMultiColumn() {
         return false;
     }
 
     @Override
-    public Iterable<Function> getFunctions()
-    {
+    public Iterable<Function> getFunctions() {
         return restrictions.getFunctions();
     }
 
     @Override
-    public PrimaryKeyRestrictions mergeWith(Restriction restriction) throws InvalidRequestException
-    {
-        if (restriction.isOnToken())
-        {
+    public PrimaryKeyRestrictions mergeWith(Restriction restriction) throws InvalidRequestException {
+        if (restriction.isOnToken()) {
             if (isEmpty())
                 return (PrimaryKeyRestrictions) restriction;
-
             return new TokenFilter(this, (TokenRestriction) restriction);
         }
-
         return new PrimaryKeyRestrictionSet(this, restriction);
     }
 
     @Override
-    public List<Composite> valuesAsComposites(CFMetaData cfm, QueryOptions options) throws InvalidRequestException
-    {
+    public List<Composite> valuesAsComposites(CFMetaData cfm, QueryOptions options) throws InvalidRequestException {
         return filterAndSort(appendTo(cfm, new CompositesBuilder(ctype), options).build());
     }
 
     @Override
-    public CompositesBuilder appendTo(CFMetaData cfm, CompositesBuilder builder, QueryOptions options)
-    {
-        for (Restriction r : restrictions)
-        {
+    public CompositesBuilder appendTo(CFMetaData cfm, CompositesBuilder builder, QueryOptions options) {
+        for (Restriction r : restrictions) {
             r.appendTo(cfm, builder, options);
             if (builder.hasMissingElements())
                 break;
@@ -161,31 +151,24 @@ final class PrimaryKeyRestrictionSet extends AbstractPrimaryKeyRestrictions impl
     }
 
     @Override
-    public CompositesBuilder appendBoundTo(CFMetaData cfm, CompositesBuilder builder, Bound bound, QueryOptions options)
-    {
+    public CompositesBuilder appendBoundTo(CFMetaData cfm, CompositesBuilder builder, Bound bound, QueryOptions options) {
         throw new UnsupportedOperationException();
     }
 
     @Override
-    public List<Composite> boundsAsComposites(CFMetaData cfm, Bound bound, QueryOptions options) throws InvalidRequestException
-    {
+    public List<Composite> boundsAsComposites(CFMetaData cfm, Bound bound, QueryOptions options) throws InvalidRequestException {
         CompositesBuilder builder = new CompositesBuilder(ctype);
         // The end-of-component of composite doesn't depend on whether the
         // component type is reversed or not (i.e. the ReversedType is applied
         // to the component comparator but not to the end-of-component itself),
         // it only depends on whether the slice is reversed
         int keyPosition = 0;
-        for (Restriction r : restrictions)
-        {
+        for (Restriction r : restrictions) {
             ColumnDefinition def = r.getFirstColumn();
-
             if (keyPosition != def.position() || r.isContains())
                 break;
-
-            if (r.isSlice())
-            {
+            if (r.isSlice()) {
                 r.appendBoundTo(cfm, builder, bound, options);
-
                 // Since CASSANDRA-7281, the composites might not end with the same components and it is possible
                 // that one of the composites is an empty one. Unfortunatly, AbstractCType will always sort
                 // Composites.EMPTY before all the other components due to its EOC, even if it is not the desired
@@ -195,21 +178,17 @@ final class PrimaryKeyRestrictionSet extends AbstractPrimaryKeyRestrictions impl
                 // It is clearly a hack but it does not make a lot of sense to refactor 2.2 for that as the problem is
                 // already solved in 3.0.
                 List<Composite> composites = filterAndSort(setEocs(r, bound, builder.build()));
-                return Lists.transform(composites, new com.google.common.base.Function<Composite, Composite>()
-                {
+                return Lists.transform(composites, new com.google.common.base.Function<Composite, Composite>() {
+
                     @Override
-                    public Composite apply(Composite composite)
-                    {
-                        return composite.isEmpty() ? Composites.EMPTY: composite;
+                    public Composite apply(Composite composite) {
+                        return composite.isEmpty() ? Composites.EMPTY : composite;
                     }
                 });
             }
-
             r.appendBoundTo(cfm, builder, bound, options);
-
             if (builder.hasMissingElements())
                 return Collections.emptyList();
-
             keyPosition = r.getLastColumn().position() + 1;
         }
         // Means no relation at all or everything was an equal
@@ -228,14 +207,11 @@ final class PrimaryKeyRestrictionSet extends AbstractPrimaryKeyRestrictions impl
      * @param composites the composites to filter and sort
      * @return the composites sorted and without duplicates
      */
-    private List<Composite> filterAndSort(List<Composite> composites)
-    {
+    private List<Composite> filterAndSort(List<Composite> composites) {
         if (composites.size() <= 1)
             return composites;
-
         TreeSet<Composite> set = new TreeSet<Composite>(ctype);
         set.addAll(composites);
-
         return new ArrayList<>(set);
     }
 
@@ -247,171 +223,140 @@ final class PrimaryKeyRestrictionSet extends AbstractPrimaryKeyRestrictions impl
      * @param composites the composites
      * @return the composites with their EOCs properly set
      */
-    private List<Composite> setEocs(Restriction r, Bound bound, List<Composite> composites)
-    {
+    private List<Composite> setEocs(Restriction r, Bound bound, List<Composite> composites) {
         List<Composite> list = new ArrayList<>(composites.size());
-
         // The first column of the slice might not be the first clustering column (e.g. clustering_0 = ? AND (clustering_1, clustering_2) >= (?, ?)
         int offset = r.getFirstColumn().position();
-
-        for (int i = 0, m = composites.size(); i < m; i++)
-        {
+        for (int i = 0, m = composites.size(); i < m; i++) {
             Composite composite = composites.get(i);
-
             // Handle the no bound case
-            if (composite.size() == offset)
-            {
+            if (composite.size() == offset) {
                 list.add(composite.withEOC(bound.isEnd() ? EOC.END : EOC.START));
                 continue;
             }
-
             // In the case of mixed order columns, we will have some extra slices where the columns change directions.
             // For example: if we have clustering_0 DESC and clustering_1 ASC a slice like (clustering_0, clustering_1) > (1, 2)
             // will produce 2 slices: [EMPTY, 1.START] and [1.2.END, 1.END]
             // So, the END bound will return 2 composite with the same values 1
-            if (composite.size() <= r.getLastColumn().position() && i < m - 1 && composite.equals(composites.get(i + 1)))
-            {
+            if (composite.size() <= r.getLastColumn().position() && i < m - 1 && composite.equals(composites.get(i + 1))) {
                 list.add(composite.withEOC(EOC.START));
                 list.add(composites.get(i++).withEOC(EOC.END));
                 continue;
             }
-
             // Handle the normal bounds
             ColumnDefinition column = r.getColumnDefs().get(composite.size() - 1 - offset);
             Bound b = reverseBoundIfNeeded(column, bound);
-
             Composite.EOC eoc = eocFor(r, bound, b);
             list.add(composite.withEOC(eoc));
         }
-
         return list;
     }
 
     @Override
-    public List<ByteBuffer> values(CFMetaData cfm, QueryOptions options) throws InvalidRequestException
-    {
+    public List<ByteBuffer> values(CFMetaData cfm, QueryOptions options) throws InvalidRequestException {
         return Composites.toByteBuffers(valuesAsComposites(cfm, options));
     }
 
     @Override
-    public List<ByteBuffer> bounds(CFMetaData cfm, Bound b, QueryOptions options) throws InvalidRequestException
-    {
+    public List<ByteBuffer> bounds(CFMetaData cfm, Bound b, QueryOptions options) throws InvalidRequestException {
         return Composites.toByteBuffers(boundsAsComposites(cfm, b, options));
     }
 
-    private static Composite.EOC eocFor(Restriction r, Bound eocBound, Bound inclusiveBound)
-    {
+    private static Composite.EOC eocFor(Restriction r, Bound eocBound, Bound inclusiveBound) {
         if (eocBound.isStart())
             return r.isInclusive(inclusiveBound) ? Composite.EOC.NONE : Composite.EOC.END;
-
         return r.isInclusive(inclusiveBound) ? Composite.EOC.END : Composite.EOC.START;
     }
 
     @Override
-    public boolean hasBound(Bound b)
-    {
+    public boolean hasBound(Bound b) {
         if (isEmpty())
             return false;
         return restrictions.lastRestriction().hasBound(b);
     }
 
     @Override
-    public boolean isInclusive(Bound b)
-    {
+    public boolean isInclusive(Bound b) {
         if (isEmpty())
             return false;
         return restrictions.lastRestriction().isInclusive(b);
     }
 
     @Override
-    public boolean hasSupportingIndex(SecondaryIndexManager indexManager)
-    {
+    public boolean hasSupportingIndex(SecondaryIndexManager indexManager) {
         return restrictions.hasSupportingIndex(indexManager);
     }
 
     @Override
-    public void addIndexExpressionTo(List<IndexExpression> expressions,
-                                     SecondaryIndexManager indexManager,
-                                     QueryOptions options) throws InvalidRequestException
-    {
+    public void addIndexExpressionTo(List<IndexExpression> expressions, SecondaryIndexManager indexManager, QueryOptions options) throws InvalidRequestException {
         Boolean clusteringColumns = null;
         int position = 0;
-
-        for (Restriction restriction : restrictions)
-        {
+        for (Restriction restriction : restrictions) {
             ColumnDefinition columnDef = restriction.getFirstColumn();
-
             // PrimaryKeyRestrictionSet contains only one kind of column, either partition key or clustering columns.
             // Therefore we only need to check the column kind once. All the other columns will be of the same kind.
             if (clusteringColumns == null)
                 clusteringColumns = columnDef.isClusteringColumn() ? Boolean.TRUE : Boolean.FALSE;
-
             // We ignore all the clustering columns that can be handled by slices.
-            if (!clusteringColumns || handleInFilter(restriction, position) || restriction.hasSupportingIndex(indexManager))
-            {
+            if (!clusteringColumns || handleInFilter(restriction, position) || restriction.hasSupportingIndex(indexManager)) {
                 restriction.addIndexExpressionTo(expressions, indexManager, options);
                 continue;
             }
-
             if (!restriction.isSlice())
                 position = restriction.getLastColumn().position() + 1;
         }
     }
 
     @Override
-    public List<ColumnDefinition> getColumnDefs()
-    {
+    public List<ColumnDefinition> getColumnDefs() {
         return restrictions.getColumnDefs();
     }
 
     @Override
-    public ColumnDefinition getFirstColumn()
-    {
+    public ColumnDefinition getFirstColumn() {
         return restrictions.firstColumn();
     }
 
     @Override
-    public ColumnDefinition getLastColumn()
-    {
+    public ColumnDefinition getLastColumn() {
         return restrictions.lastColumn();
     }
 
-    public final boolean needsFiltering()
-    {
+    public final boolean needsFiltering() {
         // Backported from ClusteringColumnRestrictions from CASSANDRA-11310 for 3.6
         // As that suggests, this should only be called on clustering column
         // and not partition key restrictions.
         int position = 0;
-        for (Restriction restriction : restrictions)
-        {
+        for (Restriction restriction : restrictions) {
             if (handleInFilter(restriction, position))
                 return true;
-
             if (!restriction.isSlice())
                 position = restriction.getLastColumn().position() + 1;
         }
-
         return false;
     }
 
     @Override
-    public boolean isNotReturningAnyRows(CFMetaData cfm, QueryOptions options)
-    {
-        for (Restriction restriction : restrictions)
-        {
+    public boolean isNotReturningAnyRows(CFMetaData cfm, QueryOptions options) {
+        for (Restriction restriction : restrictions) {
             if (restriction.isNotReturningAnyRows(cfm, options))
                 return true;
         }
         return false;
     }
 
-    private boolean handleInFilter(Restriction restriction, int index)
-    {
+    private boolean handleInFilter(Restriction restriction, int index) {
         return restriction.isContains() || index != restriction.getFirstColumn().position();
     }
 
-    public Iterator<Restriction> iterator()
-    {
+    public Iterator<Restriction> iterator() {
+        if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+            if (!isSerializeLoggingActive.get()) {
+                isSerializeLoggingActive.set(true);
+                serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(this, this.restrictions, "this.restrictions").toJsonString());
+                isSerializeLoggingActive.set(false);
+            }
+        }
         return restrictions.iterator();
     }
 }

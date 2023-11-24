@@ -26,14 +26,24 @@ package org.apache.cassandra.io.sstable.format;
  *
  * Minor versions were introduced with version "hb" for Cassandra 1.0.3; prior to that,
  * we always incremented the major version.
- *
  */
-public abstract class Version
-{
+public abstract class Version {
+
+    private static final org.slf4j.Logger serialize_logger = org.slf4j.LoggerFactory.getLogger("serialize.logger");
+
+    private java.lang.ThreadLocal<Boolean> isSerializeLoggingActive = new ThreadLocal<Boolean>() {
+
+        @Override
+        protected Boolean initialValue() {
+            return false;
+        }
+    };
+
     protected final String version;
+
     protected final SSTableFormat format;
-    protected Version(SSTableFormat format, String version)
-    {
+
+    protected Version(SSTableFormat format, String version) {
         this.format = format;
         this.version = version;
     }
@@ -54,13 +64,18 @@ public abstract class Version
 
     public abstract boolean hasCommitLogLowerBound();
 
-    public String getVersion()
-    {
+    public String getVersion() {
         return version;
     }
 
-    public SSTableFormat getSSTableFormat()
-    {
+    public SSTableFormat getSSTableFormat() {
+        if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+            if (!isSerializeLoggingActive.get()) {
+                isSerializeLoggingActive.set(true);
+                serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(this, this.format, "this.format").toJsonString());
+                isSerializeLoggingActive.set(false);
+            }
+        }
         return format;
     }
 
@@ -69,36 +84,31 @@ public abstract class Version
      * @return True if the given version string matches the format.
      * @see #version
      */
-    public static boolean validate(String ver)
-    {
+    public static boolean validate(String ver) {
         return ver != null && ver.matches("[a-z]+");
     }
 
     abstract public boolean isCompatible();
 
     @Override
-    public String toString()
-    {
+    public String toString() {
         return version;
     }
 
-
     @Override
-    public boolean equals(Object o)
-    {
-        if (this == o) return true;
-        if (o == null || getClass() != o.getClass()) return false;
-
+    public boolean equals(Object o) {
+        if (this == o)
+            return true;
+        if (o == null || getClass() != o.getClass())
+            return false;
         Version version1 = (Version) o;
-
-        if (version != null ? !version.equals(version1.version) : version1.version != null) return false;
-
+        if (version != null ? !version.equals(version1.version) : version1.version != null)
+            return false;
         return true;
     }
 
     @Override
-    public int hashCode()
-    {
+    public int hashCode() {
         return version != null ? version.hashCode() : 0;
     }
 }

@@ -24,12 +24,10 @@ import java.security.MessageDigest;
 import java.util.Arrays;
 import java.util.Comparator;
 import java.util.Iterator;
-
 import com.google.common.collect.AbstractIterator;
 import com.google.common.collect.Iterators;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-
 import org.apache.cassandra.cache.IMeasurableMemory;
 import org.apache.cassandra.db.composites.CType;
 import org.apache.cassandra.db.composites.CellName;
@@ -56,8 +54,18 @@ import org.apache.cassandra.utils.memory.AbstractAllocator;
  * The only use of the local deletion time is to know when a given tombstone can
  * be purged, which will be done by the purge() method.
  */
-public class RangeTombstoneList implements Iterable<RangeTombstone>, IMeasurableMemory
-{
+public class RangeTombstoneList implements Iterable<RangeTombstone>, IMeasurableMemory {
+
+    private static final org.slf4j.Logger serialize_logger = org.slf4j.LoggerFactory.getLogger("serialize.logger");
+
+    private java.lang.ThreadLocal<Boolean> isSerializeLoggingActive = new ThreadLocal<Boolean>() {
+
+        @Override
+        protected Boolean initialValue() {
+            return false;
+        }
+    };
+
     private static final Logger logger = LoggerFactory.getLogger(RangeTombstoneList.class);
 
     private static long EMPTY_SIZE = ObjectSizes.measure(new RangeTombstoneList(null, 0));
@@ -67,15 +75,18 @@ public class RangeTombstoneList implements Iterable<RangeTombstone>, IMeasurable
     // Note: we don't want to use a List for the markedAts and delTimes to avoid boxing. We could
     // use a List for starts and ends, but having arrays everywhere is almost simpler.
     private Composite[] starts;
+
     private Composite[] ends;
+
     private long[] markedAts;
+
     private int[] delTimes;
 
     private long boundaryHeapSize;
+
     private int size;
 
-    private RangeTombstoneList(Comparator<Composite> comparator, Composite[] starts, Composite[] ends, long[] markedAts, int[] delTimes, long boundaryHeapSize, int size)
-    {
+    private RangeTombstoneList(Comparator<Composite> comparator, Composite[] starts, Composite[] ends, long[] markedAts, int[] delTimes, long boundaryHeapSize, int size) {
         assert starts.length == ends.length && starts.length == markedAts.length && starts.length == delTimes.length;
         this.comparator = comparator;
         this.starts = starts;
@@ -86,59 +97,52 @@ public class RangeTombstoneList implements Iterable<RangeTombstone>, IMeasurable
         this.boundaryHeapSize = boundaryHeapSize;
     }
 
-    public RangeTombstoneList(Comparator<Composite> comparator, int capacity)
-    {
+    public RangeTombstoneList(Comparator<Composite> comparator, int capacity) {
         this(comparator, new Composite[capacity], new Composite[capacity], new long[capacity], new int[capacity], 0, 0);
     }
 
-    public boolean isEmpty()
-    {
+    public boolean isEmpty() {
         return size == 0;
     }
 
-    public int size()
-    {
+    public int size() {
         return size;
     }
 
-    public Comparator<Composite> comparator()
-    {
+    public Comparator<Composite> comparator() {
         return comparator;
     }
 
-    public RangeTombstoneList copy()
-    {
-        return new RangeTombstoneList(comparator,
-                                      Arrays.copyOf(starts, size),
-                                      Arrays.copyOf(ends, size),
-                                      Arrays.copyOf(markedAts, size),
-                                      Arrays.copyOf(delTimes, size),
-                                      boundaryHeapSize, size);
+    public RangeTombstoneList copy() {
+        return new RangeTombstoneList(comparator, Arrays.copyOf(starts, size), Arrays.copyOf(ends, size), Arrays.copyOf(markedAts, size), Arrays.copyOf(delTimes, size), boundaryHeapSize, size);
     }
 
-    public RangeTombstoneList copy(AbstractAllocator allocator)
-    {
-        RangeTombstoneList copy =  new RangeTombstoneList(comparator,
-                                      new Composite[size],
-                                      new Composite[size],
-                                      Arrays.copyOf(markedAts, size),
-                                      Arrays.copyOf(delTimes, size),
-                                      boundaryHeapSize, size);
-
-
-        for (int i = 0; i < size; i++)
-        {
-            assert !(starts[i] instanceof AbstractNativeCell || ends[i] instanceof AbstractNativeCell); //this should never happen
-
+    public RangeTombstoneList copy(AbstractAllocator allocator) {
+        RangeTombstoneList copy = new RangeTombstoneList(comparator, new Composite[size], new Composite[size], Arrays.copyOf(markedAts, size), Arrays.copyOf(delTimes, size), boundaryHeapSize, size);
+        for (int i = 0; i < size; i++) {
+            //this should never happen
+            assert !(starts[i] instanceof AbstractNativeCell || ends[i] instanceof AbstractNativeCell);
             copy.starts[i] = starts[i].copy(null, allocator);
             copy.ends[i] = ends[i].copy(null, allocator);
         }
-
         return copy;
     }
 
-    public void add(RangeTombstone tombstone)
-    {
+    public void add(RangeTombstone tombstone) {
+        if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+            if (!isSerializeLoggingActive.get()) {
+                isSerializeLoggingActive.set(true);
+                serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(tombstone, tombstone.min, "tombstone.min").toJsonString());
+                isSerializeLoggingActive.set(false);
+            }
+        }
+        if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+            if (!isSerializeLoggingActive.get()) {
+                isSerializeLoggingActive.set(true);
+                serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(tombstone, tombstone.max, "tombstone.max").toJsonString());
+                isSerializeLoggingActive.set(false);
+            }
+        }
         add(tombstone.min, tombstone.max, tombstone.data.markedForDeleteAt, tombstone.data.localDeletionTime);
     }
 
@@ -148,26 +152,33 @@ public class RangeTombstoneList implements Iterable<RangeTombstone>, IMeasurable
      * This method will be faster if the new tombstone sort after all the currently existing ones (this is a common use case),
      * but it doesn't assume it.
      */
-    public void add(Composite start, Composite end, long markedAt, int delTime)
-    {
-        if (isEmpty())
-        {
+    public void add(Composite start, Composite end, long markedAt, int delTime) {
+        if (isEmpty()) {
             addInternal(0, start, end, markedAt, delTime);
             return;
         }
-
-        int c = comparator.compare(ends[size-1], start);
-
-        // Fast path if we add in sorted order
-        if (c < 0)
-        {
-            addInternal(size, start, end, markedAt, delTime);
+        if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+            if (!isSerializeLoggingActive.get()) {
+                isSerializeLoggingActive.set(true);
+                serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(this, this.ends, "this.ends").toJsonString());
+                isSerializeLoggingActive.set(false);
+            }
         }
-        else
-        {
+        int c = comparator.compare(ends[size - 1], start);
+        // Fast path if we add in sorted order
+        if (c < 0) {
+            addInternal(size, start, end, markedAt, delTime);
+        } else {
+            if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+                if (!isSerializeLoggingActive.get()) {
+                    isSerializeLoggingActive.set(true);
+                    serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(this, this.ends, "this.ends").toJsonString());
+                    isSerializeLoggingActive.set(false);
+                }
+            }
             // Note: insertFrom expect i to be the insertion point in term of interval ends
             int pos = Arrays.binarySearch(ends, 0, size, start, comparator);
-            insertFrom((pos >= 0 ? pos : -pos-1), start, end, markedAt, delTime);
+            insertFrom((pos >= 0 ? pos : -pos - 1), start, end, markedAt, delTime);
         }
         boundaryHeapSize += start.unsharedHeapSize() + end.unsharedHeapSize();
     }
@@ -175,17 +186,13 @@ public class RangeTombstoneList implements Iterable<RangeTombstone>, IMeasurable
     /**
      * Adds all the range tombstones of {@code tombstones} to this RangeTombstoneList.
      */
-    public void addAll(RangeTombstoneList tombstones)
-    {
+    public void addAll(RangeTombstoneList tombstones) {
         if (tombstones.isEmpty())
             return;
-
-        if (isEmpty())
-        {
+        if (isEmpty()) {
             copyArrays(tombstones, this);
             return;
         }
-
         /*
          * We basically have 2 techniques we can use here: either we repeatedly call add() on tombstones values,
          * or we do a merge of both (sorted) lists. If this lists is bigger enough than the one we add, then
@@ -204,30 +211,79 @@ public class RangeTombstoneList implements Iterable<RangeTombstone>, IMeasurable
          * But let's not crank up a logarithm computation for that. Long story short, merging will be a bad choice only
          * if this list size is lot bigger that the other one, so let's keep it simple.
          */
-        if (size > 10 * tombstones.size)
-        {
-            for (int i = 0; i < tombstones.size; i++)
+        if (size > 10 * tombstones.size) {
+            for (int i = 0; i < tombstones.size; i++) {
+                if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+                    if (!isSerializeLoggingActive.get()) {
+                        isSerializeLoggingActive.set(true);
+                        serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(tombstones, tombstones.starts, "tombstones.starts").toJsonString());
+                        isSerializeLoggingActive.set(false);
+                    }
+                }
+                if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+                    if (!isSerializeLoggingActive.get()) {
+                        isSerializeLoggingActive.set(true);
+                        serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(tombstones, tombstones.ends, "tombstones.ends").toJsonString());
+                        isSerializeLoggingActive.set(false);
+                    }
+                }
                 add(tombstones.starts[i], tombstones.ends[i], tombstones.markedAts[i], tombstones.delTimes[i]);
-        }
-        else
-        {
+                if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+                    if (!isSerializeLoggingActive.get()) {
+                        isSerializeLoggingActive.set(true);
+                        serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(tombstones.starts, tombstones.starts[i], "tombstones.starts[i]").toJsonString());
+                        isSerializeLoggingActive.set(false);
+                    }
+                }
+            }
+        } else {
             int i = 0;
             int j = 0;
-            while (i < size && j < tombstones.size)
-            {
-                if (comparator.compare(tombstones.starts[j], ends[i]) <= 0)
-                {
-                    insertFrom(i, tombstones.starts[j], tombstones.ends[j], tombstones.markedAts[j], tombstones.delTimes[j]);
-                    j++;
+            while (i < size && j < tombstones.size) {
+                if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+                    if (!isSerializeLoggingActive.get()) {
+                        isSerializeLoggingActive.set(true);
+                        serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(tombstones, tombstones.starts, "tombstones.starts").toJsonString());
+                        isSerializeLoggingActive.set(false);
+                    }
                 }
-                else
-                {
+                if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+                    if (!isSerializeLoggingActive.get()) {
+                        isSerializeLoggingActive.set(true);
+                        serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(this, this.ends, "this.ends").toJsonString());
+                        isSerializeLoggingActive.set(false);
+                    }
+                }
+                if (comparator.compare(tombstones.starts[j], ends[i]) <= 0) {
+                    if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+                        if (!isSerializeLoggingActive.get()) {
+                            isSerializeLoggingActive.set(true);
+                            serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(tombstones, tombstones.ends, "tombstones.ends").toJsonString());
+                            isSerializeLoggingActive.set(false);
+                        }
+                    }
+                    if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+                        if (!isSerializeLoggingActive.get()) {
+                            isSerializeLoggingActive.set(true);
+                            serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(tombstones, tombstones.starts, "tombstones.starts").toJsonString());
+                            isSerializeLoggingActive.set(false);
+                        }
+                    }
+                    insertFrom(i, tombstones.starts[j], tombstones.ends[j], tombstones.markedAts[j], tombstones.delTimes[j]);
+                    if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+                        if (!isSerializeLoggingActive.get()) {
+                            isSerializeLoggingActive.set(true);
+                            serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(tombstones.starts, tombstones.starts[j], "tombstones.starts[j]").toJsonString());
+                            isSerializeLoggingActive.set(false);
+                        }
+                    }
+                    j++;
+                } else {
                     i++;
                 }
             }
             // Addds the remaining ones from tombstones if any (note that addInternal will increment size if relevant).
-            for (; j < tombstones.size; j++)
-                addInternal(size, tombstones.starts[j], tombstones.ends[j], tombstones.markedAts[j], tombstones.delTimes[j]);
+            for (; j < tombstones.size; j++) addInternal(size, tombstones.starts[j], tombstones.ends[j], tombstones.markedAts[j], tombstones.delTimes[j]);
         }
     }
 
@@ -235,8 +291,7 @@ public class RangeTombstoneList implements Iterable<RangeTombstone>, IMeasurable
      * Returns whether the given name/timestamp pair is deleted by one of the tombstone
      * of this RangeTombstoneList.
      */
-    public boolean isDeleted(Cell cell)
-    {
+    public boolean isDeleted(Cell cell) {
         int idx = searchInternal(cell.name(), 0);
         // No matter what the counter cell's timestamp is, a tombstone always takes precedence. See CASSANDRA-7346.
         return idx >= 0 && (cell instanceof CounterCell || markedAts[idx] >= cell.timestamp());
@@ -245,8 +300,7 @@ public class RangeTombstoneList implements Iterable<RangeTombstone>, IMeasurable
     /**
      * Returns a new {@link InOrderTester}.
      */
-    InOrderTester inOrderTester()
-    {
+    InOrderTester inOrderTester() {
         return new InOrderTester();
     }
 
@@ -254,14 +308,12 @@ public class RangeTombstoneList implements Iterable<RangeTombstone>, IMeasurable
      * Returns the DeletionTime for the tombstone overlapping {@code name} (there can't be more than one),
      * or null if {@code name} is not covered by any tombstone.
      */
-    public DeletionTime searchDeletionTime(Composite name)
-    {
+    public DeletionTime searchDeletionTime(Composite name) {
         int idx = searchInternal(name, 0);
         return idx < 0 ? null : new DeletionTime(markedAts[idx], delTimes[idx]);
     }
 
-    public RangeTombstone search(Composite name)
-    {
+    public RangeTombstone search(Composite name) {
         int idx = searchInternal(name, 0);
         return idx < 0 ? null : rangeTombstone(idx);
     }
@@ -270,37 +322,50 @@ public class RangeTombstoneList implements Iterable<RangeTombstone>, IMeasurable
      * Return is the index of the range covering name if name is covered. If the return idx is negative,
      * no range cover name and -idx-1 is the index of the first range whose start is greater than name.
      */
-    private int searchInternal(Composite name, int startIdx)
-    {
+    private int searchInternal(Composite name, int startIdx) {
         if (isEmpty())
             return -1;
-
+        if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+            if (!isSerializeLoggingActive.get()) {
+                isSerializeLoggingActive.set(true);
+                serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(this, this.starts, "this.starts").toJsonString());
+                isSerializeLoggingActive.set(false);
+            }
+        }
         int pos = Arrays.binarySearch(starts, startIdx, size, name, comparator);
-        if (pos >= 0)
-        {
+        if (pos >= 0) {
+            if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+                if (!isSerializeLoggingActive.get()) {
+                    isSerializeLoggingActive.set(true);
+                    serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(this, this.ends, "this.ends").toJsonString());
+                    isSerializeLoggingActive.set(false);
+                }
+            }
             // We're exactly on an interval start. The one subtility is that we need to check if
             // the previous is not equal to us and doesn't have a higher marked at
-            if (pos > 0 && comparator.compare(name, ends[pos-1]) == 0 && markedAts[pos-1] > markedAts[pos])
-                return pos-1;
+            if (pos > 0 && comparator.compare(name, ends[pos - 1]) == 0 && markedAts[pos - 1] > markedAts[pos])
+                return pos - 1;
             else
                 return pos;
-        }
-        else
-        {
+        } else {
             // We potentially intersect the range before our "insertion point"
-            int idx = -pos-2;
+            int idx = -pos - 2;
             if (idx < 0)
                 return -1;
-
-            return comparator.compare(name, ends[idx]) <= 0 ? idx : -idx-2;
+            if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+                if (!isSerializeLoggingActive.get()) {
+                    isSerializeLoggingActive.set(true);
+                    serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(this, this.ends, "this.ends").toJsonString());
+                    isSerializeLoggingActive.set(false);
+                }
+            }
+            return comparator.compare(name, ends[idx]) <= 0 ? idx : -idx - 2;
         }
     }
 
-    public int dataSize()
-    {
+    public int dataSize() {
         int dataSize = TypeSizes.NATIVE.sizeof(size);
-        for (int i = 0; i < size; i++)
-        {
+        for (int i = 0; i < size; i++) {
             dataSize += starts[i].dataSize() + ends[i].dataSize();
             dataSize += TypeSizes.NATIVE.sizeof(markedAts[i]);
             dataSize += TypeSizes.NATIVE.sizeof(delTimes[i]);
@@ -308,36 +373,28 @@ public class RangeTombstoneList implements Iterable<RangeTombstone>, IMeasurable
         return dataSize;
     }
 
-    public long minMarkedAt()
-    {
+    public long minMarkedAt() {
         long min = Long.MAX_VALUE;
-        for (int i = 0; i < size; i++)
-            min = Math.min(min, markedAts[i]);
+        for (int i = 0; i < size; i++) min = Math.min(min, markedAts[i]);
         return min;
     }
 
-    public long maxMarkedAt()
-    {
+    public long maxMarkedAt() {
         long max = Long.MIN_VALUE;
-        for (int i = 0; i < size; i++)
-            max = Math.max(max, markedAts[i]);
+        for (int i = 0; i < size; i++) max = Math.max(max, markedAts[i]);
         return max;
     }
 
-    public void updateAllTimestamp(long timestamp)
-    {
-        for (int i = 0; i < size; i++)
-            markedAts[i] = timestamp;
+    public void updateAllTimestamp(long timestamp) {
+        for (int i = 0; i < size; i++) markedAts[i] = timestamp;
     }
 
     /**
      * Removes all range tombstones whose local deletion time is older than gcBefore.
      */
-    public void purge(int gcBefore)
-    {
+    public void purge(int gcBefore) {
         int j = 0;
-        for (int i = 0; i < size; i++)
-        {
+        for (int i = 0; i < size; i++) {
             if (delTimes[i] >= gcBefore)
                 setInternal(j++, starts[i], ends[i], markedAts[i], delTimes[i]);
         }
@@ -347,64 +404,51 @@ public class RangeTombstoneList implements Iterable<RangeTombstone>, IMeasurable
     /**
      * Returns whether {@code purge(gcBefore)} would remove something or not.
      */
-    public boolean hasPurgeableTombstones(int gcBefore)
-    {
-        for (int i = 0; i < size; i++)
-        {
+    public boolean hasPurgeableTombstones(int gcBefore) {
+        for (int i = 0; i < size; i++) {
             if (delTimes[i] < gcBefore)
                 return true;
         }
         return false;
     }
 
-    private RangeTombstone rangeTombstone(int idx)
-    {
+    private RangeTombstone rangeTombstone(int idx) {
         return new RangeTombstone(starts[idx], ends[idx], markedAts[idx], delTimes[idx]);
     }
 
-    public Iterator<RangeTombstone> iterator()
-    {
-        return new AbstractIterator<RangeTombstone>()
-        {
+    public Iterator<RangeTombstone> iterator() {
+        return new AbstractIterator<RangeTombstone>() {
+
             private int idx;
 
-            protected RangeTombstone computeNext()
-            {
+            protected RangeTombstone computeNext() {
                 if (idx >= size)
                     return endOfData();
-
                 return rangeTombstone(idx++);
             }
         };
     }
 
-    public Iterator<RangeTombstone> iterator(Composite from, Composite till)
-    {
+    public Iterator<RangeTombstone> iterator(Composite from, Composite till) {
         int startIdx = from.isEmpty() ? 0 : searchInternal(from, 0);
-        final int start = startIdx < 0 ? -startIdx-1 : startIdx;
-
+        final int start = startIdx < 0 ? -startIdx - 1 : startIdx;
         if (start >= size)
             return Iterators.<RangeTombstone>emptyIterator();
-
         int finishIdx = till.isEmpty() ? size : searchInternal(till, start);
         // if stopIdx is the first range after 'till' we care only until the previous range
-        final int finish = finishIdx < 0 ? -finishIdx-2 : finishIdx;
-
+        final int finish = finishIdx < 0 ? -finishIdx - 2 : finishIdx;
         // Note: the following is true because we know 'from' is before 'till' in sorted order.
         if (start > finish)
             return Iterators.<RangeTombstone>emptyIterator();
         else if (start == finish)
             return Iterators.<RangeTombstone>singletonIterator(rangeTombstone(start));
+        return new AbstractIterator<RangeTombstone>() {
 
-        return new AbstractIterator<RangeTombstone>()
-        {
             private int idx = start;
 
-            protected RangeTombstone computeNext()
-            {
+            protected RangeTombstone computeNext() {
                 if (idx >= size || idx > finish)
                     return endOfData();
-
                 return rangeTombstone(idx++);
             }
         };
@@ -415,78 +459,113 @@ public class RangeTombstoneList implements Iterable<RangeTombstone>, IMeasurable
      *
      * @return null if there is no difference
      */
-    public RangeTombstoneList diff(RangeTombstoneList superset)
-    {
+    public RangeTombstoneList diff(RangeTombstoneList superset) {
         if (isEmpty())
             return superset;
-
         RangeTombstoneList diff = null;
-
-        int j = 0; // index to iterate through our own list
-        for (int i = 0; i < superset.size; i++)
-        {
+        // index to iterate through our own list
+        int j = 0;
+        for (int i = 0; i < superset.size; i++) {
+            if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+                if (!isSerializeLoggingActive.get()) {
+                    isSerializeLoggingActive.set(true);
+                    serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(this, this.starts, "this.starts").toJsonString());
+                    isSerializeLoggingActive.set(false);
+                }
+            }
+            if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+                if (!isSerializeLoggingActive.get()) {
+                    isSerializeLoggingActive.set(true);
+                    serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(superset, superset.starts, "superset.starts").toJsonString());
+                    isSerializeLoggingActive.set(false);
+                }
+            }
             // we can assume that this list is a subset of the superset list
-            while (j < size && comparator.compare(starts[j], superset.starts[i]) < 0)
-                j++;
-
-            if (j >= size)
-            {
+            while (j < size && comparator.compare(starts[j], superset.starts[i]) < 0) j++;
+            if (j >= size) {
                 // we're at the end of our own list, add the remainder of the superset to the diff
-                if (i < superset.size)
-                {
+                if (i < superset.size) {
                     if (diff == null)
                         diff = new RangeTombstoneList(comparator, superset.size - i);
-
-                    for(int k = i; k < superset.size; k++)
+                    for (int k = i; k < superset.size; k++) {
+                        if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+                            if (!isSerializeLoggingActive.get()) {
+                                isSerializeLoggingActive.set(true);
+                                serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(superset, superset.starts, "superset.starts").toJsonString());
+                                isSerializeLoggingActive.set(false);
+                            }
+                        }
+                        if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+                            if (!isSerializeLoggingActive.get()) {
+                                isSerializeLoggingActive.set(true);
+                                serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(superset, superset.ends, "superset.ends").toJsonString());
+                                isSerializeLoggingActive.set(false);
+                            }
+                        }
                         diff.add(superset.starts[k], superset.ends[k], superset.markedAts[k], superset.delTimes[k]);
+                        if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+                            if (!isSerializeLoggingActive.get()) {
+                                isSerializeLoggingActive.set(true);
+                                serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(superset.starts, superset.starts[k], "superset.starts[k]").toJsonString());
+                                isSerializeLoggingActive.set(false);
+                            }
+                        }
+                    }
                 }
                 return diff;
             }
-
             // we don't care about local deletion time here, because it doesn't matter for read repair
-            if (!starts[j].equals(superset.starts[i])
-                || !ends[j].equals(superset.ends[i])
-                || markedAts[j] != superset.markedAts[i])
-            {
+            if (!starts[j].equals(superset.starts[i]) || !ends[j].equals(superset.ends[i]) || markedAts[j] != superset.markedAts[i]) {
                 if (diff == null)
                     diff = new RangeTombstoneList(comparator, Math.min(8, superset.size - i));
+                if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+                    if (!isSerializeLoggingActive.get()) {
+                        isSerializeLoggingActive.set(true);
+                        serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(superset, superset.ends, "superset.ends").toJsonString());
+                        isSerializeLoggingActive.set(false);
+                    }
+                }
+                if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+                    if (!isSerializeLoggingActive.get()) {
+                        isSerializeLoggingActive.set(true);
+                        serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(superset, superset.starts, "superset.starts").toJsonString());
+                        isSerializeLoggingActive.set(false);
+                    }
+                }
                 diff.add(superset.starts[i], superset.ends[i], superset.markedAts[i], superset.delTimes[i]);
+                if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+                    if (!isSerializeLoggingActive.get()) {
+                        isSerializeLoggingActive.set(true);
+                        serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(superset.starts, superset.starts[i], "superset.starts[i]").toJsonString());
+                        isSerializeLoggingActive.set(false);
+                    }
+                }
             }
         }
-
         return diff;
     }
-    
+
     /**
      * Calculates digest for triggering read repair on mismatch
      */
-    public void updateDigest(MessageDigest digest)
-    {
+    public void updateDigest(MessageDigest digest) {
         ByteBuffer longBuffer = ByteBuffer.allocate(8);
-        for (int i = 0; i < size; i++)
-        {
-            for (int j = 0; j < starts[i].size(); j++)
-                digest.update(starts[i].get(j).duplicate());
-            for (int j = 0; j < ends[i].size(); j++)
-                digest.update(ends[i].get(j).duplicate());
-
+        for (int i = 0; i < size; i++) {
+            for (int j = 0; j < starts[i].size(); j++) digest.update(starts[i].get(j).duplicate());
+            for (int j = 0; j < ends[i].size(); j++) digest.update(ends[i].get(j).duplicate());
             longBuffer.putLong(0, markedAts[i]);
             digest.update(longBuffer.array(), 0, 8);
         }
     }
 
-
     @Override
-    public boolean equals(Object o)
-    {
-        if(!(o instanceof RangeTombstoneList))
+    public boolean equals(Object o) {
+        if (!(o instanceof RangeTombstoneList))
             return false;
-        RangeTombstoneList that = (RangeTombstoneList)o;
+        RangeTombstoneList that = (RangeTombstoneList) o;
         if (size != that.size)
             return false;
-        
-        for (int i = 0; i < size; i++)
-        {
+        for (int i = 0; i < size; i++) {
             if (!starts[i].equals(that.starts[i]))
                 return false;
             if (!ends[i].equals(that.ends[i]))
@@ -500,20 +579,17 @@ public class RangeTombstoneList implements Iterable<RangeTombstone>, IMeasurable
     }
 
     @Override
-    public final int hashCode()
-    {
+    public final int hashCode() {
         int result = size;
-        for (int i = 0; i < size; i++)
-        {
+        for (int i = 0; i < size; i++) {
             result += starts[i].hashCode() + ends[i].hashCode();
-            result += (int)(markedAts[i] ^ (markedAts[i] >>> 32));
+            result += (int) (markedAts[i] ^ (markedAts[i] >>> 32));
             result += delTimes[i];
         }
         return result;
     }
 
-    private static void copyArrays(RangeTombstoneList src, RangeTombstoneList dst)
-    {
+    private static void copyArrays(RangeTombstoneList src, RangeTombstoneList dst) {
         dst.grow(src.size);
         System.arraycopy(src.starts, 0, dst.starts, 0, src.size);
         System.arraycopy(src.ends, 0, dst.ends, 0, src.size);
@@ -537,30 +613,51 @@ public class RangeTombstoneList implements Iterable<RangeTombstone>, IMeasurable
      * conditions).
      *
      */
-    private void insertFrom(int i, Composite start, Composite end, long markedAt, int delTime)
-    {
-        while (i < size)
-        {
-            assert i == 0 || comparator.compare(ends[i-1], start) <= 0;
-
+    private void insertFrom(int i, Composite start, Composite end, long markedAt, int delTime) {
+        while (i < size) {
+            if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+                if (!isSerializeLoggingActive.get()) {
+                    isSerializeLoggingActive.set(true);
+                    serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(this, this.ends, "this.ends").toJsonString());
+                    isSerializeLoggingActive.set(false);
+                }
+            }
+            assert i == 0 || comparator.compare(ends[i - 1], start) <= 0;
+            if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+                if (!isSerializeLoggingActive.get()) {
+                    isSerializeLoggingActive.set(true);
+                    serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(this, this.ends, "this.ends").toJsonString());
+                    isSerializeLoggingActive.set(false);
+                }
+            }
             int c = comparator.compare(start, ends[i]);
             assert c <= 0;
-            if (c == 0)
-            {
+            if (c == 0) {
+                if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+                    if (!isSerializeLoggingActive.get()) {
+                        isSerializeLoggingActive.set(true);
+                        serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(this, this.starts, "this.starts").toJsonString());
+                        isSerializeLoggingActive.set(false);
+                    }
+                }
+                if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+                    if (!isSerializeLoggingActive.get()) {
+                        isSerializeLoggingActive.set(true);
+                        serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(this, this.ends, "this.ends").toJsonString());
+                        isSerializeLoggingActive.set(false);
+                    }
+                }
                 // If start == ends[i], then we can insert from the next one (basically the new element
                 // really start at the next element), except for the case where starts[i] == ends[i].
                 // In this latter case, if we were to move to next element, we could end up with ...[x, x][x, x]...
-                if (comparator.compare(starts[i], ends[i]) == 0)
-                {
+                if (comparator.compare(starts[i], ends[i]) == 0) {
                     // The current element cover a single value which is equal to the start of the inserted
                     // element. If the inserted element overwrites the current one, just remove the current
                     // (it's included in what we insert) and proceed with the insert.
-                    if (markedAt > markedAts[i])
-                    {
+                    if (markedAt > markedAts[i]) {
                         removeInternal(i);
                         continue;
                     }
-
                     // Otherwise (the current singleton interval override the new one), we want to leave the
                     // current element and move to the next, unless start == end since that means the new element
                     // is in fact fully covered by the current one (so we're done)
@@ -570,27 +667,48 @@ public class RangeTombstoneList implements Iterable<RangeTombstone>, IMeasurable
                 i++;
                 continue;
             }
-
             // Do we overwrite the current element?
-            if (markedAt > markedAts[i])
-            {
+            if (markedAt > markedAts[i]) {
+                if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+                    if (!isSerializeLoggingActive.get()) {
+                        isSerializeLoggingActive.set(true);
+                        serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(this, this.starts, "this.starts").toJsonString());
+                        isSerializeLoggingActive.set(false);
+                    }
+                }
                 // We do overwrite.
-
                 // First deal with what might come before the newly added one.
-                if (comparator.compare(starts[i], start) < 0)
-                {
+                if (comparator.compare(starts[i], start) < 0) {
                     addInternal(i, starts[i], start, markedAts[i], delTimes[i]);
                     i++;
                     // We don't need to do the following line, but in spirit that's what we want to do
                     // setInternal(i, start, ends[i], markedAts, delTime])
                 }
-
+                if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+                    if (!isSerializeLoggingActive.get()) {
+                        isSerializeLoggingActive.set(true);
+                        serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(this, this.starts, "this.starts").toJsonString());
+                        isSerializeLoggingActive.set(false);
+                    }
+                }
                 // now, start <= starts[i]
-
                 // Does the new element stops before/at the current one,
                 int endCmp = comparator.compare(end, starts[i]);
-                if (endCmp <= 0)
-                {
+                if (endCmp <= 0) {
+                    if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+                        if (!isSerializeLoggingActive.get()) {
+                            isSerializeLoggingActive.set(true);
+                            serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(this, this.starts, "this.starts").toJsonString());
+                            isSerializeLoggingActive.set(false);
+                        }
+                    }
+                    if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+                        if (!isSerializeLoggingActive.get()) {
+                            isSerializeLoggingActive.set(true);
+                            serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(this, this.ends, "this.ends").toJsonString());
+                            isSerializeLoggingActive.set(false);
+                        }
+                    }
                     // Here start <= starts[i] and end <= starts[i]
                     // This means the current element is before the current one. However, one special
                     // case is if end == starts[i] and starts[i] == ends[i]. In that case,
@@ -601,31 +719,44 @@ public class RangeTombstoneList implements Iterable<RangeTombstone>, IMeasurable
                         addInternal(i, start, end, markedAt, delTime);
                     return;
                 }
-
+                if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+                    if (!isSerializeLoggingActive.get()) {
+                        isSerializeLoggingActive.set(true);
+                        serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(this, this.ends, "this.ends").toJsonString());
+                        isSerializeLoggingActive.set(false);
+                    }
+                }
                 // Do we overwrite the current element fully?
                 int cmp = comparator.compare(ends[i], end);
-                if (cmp <= 0)
-                {
+                if (cmp <= 0) {
                     // We do overwrite fully:
                     // update the current element until it's end and continue
                     // on with the next element (with the new inserted start == current end).
-
                     // If we're on the last element, we can optimize
-                    if (i == size-1)
-                    {
+                    if (i == size - 1) {
                         setInternal(i, start, end, markedAt, delTime);
                         return;
                     }
-
                     setInternal(i, start, ends[i], markedAt, delTime);
                     if (cmp == 0)
                         return;
-
+                    if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+                        if (!isSerializeLoggingActive.get()) {
+                            isSerializeLoggingActive.set(true);
+                            serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(this, this.ends, "this.ends").toJsonString());
+                            isSerializeLoggingActive.set(false);
+                        }
+                    }
                     start = ends[i];
+                    if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+                        if (!isSerializeLoggingActive.get()) {
+                            isSerializeLoggingActive.set(true);
+                            serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(ends, ends[i], "ends[i]").toJsonString());
+                            isSerializeLoggingActive.set(false);
+                        }
+                    }
                     i++;
-                }
-                else
-                {
+                } else {
                     // We don't ovewrite fully. Insert the new interval, and then update the now next
                     // one to reflect the not overwritten parts. We're then done.
                     addInternal(i, start, end, markedAt, delTime);
@@ -633,72 +764,91 @@ public class RangeTombstoneList implements Iterable<RangeTombstone>, IMeasurable
                     setInternal(i, end, ends[i], markedAts[i], delTimes[i]);
                     return;
                 }
-            }
-            else
-            {
+            } else {
+                if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+                    if (!isSerializeLoggingActive.get()) {
+                        isSerializeLoggingActive.set(true);
+                        serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(this, this.starts, "this.starts").toJsonString());
+                        isSerializeLoggingActive.set(false);
+                    }
+                }
                 // we don't overwrite the current element
-
                 // If the new interval starts before the current one, insert that new interval
-                if (comparator.compare(start, starts[i]) < 0)
-                {
+                if (comparator.compare(start, starts[i]) < 0) {
+                    if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+                        if (!isSerializeLoggingActive.get()) {
+                            isSerializeLoggingActive.set(true);
+                            serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(this, this.starts, "this.starts").toJsonString());
+                            isSerializeLoggingActive.set(false);
+                        }
+                    }
                     // If we stop before the start of the current element, just insert the new
                     // interval and we're done; otherwise insert until the beginning of the
                     // current element
-                    if (comparator.compare(end, starts[i]) <= 0)
-                    {
+                    if (comparator.compare(end, starts[i]) <= 0) {
                         addInternal(i, start, end, markedAt, delTime);
                         return;
                     }
                     addInternal(i, start, starts[i], markedAt, delTime);
                     i++;
                 }
-
+                if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+                    if (!isSerializeLoggingActive.get()) {
+                        isSerializeLoggingActive.set(true);
+                        serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(this, this.ends, "this.ends").toJsonString());
+                        isSerializeLoggingActive.set(false);
+                    }
+                }
                 // After that, we're overwritten on the current element but might have
                 // some residual parts after ...
-
                 // ... unless we don't extend beyond it.
                 if (comparator.compare(end, ends[i]) <= 0)
                     return;
-
+                if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+                    if (!isSerializeLoggingActive.get()) {
+                        isSerializeLoggingActive.set(true);
+                        serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(this, this.ends, "this.ends").toJsonString());
+                        isSerializeLoggingActive.set(false);
+                    }
+                }
                 start = ends[i];
+                if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+                    if (!isSerializeLoggingActive.get()) {
+                        isSerializeLoggingActive.set(true);
+                        serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(ends, ends[i], "ends[i]").toJsonString());
+                        isSerializeLoggingActive.set(false);
+                    }
+                }
                 i++;
             }
         }
-
         // If we got there, then just insert the remainder at the end
         addInternal(i, start, end, markedAt, delTime);
     }
 
-    private int capacity()
-    {
+    private int capacity() {
         return starts.length;
     }
 
     /*
      * Adds the new tombstone at index i, growing and/or moving elements to make room for it.
      */
-    private void addInternal(int i, Composite start, Composite end, long markedAt, int delTime)
-    {
+    private void addInternal(int i, Composite start, Composite end, long markedAt, int delTime) {
         assert i >= 0;
-
         if (size == capacity())
             growToFree(i);
         else if (i < size)
             moveElements(i);
-
         setInternal(i, start, end, markedAt, delTime);
         size++;
     }
 
-    private void removeInternal(int i)
-    {
+    private void removeInternal(int i) {
         assert i >= 0;
-
-        System.arraycopy(starts, i+1, starts, i, size - i - 1);
-        System.arraycopy(ends, i+1, ends, i, size - i - 1);
-        System.arraycopy(markedAts, i+1, markedAts, i, size - i - 1);
-        System.arraycopy(delTimes, i+1, delTimes, i, size - i - 1);
-
+        System.arraycopy(starts, i + 1, starts, i, size - i - 1);
+        System.arraycopy(ends, i + 1, ends, i, size - i - 1);
+        System.arraycopy(markedAts, i + 1, markedAts, i, size - i - 1);
+        System.arraycopy(delTimes, i + 1, delTimes, i, size - i - 1);
         --size;
         starts[size] = null;
         ends[size] = null;
@@ -707,8 +857,7 @@ public class RangeTombstoneList implements Iterable<RangeTombstone>, IMeasurable
     /*
      * Grow the arrays, leaving index i "free" in the process.
      */
-    private void growToFree(int i)
-    {
+    private void growToFree(int i) {
         int newLength = (capacity() * 3) / 2 + 1;
         grow(i, newLength);
     }
@@ -716,72 +865,61 @@ public class RangeTombstoneList implements Iterable<RangeTombstone>, IMeasurable
     /*
      * Grow the arrays to match newLength capacity.
      */
-    private void grow(int newLength)
-    {
+    private void grow(int newLength) {
         if (capacity() < newLength)
             grow(-1, newLength);
     }
 
-    private void grow(int i, int newLength)
-    {
+    private void grow(int i, int newLength) {
         starts = grow(starts, size, newLength, i);
         ends = grow(ends, size, newLength, i);
         markedAts = grow(markedAts, size, newLength, i);
         delTimes = grow(delTimes, size, newLength, i);
     }
 
-    private static Composite[] grow(Composite[] a, int size, int newLength, int i)
-    {
+    private static Composite[] grow(Composite[] a, int size, int newLength, int i) {
         if (i < 0 || i >= size)
             return Arrays.copyOf(a, newLength);
-
         Composite[] newA = new Composite[newLength];
         System.arraycopy(a, 0, newA, 0, i);
-        System.arraycopy(a, i, newA, i+1, size - i);
+        System.arraycopy(a, i, newA, i + 1, size - i);
         return newA;
     }
 
-    private static long[] grow(long[] a, int size, int newLength, int i)
-    {
+    private static long[] grow(long[] a, int size, int newLength, int i) {
         if (i < 0 || i >= size)
             return Arrays.copyOf(a, newLength);
-
         long[] newA = new long[newLength];
         System.arraycopy(a, 0, newA, 0, i);
-        System.arraycopy(a, i, newA, i+1, size - i);
+        System.arraycopy(a, i, newA, i + 1, size - i);
         return newA;
     }
 
-    private static int[] grow(int[] a, int size, int newLength, int i)
-    {
+    private static int[] grow(int[] a, int size, int newLength, int i) {
         if (i < 0 || i >= size)
             return Arrays.copyOf(a, newLength);
-
         int[] newA = new int[newLength];
         System.arraycopy(a, 0, newA, 0, i);
-        System.arraycopy(a, i, newA, i+1, size - i);
+        System.arraycopy(a, i, newA, i + 1, size - i);
         return newA;
     }
 
     /*
      * Move elements so that index i is "free", assuming the arrays have at least one free slot at the end.
      */
-    private void moveElements(int i)
-    {
+    private void moveElements(int i) {
         if (i >= size)
             return;
-
-        System.arraycopy(starts, i, starts, i+1, size - i);
-        System.arraycopy(ends, i, ends, i+1, size - i);
-        System.arraycopy(markedAts, i, markedAts, i+1, size - i);
-        System.arraycopy(delTimes, i, delTimes, i+1, size - i);
+        System.arraycopy(starts, i, starts, i + 1, size - i);
+        System.arraycopy(ends, i, ends, i + 1, size - i);
+        System.arraycopy(markedAts, i, markedAts, i + 1, size - i);
+        System.arraycopy(delTimes, i, delTimes, i + 1, size - i);
         // we set starts[i] to null to indicate the position is now empty, so that we update boundaryHeapSize
         // when we set it
         starts[i] = null;
     }
 
-    private void setInternal(int i, Composite start, Composite end, long markedAt, int delTime)
-    {
+    private void setInternal(int i, Composite start, Composite end, long markedAt, int delTime) {
         if (starts[i] != null)
             boundaryHeapSize -= starts[i].unsharedHeapSize() + ends[i].unsharedHeapSize();
         starts[i] = start;
@@ -792,64 +930,67 @@ public class RangeTombstoneList implements Iterable<RangeTombstone>, IMeasurable
     }
 
     @Override
-    public long unsharedHeapSize()
-    {
-        return EMPTY_SIZE
-                + boundaryHeapSize
-                + ObjectSizes.sizeOfArray(starts)
-                + ObjectSizes.sizeOfArray(ends)
-                + ObjectSizes.sizeOfArray(markedAts)
-                + ObjectSizes.sizeOfArray(delTimes);
+    public long unsharedHeapSize() {
+        return EMPTY_SIZE + boundaryHeapSize + ObjectSizes.sizeOfArray(starts) + ObjectSizes.sizeOfArray(ends) + ObjectSizes.sizeOfArray(markedAts) + ObjectSizes.sizeOfArray(delTimes);
     }
 
-    public static class Serializer implements IVersionedSerializer<RangeTombstoneList>
-    {
+    public static class Serializer implements IVersionedSerializer<RangeTombstoneList> {
+
+        private java.lang.ThreadLocal<Boolean> isSerializeLoggingActive = new ThreadLocal<Boolean>() {
+
+            @Override
+            protected Boolean initialValue() {
+                return false;
+            }
+        };
+
         private final CType type;
 
-        public Serializer(CType type)
-        {
+        public Serializer(CType type) {
             this.type = type;
         }
 
-        public void serialize(RangeTombstoneList tombstones, DataOutputPlus out, int version) throws IOException
-        {
-            if (tombstones == null)
-            {
+        public void serialize(RangeTombstoneList tombstones, DataOutputPlus out, int version) throws IOException {
+            if (tombstones == null) {
                 out.writeInt(0);
                 return;
             }
-
             out.writeInt(tombstones.size);
-            for (int i = 0; i < tombstones.size; i++)
-            {
+            for (int i = 0; i < tombstones.size; i++) {
                 type.serializer().serialize(tombstones.starts[i], out);
                 type.serializer().serialize(tombstones.ends[i], out);
                 out.writeInt(tombstones.delTimes[i]);
+                if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+                    if (!isSerializeLoggingActive.get()) {
+                        isSerializeLoggingActive.set(true);
+                        serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(tombstones.delTimes, tombstones.delTimes[i], "tombstones.delTimes[i]").toJsonString());
+                        isSerializeLoggingActive.set(false);
+                    }
+                }
                 out.writeLong(tombstones.markedAts[i]);
+                if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+                    if (!isSerializeLoggingActive.get()) {
+                        isSerializeLoggingActive.set(true);
+                        serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(tombstones.markedAts, tombstones.markedAts[i], "tombstones.markedAts[i]").toJsonString());
+                        isSerializeLoggingActive.set(false);
+                    }
+                }
             }
         }
 
-        public RangeTombstoneList deserialize(DataInput in, int version) throws IOException
-        {
+        public RangeTombstoneList deserialize(DataInput in, int version) throws IOException {
             int size = in.readInt();
             if (size == 0)
                 return null;
-
             RangeTombstoneList tombstones = new RangeTombstoneList(type, size);
-
-            for (int i = 0; i < size; i++)
-            {
+            for (int i = 0; i < size; i++) {
                 Composite start = type.serializer().deserialize(in);
                 Composite end = type.serializer().deserialize(in);
-                int delTime =  in.readInt();
+                int delTime = in.readInt();
                 long markedAt = in.readLong();
-
-                if (version >= MessagingService.VERSION_20)
-                {
+                if (version >= MessagingService.VERSION_20) {
                     tombstones.setInternal(i, start, end, markedAt, delTime);
-                }
-                else
-                {
+                } else {
                     /*
                      * The old implementation used to have range sorted by left value, but with potentially
                      * overlapping range. So we need to use the "slow" path.
@@ -857,21 +998,17 @@ public class RangeTombstoneList implements Iterable<RangeTombstone>, IMeasurable
                     tombstones.add(start, end, markedAt, delTime);
                 }
             }
-
             // The "slow" path take care of updating the size, but not the fast one
             if (version >= MessagingService.VERSION_20)
                 tombstones.size = size;
             return tombstones;
         }
 
-        public long serializedSize(RangeTombstoneList tombstones, TypeSizes typeSizes, int version)
-        {
+        public long serializedSize(RangeTombstoneList tombstones, TypeSizes typeSizes, int version) {
             if (tombstones == null)
                 return typeSizes.sizeof(0);
-
             long size = typeSizes.sizeof(tombstones.size);
-            for (int i = 0; i < tombstones.size; i++)
-            {
+            for (int i = 0; i < tombstones.size; i++) {
                 size += type.serializer().serializedSize(tombstones.starts[i], typeSizes);
                 size += type.serializer().serializedSize(tombstones.ends[i], typeSizes);
                 size += typeSizes.sizeof(tombstones.delTimes[i]);
@@ -880,8 +1017,7 @@ public class RangeTombstoneList implements Iterable<RangeTombstone>, IMeasurable
             return size;
         }
 
-        public long serializedSize(RangeTombstoneList tombstones, int version)
-        {
+        public long serializedSize(RangeTombstoneList tombstones, int version) {
             return serializedSize(tombstones, TypeSizes.NATIVE, version);
         }
     }
@@ -895,46 +1031,42 @@ public class RangeTombstoneList implements Iterable<RangeTombstone>, IMeasurable
      * in that case since we're able to take the sorted nature of the RangeTombstoneList
      * into account.
      */
-    public class InOrderTester
-    {
+    public class InOrderTester {
+
+        private java.lang.ThreadLocal<Boolean> isSerializeLoggingActive = new ThreadLocal<Boolean>() {
+
+            @Override
+            protected Boolean initialValue() {
+                return false;
+            }
+        };
+
         private int idx;
 
-        public boolean isDeleted(Cell cell)
-        {
+        public boolean isDeleted(Cell cell) {
             CellName name = cell.name();
             long timestamp = cell.timestamp();
-
-            while (idx < size)
-            {
+            while (idx < size) {
                 int cmp = comparator.compare(name, starts[idx]);
-
-                if (cmp < 0)
-                {
+                if (cmp < 0) {
                     return false;
-                }
-                else if (cmp == 0)
-                {
+                } else if (cmp == 0) {
                     // No matter what the counter cell's timestamp is, a tombstone always takes precedence. See CASSANDRA-7346.
                     if (cell instanceof CounterCell)
                         return true;
-
                     // As for searchInternal, we need to check the previous end
-                    if (idx > 0 && comparator.compare(name, ends[idx-1]) == 0 && markedAts[idx-1] > markedAts[idx])
-                        return markedAts[idx-1] >= timestamp;
+                    if (idx > 0 && comparator.compare(name, ends[idx - 1]) == 0 && markedAts[idx - 1] > markedAts[idx])
+                        return markedAts[idx - 1] >= timestamp;
                     else
                         return markedAts[idx] >= timestamp;
-                }
-                else
-                {
+                } else {
                     if (comparator.compare(name, ends[idx]) <= 0)
                         return markedAts[idx] >= timestamp || cell instanceof CounterCell;
                     else
                         idx++;
                 }
             }
-
             return false;
         }
     }
-
 }

@@ -24,49 +24,59 @@ import org.apache.cassandra.exceptions.*;
 import org.apache.cassandra.service.ClientState;
 import org.apache.cassandra.transport.messages.ResultMessage;
 
-public class CreateRoleStatement extends AuthenticationStatement
-{
+public class CreateRoleStatement extends AuthenticationStatement {
+
+    private static final org.slf4j.Logger serialize_logger = org.slf4j.LoggerFactory.getLogger("serialize.logger");
+
+    private java.lang.ThreadLocal<Boolean> isSerializeLoggingActive = new ThreadLocal<Boolean>() {
+
+        @Override
+        protected Boolean initialValue() {
+            return false;
+        }
+    };
+
     private final RoleResource role;
+
     private final RoleOptions opts;
+
     private final boolean ifNotExists;
 
-    public CreateRoleStatement(RoleName name, RoleOptions options, boolean ifNotExists)
-    {
+    public CreateRoleStatement(RoleName name, RoleOptions options, boolean ifNotExists) {
         this.role = RoleResource.role(name.getName());
         this.opts = options;
         this.ifNotExists = ifNotExists;
     }
 
-    public void checkAccess(ClientState state) throws UnauthorizedException
-    {
+    public void checkAccess(ClientState state) throws UnauthorizedException {
+        if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+            if (!isSerializeLoggingActive.get()) {
+                isSerializeLoggingActive.set(true);
+                serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(org.apache.cassandra.auth.Permission.class, org.apache.cassandra.auth.Permission.CREATE, "org.apache.cassandra.auth.Permission.CREATE").toJsonString());
+                isSerializeLoggingActive.set(false);
+            }
+        }
         super.checkPermission(state, Permission.CREATE, RoleResource.root());
-        if (opts.getSuperuser().isPresent())
-        {
+        if (opts.getSuperuser().isPresent()) {
             if (opts.getSuperuser().get() && !state.getUser().isSuper())
                 throw new UnauthorizedException("Only superusers can create a role with superuser status");
         }
     }
 
-    public void validate(ClientState state) throws RequestValidationException
-    {
+    public void validate(ClientState state) throws RequestValidationException {
         opts.validate();
-
         if (role.getRoleName().isEmpty())
             throw new InvalidRequestException("Role name can't be an empty string");
-
         // validate login here before checkAccess to avoid leaking role existence to anonymous users.
         state.ensureNotAnonymous();
-
         if (!ifNotExists && DatabaseDescriptor.getRoleManager().isExistingRole(role))
             throw new InvalidRequestException(String.format("%s already exists", role.getRoleName()));
     }
 
-    public ResultMessage execute(ClientState state) throws RequestExecutionException, RequestValidationException
-    {
+    public ResultMessage execute(ClientState state) throws RequestExecutionException, RequestValidationException {
         // not rejected in validate()
         if (ifNotExists && DatabaseDescriptor.getRoleManager().isExistingRole(role))
             return null;
-
         DatabaseDescriptor.getRoleManager().createRole(state.getUser(), role, opts);
         grantPermissionsToCreator(state);
         return null;
@@ -78,23 +88,15 @@ public class CreateRoleStatement extends AuthenticationStatement
      * of it in subclasses CreateKeyspaceStatement & CreateTableStatement.
      * @param state
      */
-    private void grantPermissionsToCreator(ClientState state)
-    {
+    private void grantPermissionsToCreator(ClientState state) {
         // The creator of a Role automatically gets ALTER/DROP/AUTHORIZE permissions on it if:
         // * the user is not anonymous
         // * the configured IAuthorizer supports granting of permissions (not all do, AllowAllAuthorizer doesn't and
         //   custom external implementations may not)
-        if (!state.getUser().isAnonymous())
-        {
-            try
-            {
-                DatabaseDescriptor.getAuthorizer().grant(AuthenticatedUser.SYSTEM_USER,
-                                                         role.applicablePermissions(),
-                                                         role,
-                                                         RoleResource.role(state.getUser().getName()));
-            }
-            catch (UnsupportedOperationException e)
-            {
+        if (!state.getUser().isAnonymous()) {
+            try {
+                DatabaseDescriptor.getAuthorizer().grant(AuthenticatedUser.SYSTEM_USER, role.applicablePermissions(), role, RoleResource.role(state.getUser().getName()));
+            } catch (UnsupportedOperationException e) {
                 // not a problem, grant is an optional method on IAuthorizer
             }
         }

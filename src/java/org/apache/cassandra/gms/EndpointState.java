@@ -23,10 +23,8 @@ import java.util.EnumMap;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicReference;
-
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-
 import org.apache.cassandra.db.TypeSizes;
 import org.apache.cassandra.io.IVersionedSerializer;
 import org.apache.cassandra.io.util.DataOutputPlus;
@@ -35,75 +33,79 @@ import org.apache.cassandra.io.util.DataOutputPlus;
  * This abstraction represents both the HeartBeatState and the ApplicationState in an EndpointState
  * instance. Any state for a given endpoint can be retrieved from this instance.
  */
+public class EndpointState {
 
+    private static final org.slf4j.Logger serialize_logger = org.slf4j.LoggerFactory.getLogger("serialize.logger");
 
-public class EndpointState
-{
+    private java.lang.ThreadLocal<Boolean> isSerializeLoggingActive = new ThreadLocal<Boolean>() {
+
+        @Override
+        protected Boolean initialValue() {
+            return false;
+        }
+    };
+
     protected static final Logger logger = LoggerFactory.getLogger(EndpointState.class);
 
     public final static IVersionedSerializer<EndpointState> serializer = new EndpointStateSerializer();
 
     private volatile HeartBeatState hbState;
+
     private final AtomicReference<Map<ApplicationState, VersionedValue>> applicationState;
 
     /* fields below do not get serialized */
     private volatile long updateTimestamp;
+
     private volatile boolean isAlive;
 
-    EndpointState(HeartBeatState initialHbState)
-    {
+    EndpointState(HeartBeatState initialHbState) {
         this(initialHbState, new EnumMap<ApplicationState, VersionedValue>(ApplicationState.class));
     }
 
-    EndpointState(HeartBeatState initialHbState, Map<ApplicationState, VersionedValue> states)
-    {
+    EndpointState(HeartBeatState initialHbState, Map<ApplicationState, VersionedValue> states) {
         hbState = initialHbState;
         applicationState = new AtomicReference<Map<ApplicationState, VersionedValue>>(new EnumMap<>(states));
         updateTimestamp = System.nanoTime();
         isAlive = true;
     }
 
-    HeartBeatState getHeartBeatState()
-    {
+    HeartBeatState getHeartBeatState() {
+        if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+            if (!isSerializeLoggingActive.get()) {
+                isSerializeLoggingActive.set(true);
+                serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(this, this.hbState, "this.hbState").toJsonString());
+                isSerializeLoggingActive.set(false);
+            }
+        }
         return hbState;
     }
 
-    void setHeartBeatState(HeartBeatState newHbState)
-    {
+    void setHeartBeatState(HeartBeatState newHbState) {
         updateTimestamp();
         hbState = newHbState;
     }
 
-    public VersionedValue getApplicationState(ApplicationState key)
-    {
+    public VersionedValue getApplicationState(ApplicationState key) {
         return applicationState.get().get(key);
     }
 
-    public Set<Map.Entry<ApplicationState, VersionedValue>> states()
-    {
+    public Set<Map.Entry<ApplicationState, VersionedValue>> states() {
         return applicationState.get().entrySet();
     }
 
-    public void addApplicationState(ApplicationState key, VersionedValue value)
-    {
+    public void addApplicationState(ApplicationState key, VersionedValue value) {
         addApplicationStates(Collections.singletonMap(key, value));
     }
 
-    public void addApplicationStates(Map<ApplicationState, VersionedValue> values)
-    {
+    public void addApplicationStates(Map<ApplicationState, VersionedValue> values) {
         addApplicationStates(values.entrySet());
     }
 
-    public void addApplicationStates(Set<Map.Entry<ApplicationState, VersionedValue>> values)
-    {
-        while (true)
-        {
+    public void addApplicationStates(Set<Map.Entry<ApplicationState, VersionedValue>> values) {
+        while (true) {
             Map<ApplicationState, VersionedValue> orig = applicationState.get();
             Map<ApplicationState, VersionedValue> copy = new EnumMap<>(orig);
-
-            for (Map.Entry<ApplicationState, VersionedValue> value : values)
-                copy.put(value.getKey(), value.getValue());
-
+            for (Map.Entry<ApplicationState, VersionedValue> value : values) copy.put(value.getKey(), value.getValue());
             if (applicationState.compareAndSet(orig, copy))
                 return;
         }
@@ -113,96 +115,94 @@ public class EndpointState
     /**
      * @return System.nanoTime() when state was updated last time.
      */
-    public long getUpdateTimestamp()
-    {
+    public long getUpdateTimestamp() {
         return updateTimestamp;
     }
 
-    void updateTimestamp()
-    {
+    void updateTimestamp() {
         updateTimestamp = System.nanoTime();
     }
 
-    public boolean isAlive()
-    {
+    public boolean isAlive() {
         return isAlive;
     }
 
-    void markAlive()
-    {
+    void markAlive() {
         isAlive = true;
     }
 
-    void markDead()
-    {
+    void markDead() {
         isAlive = false;
     }
 
-    public boolean isRpcReady()
-    {
+    public boolean isRpcReady() {
+        if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+            if (!isSerializeLoggingActive.get()) {
+                isSerializeLoggingActive.set(true);
+                serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(org.apache.cassandra.gms.ApplicationState.class, org.apache.cassandra.gms.ApplicationState.RPC_READY, "org.apache.cassandra.gms.ApplicationState.RPC_READY").toJsonString());
+                isSerializeLoggingActive.set(false);
+            }
+        }
         VersionedValue rpcState = getApplicationState(ApplicationState.RPC_READY);
         return rpcState != null && Boolean.parseBoolean(rpcState.value);
     }
 
-    public String getStatus()
-    {
+    public String getStatus() {
+        if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+            if (!isSerializeLoggingActive.get()) {
+                isSerializeLoggingActive.set(true);
+                serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(org.apache.cassandra.gms.ApplicationState.class, org.apache.cassandra.gms.ApplicationState.STATUS, "org.apache.cassandra.gms.ApplicationState.STATUS").toJsonString());
+                isSerializeLoggingActive.set(false);
+            }
+        }
         VersionedValue status = getApplicationState(ApplicationState.STATUS);
         if (status == null)
             return "";
-
         String[] pieces = status.value.split(VersionedValue.DELIMITER_STR, -1);
         assert (pieces.length > 0);
         return pieces[0];
     }
 
-    public String toString()
-    {
+    public String toString() {
         return "EndpointState: HeartBeatState = " + hbState + ", AppStateMap = " + applicationState.get();
     }
 }
 
-class EndpointStateSerializer implements IVersionedSerializer<EndpointState>
-{
-    public void serialize(EndpointState epState, DataOutputPlus out, int version) throws IOException
-    {
+class EndpointStateSerializer implements IVersionedSerializer<EndpointState> {
+
+    private static final org.slf4j.Logger serialize_logger = org.slf4j.LoggerFactory.getLogger("serialize.logger");
+
+    public void serialize(EndpointState epState, DataOutputPlus out, int version) throws IOException {
         /* serialize the HeartBeatState */
         HeartBeatState hbState = epState.getHeartBeatState();
         HeartBeatState.serializer.serialize(hbState, out, version);
-
         /* serialize the map of ApplicationState objects */
         Set<Map.Entry<ApplicationState, VersionedValue>> states = epState.states();
         out.writeInt(states.size());
-        for (Map.Entry<ApplicationState, VersionedValue> state : states)
-        {
+        for (Map.Entry<ApplicationState, VersionedValue> state : states) {
             VersionedValue value = state.getValue();
             out.writeInt(state.getKey().ordinal());
             VersionedValue.serializer.serialize(value, out, version);
         }
     }
 
-    public EndpointState deserialize(DataInput in, int version) throws IOException
-    {
+    public EndpointState deserialize(DataInput in, int version) throws IOException {
         HeartBeatState hbState = HeartBeatState.serializer.deserialize(in, version);
-
         int appStateSize = in.readInt();
         Map<ApplicationState, VersionedValue> states = new EnumMap<>(ApplicationState.class);
-        for (int i = 0; i < appStateSize; ++i)
-        {
+        for (int i = 0; i < appStateSize; ++i) {
             int key = in.readInt();
             VersionedValue value = VersionedValue.serializer.deserialize(in, version);
             states.put(Gossiper.STATES[key], value);
         }
-
         return new EndpointState(hbState, states);
     }
 
-    public long serializedSize(EndpointState epState, int version)
-    {
+    public long serializedSize(EndpointState epState, int version) {
         long size = HeartBeatState.serializer.serializedSize(epState.getHeartBeatState(), version);
         Set<Map.Entry<ApplicationState, VersionedValue>> states = epState.states();
         size += TypeSizes.NATIVE.sizeof(states.size());
-        for (Map.Entry<ApplicationState, VersionedValue> state : states)
-        {
+        for (Map.Entry<ApplicationState, VersionedValue> state : states) {
             VersionedValue value = state.getValue();
             size += TypeSizes.NATIVE.sizeof(state.getKey().ordinal());
             size += VersionedValue.serializer.serializedSize(value, version);

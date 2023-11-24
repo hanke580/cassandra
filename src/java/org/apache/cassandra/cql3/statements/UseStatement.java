@@ -25,42 +25,52 @@ import org.apache.cassandra.transport.messages.ResultMessage;
 import org.apache.cassandra.service.ClientState;
 import org.apache.cassandra.service.QueryState;
 
-public class UseStatement extends ParsedStatement implements CQLStatement
-{
+public class UseStatement extends ParsedStatement implements CQLStatement {
+
+    private static final org.slf4j.Logger serialize_logger = org.slf4j.LoggerFactory.getLogger("serialize.logger");
+
+    private java.lang.ThreadLocal<Boolean> isSerializeLoggingActive = new ThreadLocal<Boolean>() {
+
+        @Override
+        protected Boolean initialValue() {
+            return false;
+        }
+    };
+
     private final String keyspace;
 
-    public UseStatement(String keyspace)
-    {
+    public UseStatement(String keyspace) {
         this.keyspace = keyspace;
     }
 
-    public int getBoundTerms()
-    {
+    public int getBoundTerms() {
         return 0;
     }
 
-    public Prepared prepare() throws InvalidRequestException
-    {
+    public Prepared prepare() throws InvalidRequestException {
         return new Prepared(this);
     }
 
-    public void checkAccess(ClientState state) throws UnauthorizedException
-    {
+    public void checkAccess(ClientState state) throws UnauthorizedException {
         state.validateLogin();
     }
 
-    public void validate(ClientState state) throws InvalidRequestException
-    {
+    public void validate(ClientState state) throws InvalidRequestException {
     }
 
-    public ResultMessage execute(QueryState state, QueryOptions options) throws InvalidRequestException
-    {
+    public ResultMessage execute(QueryState state, QueryOptions options) throws InvalidRequestException {
+        if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+            if (!isSerializeLoggingActive.get()) {
+                isSerializeLoggingActive.set(true);
+                serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(this, this.keyspace, "this.keyspace").toJsonString());
+                isSerializeLoggingActive.set(false);
+            }
+        }
         state.getClientState().setKeyspace(keyspace);
         return new ResultMessage.SetKeyspace(keyspace);
     }
 
-    public ResultMessage executeInternal(QueryState state, QueryOptions options) throws InvalidRequestException
-    {
+    public ResultMessage executeInternal(QueryState state, QueryOptions options) throws InvalidRequestException {
         // In production, internal queries are exclusively on the system keyspace and 'use' is thus useless
         // but for some unit tests we need to set the keyspace (e.g. for tests with DROP INDEX)
         return execute(state, options);

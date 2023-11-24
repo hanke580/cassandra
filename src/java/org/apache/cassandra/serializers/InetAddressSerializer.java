@@ -15,61 +15,63 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
 package org.apache.cassandra.serializers;
 
 import org.apache.cassandra.utils.ByteBufferUtil;
-
 import java.net.InetAddress;
 import java.net.UnknownHostException;
 import java.nio.ByteBuffer;
 
-public class InetAddressSerializer implements TypeSerializer<InetAddress>
-{
+public class InetAddressSerializer implements TypeSerializer<InetAddress> {
+
+    private static final org.slf4j.Logger serialize_logger = org.slf4j.LoggerFactory.getLogger("serialize.logger");
+
+    private java.lang.ThreadLocal<Boolean> isSerializeLoggingActive = new ThreadLocal<Boolean>() {
+
+        @Override
+        protected Boolean initialValue() {
+            return false;
+        }
+    };
+
     public static final InetAddressSerializer instance = new InetAddressSerializer();
 
-    public InetAddress deserialize(ByteBuffer bytes)
-    {
+    public InetAddress deserialize(ByteBuffer bytes) {
         if (bytes.remaining() == 0)
             return null;
-
-        try
-        {
+        try {
             return InetAddress.getByAddress(ByteBufferUtil.getArray(bytes));
-        }
-        catch (UnknownHostException e)
-        {
+        } catch (UnknownHostException e) {
             throw new AssertionError(e);
         }
     }
 
-    public ByteBuffer serialize(InetAddress value)
-    {
+    public ByteBuffer serialize(InetAddress value) {
+        if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+            if (!isSerializeLoggingActive.get()) {
+                isSerializeLoggingActive.set(true);
+                serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(org.apache.cassandra.utils.ByteBufferUtil.class, org.apache.cassandra.utils.ByteBufferUtil.EMPTY_BYTE_BUFFER, "org.apache.cassandra.utils.ByteBufferUtil.EMPTY_BYTE_BUFFER").toJsonString());
+                isSerializeLoggingActive.set(false);
+            }
+        }
         return value == null ? ByteBufferUtil.EMPTY_BYTE_BUFFER : ByteBuffer.wrap(value.getAddress());
     }
 
-    public void validate(ByteBuffer bytes) throws MarshalException
-    {
+    public void validate(ByteBuffer bytes) throws MarshalException {
         if (bytes.remaining() == 0)
             return;
-
-        try
-        {
+        try {
             InetAddress.getByAddress(ByteBufferUtil.getArray(bytes));
-        }
-        catch (UnknownHostException e)
-        {
+        } catch (UnknownHostException e) {
             throw new MarshalException(String.format("Expected 4 or 16 byte inetaddress; got %s", ByteBufferUtil.bytesToHex(bytes)));
         }
     }
 
-    public String toString(InetAddress value)
-    {
+    public String toString(InetAddress value) {
         return value == null ? "" : value.getHostAddress();
     }
 
-    public Class<InetAddress> getType()
-    {
+    public Class<InetAddress> getType() {
         return InetAddress.class;
     }
 }

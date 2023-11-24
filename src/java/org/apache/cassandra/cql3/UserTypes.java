@@ -19,7 +19,6 @@ package org.apache.cassandra.cql3;
 
 import java.nio.ByteBuffer;
 import java.util.*;
-
 import org.apache.cassandra.cql3.functions.Function;
 import org.apache.cassandra.db.marshal.CollectionType;
 import org.apache.cassandra.db.marshal.UTF8Type;
@@ -31,38 +30,41 @@ import org.apache.cassandra.utils.ByteBufferUtil;
 /**
  * Static helper methods and classes for user types.
  */
-public abstract class UserTypes
-{
-    private UserTypes() {}
+public abstract class UserTypes {
 
-    public static ColumnSpecification fieldSpecOf(ColumnSpecification column, int field)
-    {
-        UserType ut = (UserType)column.type;
-        return new ColumnSpecification(column.ksName,
-                                       column.cfName,
-                                       new ColumnIdentifier(column.name + "." + UTF8Type.instance.compose(ut.fieldName(field)), true),
-                                       ut.fieldType(field));
+    private static final org.slf4j.Logger serialize_logger = org.slf4j.LoggerFactory.getLogger("serialize.logger");
+
+    private UserTypes() {
     }
 
-    public static class Literal implements Term.Raw
-    {
+    public static ColumnSpecification fieldSpecOf(ColumnSpecification column, int field) {
+        UserType ut = (UserType) column.type;
+        return new ColumnSpecification(column.ksName, column.cfName, new ColumnIdentifier(column.name + "." + UTF8Type.instance.compose(ut.fieldName(field)), true), ut.fieldType(field));
+    }
+
+    public static class Literal implements Term.Raw {
+
+        private java.lang.ThreadLocal<Boolean> isSerializeLoggingActive = new ThreadLocal<Boolean>() {
+
+            @Override
+            protected Boolean initialValue() {
+                return false;
+            }
+        };
+
         public final Map<ColumnIdentifier, Term.Raw> entries;
 
-        public Literal(Map<ColumnIdentifier, Term.Raw> entries)
-        {
+        public Literal(Map<ColumnIdentifier, Term.Raw> entries) {
             this.entries = entries;
         }
 
-        public Term prepare(String keyspace, ColumnSpecification receiver) throws InvalidRequestException
-        {
+        public Term prepare(String keyspace, ColumnSpecification receiver) throws InvalidRequestException {
             validateAssignableTo(keyspace, receiver);
-
-            UserType ut = (UserType)receiver.type;
+            UserType ut = (UserType) receiver.type;
             boolean allTerminal = true;
             List<Term> values = new ArrayList<>(entries.size());
             int foundValues = 0;
-            for (int i = 0; i < ut.size(); i++)
-            {
+            for (int i = 0; i < ut.size(); i++) {
                 ColumnIdentifier field = new ColumnIdentifier(ut.fieldName(i), UTF8Type.instance);
                 Term.Raw raw = entries.get(field);
                 if (raw == null)
@@ -70,64 +72,58 @@ public abstract class UserTypes
                 else
                     ++foundValues;
                 Term value = raw.prepare(keyspace, fieldSpecOf(receiver, i));
-
                 if (value instanceof Term.NonTerminal)
                     allTerminal = false;
-
                 values.add(value);
             }
-            if (foundValues != entries.size())
-            {
+            if (foundValues != entries.size()) {
                 // We had some field that are not part of the type
-                for (ColumnIdentifier id : entries.keySet())
+                for (ColumnIdentifier id : entries.keySet()) {
+                    if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+                        if (!isSerializeLoggingActive.get()) {
+                            isSerializeLoggingActive.set(true);
+                            serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(entries.keySet(), id, "id").toJsonString());
+                            isSerializeLoggingActive.set(false);
+                        }
+                    }
                     if (!ut.fieldNames().contains(id.bytes))
                         throw new InvalidRequestException(String.format("Unknown field '%s' in value of user defined type %s", id, ut.getNameAsString()));
+                }
             }
-
-            DelayedValue value = new DelayedValue(((UserType)receiver.type), values);
+            DelayedValue value = new DelayedValue(((UserType) receiver.type), values);
             return allTerminal ? value.bind(QueryOptions.DEFAULT) : value;
         }
 
-        private void validateAssignableTo(String keyspace, ColumnSpecification receiver) throws InvalidRequestException
-        {
+        private void validateAssignableTo(String keyspace, ColumnSpecification receiver) throws InvalidRequestException {
             if (!(receiver.type instanceof UserType))
                 throw new InvalidRequestException(String.format("Invalid user type literal for %s of type %s", receiver, receiver.type.asCQL3Type()));
-
-            UserType ut = (UserType)receiver.type;
-            for (int i = 0; i < ut.size(); i++)
-            {
+            UserType ut = (UserType) receiver.type;
+            for (int i = 0; i < ut.size(); i++) {
                 ColumnIdentifier field = new ColumnIdentifier(ut.fieldName(i), UTF8Type.instance);
                 Term.Raw value = entries.get(field);
                 if (value == null)
                     continue;
-
                 ColumnSpecification fieldSpec = fieldSpecOf(receiver, i);
                 if (!value.testAssignment(keyspace, fieldSpec).isAssignable())
                     throw new InvalidRequestException(String.format("Invalid user type literal for %s: field %s is not of type %s", receiver, field, fieldSpec.type.asCQL3Type()));
             }
         }
 
-        public AssignmentTestable.TestResult testAssignment(String keyspace, ColumnSpecification receiver)
-        {
-            try
-            {
+        public AssignmentTestable.TestResult testAssignment(String keyspace, ColumnSpecification receiver) {
+            try {
                 validateAssignableTo(keyspace, receiver);
                 return AssignmentTestable.TestResult.WEAKLY_ASSIGNABLE;
-            }
-            catch (InvalidRequestException e)
-            {
+            } catch (InvalidRequestException e) {
                 return AssignmentTestable.TestResult.NOT_ASSIGNABLE;
             }
         }
 
         @Override
-        public String toString()
-        {
+        public String toString() {
             StringBuilder sb = new StringBuilder();
             sb.append("{");
             Iterator<Map.Entry<ColumnIdentifier, Term.Raw>> iter = entries.entrySet().iterator();
-            while (iter.hasNext())
-            {
+            while (iter.hasNext()) {
                 Map.Entry<ColumnIdentifier, Term.Raw> entry = iter.next();
                 sb.append(entry.getKey()).append(":").append(entry.getValue());
                 if (iter.hasNext())
@@ -139,43 +135,35 @@ public abstract class UserTypes
     }
 
     // Same purpose than Lists.DelayedValue, except we do handle bind marker in that case
-    public static class DelayedValue extends Term.NonTerminal
-    {
+    public static class DelayedValue extends Term.NonTerminal {
+
         private final UserType type;
+
         private final List<Term> values;
 
-        public DelayedValue(UserType type, List<Term> values)
-        {
+        public DelayedValue(UserType type, List<Term> values) {
             this.type = type;
             this.values = values;
         }
 
-        public Iterable<Function> getFunctions()
-        {
+        public Iterable<Function> getFunctions() {
             return Terms.getFunctions(values);
         }
 
-        public boolean containsBindMarker()
-        {
-            for (Term t : values)
-                if (t.containsBindMarker())
-                    return true;
+        public boolean containsBindMarker() {
+            for (Term t : values) if (t.containsBindMarker())
+                return true;
             return false;
         }
 
-        public void collectMarkerSpecification(VariableSpecifications boundNames)
-        {
-            for (int i = 0; i < type.size(); i++)
-                values.get(i).collectMarkerSpecification(boundNames);
+        public void collectMarkerSpecification(VariableSpecifications boundNames) {
+            for (int i = 0; i < type.size(); i++) values.get(i).collectMarkerSpecification(boundNames);
         }
 
-        private ByteBuffer[] bindInternal(QueryOptions options) throws InvalidRequestException
-        {
+        private ByteBuffer[] bindInternal(QueryOptions options) throws InvalidRequestException {
             int version = options.getProtocolVersion();
-
             ByteBuffer[] buffers = new ByteBuffer[values.size()];
-            for (int i = 0; i < type.size(); i++)
-            {
+            for (int i = 0; i < type.size(); i++) {
                 buffers[i] = values.get(i).bindAndGet(options);
                 // Since A UDT value is always written in its entirety Cassandra can't preserve a pre-existing value by 'not setting' the new value. Reject the query.
                 if (buffers[i] == ByteBufferUtil.UNSET_BYTE_BUFFER)
@@ -183,19 +171,17 @@ public abstract class UserTypes
                 // Inside UDT values, we must force the serialization of collections to v3 whatever protocol
                 // version is in use since we're going to store directly that serialized value.
                 if (version < Server.VERSION_3 && type.fieldType(i).isCollection() && buffers[i] != null)
-                    buffers[i] = ((CollectionType)type.fieldType(i)).getSerializer().reserializeToV3(buffers[i]);
+                    buffers[i] = ((CollectionType) type.fieldType(i)).getSerializer().reserializeToV3(buffers[i]);
             }
             return buffers;
         }
 
-        public Constants.Value bind(QueryOptions options) throws InvalidRequestException
-        {
+        public Constants.Value bind(QueryOptions options) throws InvalidRequestException {
             return new Constants.Value(bindAndGet(options));
         }
 
         @Override
-        public ByteBuffer bindAndGet(QueryOptions options) throws InvalidRequestException
-        {
+        public ByteBuffer bindAndGet(QueryOptions options) throws InvalidRequestException {
             return UserType.buildValue(bindInternal(options));
         }
     }

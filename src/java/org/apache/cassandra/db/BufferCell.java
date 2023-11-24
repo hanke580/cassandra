@@ -18,7 +18,6 @@
 package org.apache.cassandra.db;
 
 import java.nio.ByteBuffer;
-
 import org.apache.cassandra.config.CFMetaData;
 import org.apache.cassandra.db.composites.CellName;
 import org.apache.cassandra.db.composites.CellNames;
@@ -28,76 +27,100 @@ import org.apache.cassandra.utils.concurrent.OpOrder;
 import org.apache.cassandra.utils.memory.AbstractAllocator;
 import org.apache.cassandra.utils.memory.MemtableAllocator;
 
-public class BufferCell extends AbstractCell
-{
+public class BufferCell extends AbstractCell {
+
+    private static final org.slf4j.Logger serialize_logger = org.slf4j.LoggerFactory.getLogger("serialize.logger");
+
+    private java.lang.ThreadLocal<Boolean> isSerializeLoggingActive = new ThreadLocal<Boolean>() {
+
+        @Override
+        protected Boolean initialValue() {
+            return false;
+        }
+    };
+
     private static final long EMPTY_SIZE = ObjectSizes.measure(new BufferCell(CellNames.simpleDense(ByteBuffer.allocate(1))));
 
     protected final CellName name;
+
     protected final ByteBuffer value;
+
     protected final long timestamp;
 
-    BufferCell(CellName name)
-    {
+    BufferCell(CellName name) {
         this(name, ByteBufferUtil.EMPTY_BYTE_BUFFER);
     }
 
-    public BufferCell(CellName name, ByteBuffer value)
-    {
+    public BufferCell(CellName name, ByteBuffer value) {
         this(name, value, 0);
     }
 
-    public BufferCell(CellName name, ByteBuffer value, long timestamp)
-    {
+    public BufferCell(CellName name, ByteBuffer value, long timestamp) {
         assert name != null;
         assert value != null;
-
         this.name = name;
         this.value = value;
         this.timestamp = timestamp;
     }
 
     @Override
-    public Cell withUpdatedName(CellName newName)
-    {
+    public Cell withUpdatedName(CellName newName) {
         return new BufferCell(newName, value, timestamp);
     }
 
     @Override
-    public Cell withUpdatedTimestamp(long newTimestamp)
-    {
+    public Cell withUpdatedTimestamp(long newTimestamp) {
         return new BufferCell(name, value, newTimestamp);
     }
 
     @Override
     public CellName name() {
+        if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+            if (!isSerializeLoggingActive.get()) {
+                isSerializeLoggingActive.set(true);
+                serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(this, this.name, "this.name").toJsonString());
+                isSerializeLoggingActive.set(false);
+            }
+        }
         return name;
     }
 
     @Override
     public ByteBuffer value() {
+        if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+            if (!isSerializeLoggingActive.get()) {
+                isSerializeLoggingActive.set(true);
+                serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(this, this.value, "this.value").toJsonString());
+                isSerializeLoggingActive.set(false);
+            }
+        }
         return value;
     }
 
     @Override
     public long timestamp() {
+        if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+            if (!isSerializeLoggingActive.get()) {
+                isSerializeLoggingActive.set(true);
+                serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(this, this.timestamp, "this.timestamp").toJsonString());
+                isSerializeLoggingActive.set(false);
+            }
+        }
         return timestamp;
     }
 
     @Override
-    public long unsharedHeapSizeExcludingData()
-    {
+    public long unsharedHeapSizeExcludingData() {
         return EMPTY_SIZE + name.unsharedHeapSizeExcludingData() + ObjectSizes.sizeOnHeapExcludingData(value);
     }
 
     @Override
-    public Cell localCopy(CFMetaData metadata, AbstractAllocator allocator)
-    {
+    public Cell localCopy(CFMetaData metadata, AbstractAllocator allocator) {
         return new BufferCell(name.copy(metadata, allocator), allocator.clone(value), timestamp);
     }
 
     @Override
-    public Cell localCopy(CFMetaData metadata, MemtableAllocator allocator, OpOrder.Group opGroup)
-    {
+    public Cell localCopy(CFMetaData metadata, MemtableAllocator allocator, OpOrder.Group opGroup) {
         return allocator.clone(this, metadata, opGroup);
     }
 }

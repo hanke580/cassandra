@@ -29,69 +29,85 @@ import org.apache.cassandra.service.MigrationManager;
 import org.apache.cassandra.service.StorageService;
 import org.apache.cassandra.transport.Event;
 
-public class AlterKeyspaceStatement extends SchemaAlteringStatement
-{
+public class AlterKeyspaceStatement extends SchemaAlteringStatement {
+
+    private static final org.slf4j.Logger serialize_logger = org.slf4j.LoggerFactory.getLogger("serialize.logger");
+
+    private java.lang.ThreadLocal<Boolean> isSerializeLoggingActive = new ThreadLocal<Boolean>() {
+
+        @Override
+        protected Boolean initialValue() {
+            return false;
+        }
+    };
+
     private final String name;
+
     private final KSPropDefs attrs;
 
-    public AlterKeyspaceStatement(String name, KSPropDefs attrs)
-    {
+    public AlterKeyspaceStatement(String name, KSPropDefs attrs) {
         super();
         this.name = name;
         this.attrs = attrs;
     }
 
     @Override
-    public String keyspace()
-    {
+    public String keyspace() {
         return name;
     }
 
-    public void checkAccess(ClientState state) throws UnauthorizedException, InvalidRequestException
-    {
+    public void checkAccess(ClientState state) throws UnauthorizedException, InvalidRequestException {
+        if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+            if (!isSerializeLoggingActive.get()) {
+                isSerializeLoggingActive.set(true);
+                serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(org.apache.cassandra.auth.Permission.class, org.apache.cassandra.auth.Permission.ALTER, "org.apache.cassandra.auth.Permission.ALTER").toJsonString());
+                isSerializeLoggingActive.set(false);
+            }
+        }
         state.hasKeyspaceAccess(name, Permission.ALTER);
     }
 
-    public void validate(ClientState state) throws RequestValidationException
-    {
+    public void validate(ClientState state) throws RequestValidationException {
+        if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+            if (!isSerializeLoggingActive.get()) {
+                isSerializeLoggingActive.set(true);
+                serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(this, this.name, "this.name").toJsonString());
+                isSerializeLoggingActive.set(false);
+            }
+        }
         KSMetaData ksm = Schema.instance.getKSMetaData(name);
         if (ksm == null)
             throw new InvalidRequestException("Unknown keyspace " + name);
         if (ksm.name.equalsIgnoreCase(SystemKeyspace.NAME))
             throw new InvalidRequestException("Cannot alter system keyspace");
-
         attrs.validate();
-
-        if (attrs.getReplicationStrategyClass() == null && !attrs.getReplicationOptions().isEmpty())
-        {
+        if (attrs.getReplicationStrategyClass() == null && !attrs.getReplicationOptions().isEmpty()) {
             throw new ConfigurationException("Missing replication strategy class");
-        }
-        else if (attrs.getReplicationStrategyClass() != null)
-        {
+        } else if (attrs.getReplicationStrategyClass() != null) {
             // The strategy is validated through KSMetaData.validate() in announceKeyspaceUpdate below.
             // However, for backward compatibility with thrift, this doesn't validate unexpected options yet,
             // so doing proper validation here.
-            AbstractReplicationStrategy.validateReplicationStrategy(name,
-                                                                    AbstractReplicationStrategy.getClass(attrs.getReplicationStrategyClass()),
-                                                                    StorageService.instance.getTokenMetadata(),
-                                                                    DatabaseDescriptor.getEndpointSnitch(),
-                                                                    attrs.getReplicationOptions());
+            AbstractReplicationStrategy.validateReplicationStrategy(name, AbstractReplicationStrategy.getClass(attrs.getReplicationStrategyClass()), StorageService.instance.getTokenMetadata(), DatabaseDescriptor.getEndpointSnitch(), attrs.getReplicationOptions());
         }
     }
 
-    public boolean announceMigration(boolean isLocalOnly) throws RequestValidationException
-    {
+    public boolean announceMigration(boolean isLocalOnly) throws RequestValidationException {
+        if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+            if (!isSerializeLoggingActive.get()) {
+                isSerializeLoggingActive.set(true);
+                serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(this, this.name, "this.name").toJsonString());
+                isSerializeLoggingActive.set(false);
+            }
+        }
         KSMetaData ksm = Schema.instance.getKSMetaData(name);
         // In the (very) unlikely case the keyspace was dropped since validate()
         if (ksm == null)
             throw new InvalidRequestException("Unknown keyspace " + name);
-
         MigrationManager.announceKeyspaceUpdate(attrs.asKSMetadataUpdate(ksm), isLocalOnly);
         return true;
     }
 
-    public Event.SchemaChange changeEvent()
-    {
+    public Event.SchemaChange changeEvent() {
         return new Event.SchemaChange(Event.SchemaChange.Change.UPDATED, keyspace());
     }
 }

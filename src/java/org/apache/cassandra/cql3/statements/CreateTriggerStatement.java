@@ -19,7 +19,6 @@ package org.apache.cassandra.cql3.statements;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-
 import org.apache.cassandra.config.CFMetaData;
 import org.apache.cassandra.config.Schema;
 import org.apache.cassandra.config.TriggerDefinition;
@@ -34,48 +33,57 @@ import org.apache.cassandra.thrift.ThriftValidation;
 import org.apache.cassandra.transport.Event;
 import org.apache.cassandra.triggers.TriggerExecutor;
 
-public class CreateTriggerStatement extends SchemaAlteringStatement
-{
+public class CreateTriggerStatement extends SchemaAlteringStatement {
+
+    private static final org.slf4j.Logger serialize_logger = org.slf4j.LoggerFactory.getLogger("serialize.logger");
+
+    private java.lang.ThreadLocal<Boolean> isSerializeLoggingActive = new ThreadLocal<Boolean>() {
+
+        @Override
+        protected Boolean initialValue() {
+            return false;
+        }
+    };
+
     private static final Logger logger = LoggerFactory.getLogger(CreateTriggerStatement.class);
 
     private final String triggerName;
+
     private final String triggerClass;
+
     private final boolean ifNotExists;
 
-    public CreateTriggerStatement(CFName name, String triggerName, String clazz, boolean ifNotExists)
-    {
+    public CreateTriggerStatement(CFName name, String triggerName, String clazz, boolean ifNotExists) {
         super(name);
         this.triggerName = triggerName;
         this.triggerClass = clazz;
         this.ifNotExists = ifNotExists;
     }
 
-    public void checkAccess(ClientState state) throws UnauthorizedException
-    {
+    public void checkAccess(ClientState state) throws UnauthorizedException {
         state.ensureIsSuper("Only superusers are allowed to perform CREATE TRIGGER queries");
     }
 
-    public void validate(ClientState state) throws RequestValidationException
-    {
+    public void validate(ClientState state) throws RequestValidationException {
         ThriftValidation.validateColumnFamily(keyspace(), columnFamily());
-        try
-        {
+        try {
+            if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+                if (!isSerializeLoggingActive.get()) {
+                    isSerializeLoggingActive.set(true);
+                    serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(this, this.triggerClass, "this.triggerClass").toJsonString());
+                    isSerializeLoggingActive.set(false);
+                }
+            }
             TriggerExecutor.instance.loadTriggerInstance(triggerClass);
-        }
-        catch (Exception e)
-        {
+        } catch (Exception e) {
             throw new ConfigurationException(String.format("Trigger class '%s' doesn't exist", triggerClass));
         }
     }
 
-    public boolean announceMigration(boolean isLocalOnly) throws ConfigurationException, InvalidRequestException
-    {
+    public boolean announceMigration(boolean isLocalOnly) throws ConfigurationException, InvalidRequestException {
         CFMetaData cfm = Schema.instance.getCFMetaData(keyspace(), columnFamily()).copy();
-
         TriggerDefinition triggerDefinition = TriggerDefinition.create(triggerName, triggerClass);
-
-        if (!ifNotExists || !cfm.containsTriggerDefinition(triggerDefinition))
-        {
+        if (!ifNotExists || !cfm.containsTriggerDefinition(triggerDefinition)) {
             cfm.addTriggerDefinition(triggerDefinition);
             logger.info("Adding trigger with name {} and class {}", triggerName, triggerClass);
             MigrationManager.announceColumnFamilyUpdate(cfm, isLocalOnly);
@@ -84,8 +92,7 @@ public class CreateTriggerStatement extends SchemaAlteringStatement
         return false;
     }
 
-    public Event.SchemaChange changeEvent()
-    {
+    public Event.SchemaChange changeEvent() {
         return new Event.SchemaChange(Event.SchemaChange.Change.UPDATED, Event.SchemaChange.Target.TABLE, keyspace(), columnFamily());
     }
 }

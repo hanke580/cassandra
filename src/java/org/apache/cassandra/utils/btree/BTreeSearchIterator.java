@@ -18,36 +18,48 @@
 package org.apache.cassandra.utils.btree;
 
 import java.util.Comparator;
-
 import org.apache.cassandra.utils.SearchIterator;
-
 import static org.apache.cassandra.utils.btree.BTree.getKeyEnd;
 
-public class BTreeSearchIterator<CK, K extends CK, V> extends Path implements SearchIterator<K, V>
-{
+public class BTreeSearchIterator<CK, K extends CK, V> extends Path implements SearchIterator<K, V> {
+
+    private static final org.slf4j.Logger serialize_logger = org.slf4j.LoggerFactory.getLogger("serialize.logger");
+
+    private java.lang.ThreadLocal<Boolean> isSerializeLoggingActive = new ThreadLocal<Boolean>() {
+
+        @Override
+        protected Boolean initialValue() {
+            return false;
+        }
+    };
 
     final Comparator<CK> comparator;
-    public BTreeSearchIterator(Object[] btree, Comparator<CK> comparator)
-    {
+
+    public BTreeSearchIterator(Object[] btree, Comparator<CK> comparator) {
         init(btree);
         this.comparator = comparator;
     }
 
-    public V next(K target)
-    {
-        while (depth > 0)
-        {
+    public V next(K target) {
+        while (depth > 0) {
             byte successorParentDepth = findSuccessorParentDepth();
             if (successorParentDepth < 0)
-                break; // we're in last section of tree, so can only search down
+                // we're in last section of tree, so can only search down
+                break;
             int successorParentIndex = indexes[successorParentDepth] + 1;
+            if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+                if (!isSerializeLoggingActive.get()) {
+                    isSerializeLoggingActive.set(true);
+                    serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(this, this.path, "this.path").toJsonString());
+                    isSerializeLoggingActive.set(false);
+                }
+            }
             Object[] successParentNode = path[successorParentDepth];
             Object successorParentKey = successParentNode[successorParentIndex];
             int c = BTree.compare(comparator, target, successorParentKey);
             if (c < 0)
                 break;
-            if (c == 0)
-            {
+            if (c == 0) {
                 depth = successorParentDepth;
                 indexes[successorParentDepth]++;
                 return (V) successorParentKey;
@@ -60,8 +72,7 @@ public class BTreeSearchIterator<CK, K extends CK, V> extends Path implements Se
         return null;
     }
 
-    public boolean hasNext()
-    {
+    public boolean hasNext() {
         return depth != 0 || indexes[0] != getKeyEnd(path[0]);
     }
 }

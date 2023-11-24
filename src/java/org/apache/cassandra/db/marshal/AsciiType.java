@@ -22,10 +22,8 @@ import java.nio.CharBuffer;
 import java.nio.charset.Charset;
 import java.nio.charset.CharsetEncoder;
 import java.nio.charset.CharacterCodingException;
-
 import org.apache.cassandra.cql3.Constants;
 import org.apache.cassandra.cql3.Json;
-
 import org.apache.cassandra.cql3.CQL3Type;
 import org.apache.cassandra.cql3.Term;
 import org.apache.cassandra.serializers.MarshalException;
@@ -33,81 +31,81 @@ import org.apache.cassandra.serializers.TypeSerializer;
 import org.apache.cassandra.serializers.AsciiSerializer;
 import org.apache.cassandra.utils.ByteBufferUtil;
 
-public class AsciiType extends AbstractType<String>
-{
+public class AsciiType extends AbstractType<String> {
+
+    private static final org.slf4j.Logger serialize_logger = org.slf4j.LoggerFactory.getLogger("serialize.logger");
+
+    private java.lang.ThreadLocal<Boolean> isSerializeLoggingActive = new ThreadLocal<Boolean>() {
+
+        @Override
+        protected Boolean initialValue() {
+            return false;
+        }
+    };
+
     public static final AsciiType instance = new AsciiType();
 
-    AsciiType() {} // singleton
+    // singleton
+    AsciiType() {
+    }
 
-    private final ThreadLocal<CharsetEncoder> encoder = new ThreadLocal<CharsetEncoder>()
-    {
+    private final ThreadLocal<CharsetEncoder> encoder = new ThreadLocal<CharsetEncoder>() {
+
         @Override
-        protected CharsetEncoder initialValue()
-        {
+        protected CharsetEncoder initialValue() {
             return Charset.forName("US-ASCII").newEncoder();
         }
     };
 
-    public int compare(ByteBuffer o1, ByteBuffer o2)
-    {
+    public int compare(ByteBuffer o1, ByteBuffer o2) {
         return ByteBufferUtil.compareUnsigned(o1, o2);
     }
 
-    public ByteBuffer fromString(String source)
-    {
+    public ByteBuffer fromString(String source) {
         // the encoder must be reset each time it's used, hence the thread-local storage
         CharsetEncoder theEncoder = encoder.get();
         theEncoder.reset();
-
-        try
-        {
+        try {
             return theEncoder.encode(CharBuffer.wrap(source));
-        }
-        catch (CharacterCodingException exc)
-        {
+        } catch (CharacterCodingException exc) {
             throw new MarshalException(String.format("Invalid ASCII character in string literal: %s", exc));
         }
     }
 
     @Override
-    public Term fromJSONObject(Object parsed) throws MarshalException
-    {
-        try
-        {
+    public Term fromJSONObject(Object parsed) throws MarshalException {
+        try {
             return new Constants.Value(fromString((String) parsed));
-        }
-        catch (ClassCastException exc)
-        {
-            throw new MarshalException(String.format(
-                    "Expected an ascii string, but got a %s: %s", parsed.getClass().getSimpleName(), parsed));
+        } catch (ClassCastException exc) {
+            throw new MarshalException(String.format("Expected an ascii string, but got a %s: %s", parsed.getClass().getSimpleName(), parsed));
         }
     }
 
     @Override
-    public String toJSONString(ByteBuffer buffer, int protocolVersion)
-    {
-        try
-        {
+    public String toJSONString(ByteBuffer buffer, int protocolVersion) {
+        try {
             return '"' + Json.quoteAsJsonString(ByteBufferUtil.string(buffer, Charset.forName("US-ASCII"))) + '"';
-        }
-        catch (CharacterCodingException exc)
-        {
+        } catch (CharacterCodingException exc) {
             throw new AssertionError("ascii value contained non-ascii characters: ", exc);
         }
     }
 
-    public CQL3Type asCQL3Type()
-    {
+    public CQL3Type asCQL3Type() {
         return CQL3Type.Native.ASCII;
     }
 
-    public TypeSerializer<String> getSerializer()
-    {
+    public TypeSerializer<String> getSerializer() {
+        if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+            if (!isSerializeLoggingActive.get()) {
+                isSerializeLoggingActive.set(true);
+                serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(org.apache.cassandra.serializers.AsciiSerializer.class, org.apache.cassandra.serializers.AsciiSerializer.instance, "org.apache.cassandra.serializers.AsciiSerializer.instance").toJsonString());
+                isSerializeLoggingActive.set(false);
+            }
+        }
         return AsciiSerializer.instance;
     }
 
-    public boolean isByteOrderComparable()
-    {
+    public boolean isByteOrderComparable() {
         return true;
     }
 }

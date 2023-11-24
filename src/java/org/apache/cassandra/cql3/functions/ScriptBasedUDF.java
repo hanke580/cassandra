@@ -23,7 +23,6 @@ import java.nio.ByteBuffer;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-
 import javax.script.Bindings;
 import javax.script.Compilable;
 import javax.script.CompiledScript;
@@ -32,85 +31,74 @@ import javax.script.ScriptEngineFactory;
 import javax.script.ScriptEngineManager;
 import javax.script.ScriptException;
 import javax.script.SimpleBindings;
-
 import org.apache.cassandra.cql3.ColumnIdentifier;
 import org.apache.cassandra.db.marshal.AbstractType;
 import org.apache.cassandra.exceptions.FunctionExecutionException;
 import org.apache.cassandra.exceptions.InvalidRequestException;
 
-public class ScriptBasedUDF extends UDFunction
-{
+public class ScriptBasedUDF extends UDFunction {
+
+    private static final org.slf4j.Logger serialize_logger = org.slf4j.LoggerFactory.getLogger("serialize.logger");
+
+    private java.lang.ThreadLocal<Boolean> isSerializeLoggingActive = new ThreadLocal<Boolean>() {
+
+        @Override
+        protected Boolean initialValue() {
+            return false;
+        }
+    };
+
     static final Map<String, Compilable> scriptEngines = new HashMap<>();
 
     static {
         ScriptEngineManager scriptEngineManager = new ScriptEngineManager();
-        for (ScriptEngineFactory scriptEngineFactory : scriptEngineManager.getEngineFactories())
-        {
+        for (ScriptEngineFactory scriptEngineFactory : scriptEngineManager.getEngineFactories()) {
             ScriptEngine scriptEngine = scriptEngineFactory.getScriptEngine();
             boolean compilable = scriptEngine instanceof Compilable;
-            if (compilable)
-            {
-                logger.info("Found scripting engine {} {} - {} {} - language names: {}",
-                            scriptEngineFactory.getEngineName(), scriptEngineFactory.getEngineVersion(),
-                            scriptEngineFactory.getLanguageName(), scriptEngineFactory.getLanguageVersion(),
-                            scriptEngineFactory.getNames());
-                for (String name : scriptEngineFactory.getNames())
-                    scriptEngines.put(name, (Compilable) scriptEngine);
+            if (compilable) {
+                logger.info("Found scripting engine {} {} - {} {} - language names: {}", scriptEngineFactory.getEngineName(), scriptEngineFactory.getEngineVersion(), scriptEngineFactory.getLanguageName(), scriptEngineFactory.getLanguageVersion(), scriptEngineFactory.getNames());
+                for (String name : scriptEngineFactory.getNames()) scriptEngines.put(name, (Compilable) scriptEngine);
             }
         }
     }
 
     private final CompiledScript script;
 
-    ScriptBasedUDF(FunctionName name,
-                   List<ColumnIdentifier> argNames,
-                   List<AbstractType<?>> argTypes,
-                   AbstractType<?> returnType,
-                   boolean calledOnNullInput,
-                   String language,
-                   String body)
-    throws InvalidRequestException
-    {
+    ScriptBasedUDF(FunctionName name, List<ColumnIdentifier> argNames, List<AbstractType<?>> argTypes, AbstractType<?> returnType, boolean calledOnNullInput, String language, String body) throws InvalidRequestException {
         super(name, argNames, argTypes, returnType, calledOnNullInput, language, body);
-
         Compilable scriptEngine = scriptEngines.get(language);
         if (scriptEngine == null)
             throw new InvalidRequestException(String.format("Invalid language '%s' for function '%s'", language, name));
-
-        try
-        {
+        try {
             this.script = scriptEngine.compile(body);
-        }
-        catch (RuntimeException | ScriptException e)
-        {
+        } catch (RuntimeException | ScriptException e) {
             logger.info("Failed to compile function '{}' for language {}: ", name, language, e);
-            throw new InvalidRequestException(
-                    String.format("Failed to compile function '%s' for language %s: %s", name, language, e));
+            throw new InvalidRequestException(String.format("Failed to compile function '%s' for language %s: %s", name, language, e));
         }
     }
 
-    public ByteBuffer executeUserDefined(int protocolVersion, List<ByteBuffer> parameters) throws InvalidRequestException
-    {
+    public ByteBuffer executeUserDefined(int protocolVersion, List<ByteBuffer> parameters) throws InvalidRequestException {
         Object[] params = new Object[argTypes.size()];
-        for (int i = 0; i < params.length; i++)
-            params[i] = compose(protocolVersion, i, parameters.get(i));
-
-        try
-        {
+        for (int i = 0; i < params.length; i++) params[i] = compose(protocolVersion, i, parameters.get(i));
+        try {
             Bindings bindings = new SimpleBindings();
-            for (int i = 0; i < params.length; i++)
+            for (int i = 0; i < params.length; i++) {
                 bindings.put(argNames.get(i).toString(), params[i]);
-
+                if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+                    if (!isSerializeLoggingActive.get()) {
+                        isSerializeLoggingActive.set(true);
+                        serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(params, params[i], "params[i]").toJsonString());
+                        isSerializeLoggingActive.set(false);
+                    }
+                }
+            }
             Object result = script.eval(bindings);
             if (result == null)
                 return null;
-
             Class<?> javaReturnType = returnDataType.asJavaClass();
             Class<?> resultType = result.getClass();
-            if (!javaReturnType.isAssignableFrom(resultType))
-            {
-                if (result instanceof Number)
-                {
+            if (!javaReturnType.isAssignableFrom(resultType)) {
+                if (result instanceof Number) {
                     Number rNumber = (Number) result;
                     if (javaReturnType == Integer.class)
                         result = rNumber.intValue();
@@ -124,25 +112,20 @@ public class ScriptBasedUDF extends UDFunction
                         result = rNumber.floatValue();
                     else if (javaReturnType == Double.class)
                         result = rNumber.doubleValue();
-                    else if (javaReturnType == BigInteger.class)
-                    {
+                    else if (javaReturnType == BigInteger.class) {
                         if (rNumber instanceof BigDecimal)
-                            result = ((BigDecimal)rNumber).toBigInteger();
+                            result = ((BigDecimal) rNumber).toBigInteger();
                         else if (rNumber instanceof Double || rNumber instanceof Float)
                             result = new BigDecimal(rNumber.toString()).toBigInteger();
                         else
                             result = BigInteger.valueOf(rNumber.longValue());
-                    }
-                    else if (javaReturnType == BigDecimal.class)
+                    } else if (javaReturnType == BigDecimal.class)
                         // String c'tor of BigDecimal is more accurate than valueOf(double)
                         result = new BigDecimal(rNumber.toString());
                 }
             }
-
             return decompose(protocolVersion, result);
-        }
-        catch (RuntimeException | ScriptException e)
-        {
+        } catch (RuntimeException | ScriptException e) {
             logger.trace("Execution of UDF '{}' failed", name, e);
             throw FunctionExecutionException.create(this, e);
         }

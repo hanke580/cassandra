@@ -21,9 +21,7 @@ import java.io.DataInput;
 import java.io.IOException;
 import java.io.Serializable;
 import java.util.UUID;
-
 import com.google.common.base.Objects;
-
 import org.apache.cassandra.db.TypeSizes;
 import org.apache.cassandra.io.IVersionedSerializer;
 import org.apache.cassandra.io.util.DataOutputPlus;
@@ -33,8 +31,10 @@ import org.apache.cassandra.utils.UUIDSerializer;
 /**
  * Summary of streaming.
  */
-public class StreamSummary implements Serializable
-{
+public class StreamSummary implements Serializable {
+
+    private static final org.slf4j.Logger serialize_logger = org.slf4j.LoggerFactory.getLogger("serialize.logger");
+
     public static final IVersionedSerializer<StreamSummary> serializer = new StreamSummarySerializer();
 
     public final UUID cfId;
@@ -43,33 +43,32 @@ public class StreamSummary implements Serializable
      * Number of files to transfer. Can be 0 if nothing to transfer for some streaming request.
      */
     public final int files;
+
     public final long totalSize;
 
-    public StreamSummary(UUID cfId, int files, long totalSize)
-    {
+    public StreamSummary(UUID cfId, int files, long totalSize) {
         this.cfId = cfId;
         this.files = files;
         this.totalSize = totalSize;
     }
 
     @Override
-    public boolean equals(Object o)
-    {
-        if (this == o) return true;
-        if (o == null || getClass() != o.getClass()) return false;
+    public boolean equals(Object o) {
+        if (this == o)
+            return true;
+        if (o == null || getClass() != o.getClass())
+            return false;
         StreamSummary summary = (StreamSummary) o;
         return files == summary.files && totalSize == summary.totalSize && cfId.equals(summary.cfId);
     }
 
     @Override
-    public int hashCode()
-    {
+    public int hashCode() {
         return Objects.hashCode(cfId, files, totalSize);
     }
 
     @Override
-    public String toString()
-    {
+    public String toString() {
         final StringBuilder sb = new StringBuilder("StreamSummary{");
         sb.append("path=").append(cfId);
         sb.append(", files=").append(files);
@@ -78,26 +77,45 @@ public class StreamSummary implements Serializable
         return sb.toString();
     }
 
-    public static class StreamSummarySerializer implements IVersionedSerializer<StreamSummary>
-    {
+    public static class StreamSummarySerializer implements IVersionedSerializer<StreamSummary> {
+
+        private java.lang.ThreadLocal<Boolean> isSerializeLoggingActive = new ThreadLocal<Boolean>() {
+
+            @Override
+            protected Boolean initialValue() {
+                return false;
+            }
+        };
+
         // arbitrary version is fine for UUIDSerializer for now...
-        public void serialize(StreamSummary summary, DataOutputPlus out, int version) throws IOException
-        {
+        public void serialize(StreamSummary summary, DataOutputPlus out, int version) throws IOException {
             UUIDSerializer.serializer.serialize(summary.cfId, out, MessagingService.current_version);
+            if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+                if (!isSerializeLoggingActive.get()) {
+                    isSerializeLoggingActive.set(true);
+                    serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(summary, summary.files, "summary.files").toJsonString());
+                    isSerializeLoggingActive.set(false);
+                }
+            }
             out.writeInt(summary.files);
+            if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+                if (!isSerializeLoggingActive.get()) {
+                    isSerializeLoggingActive.set(true);
+                    serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(summary, summary.totalSize, "summary.totalSize").toJsonString());
+                    isSerializeLoggingActive.set(false);
+                }
+            }
             out.writeLong(summary.totalSize);
         }
 
-        public StreamSummary deserialize(DataInput in, int version) throws IOException
-        {
+        public StreamSummary deserialize(DataInput in, int version) throws IOException {
             UUID cfId = UUIDSerializer.serializer.deserialize(in, MessagingService.current_version);
             int files = in.readInt();
             long totalSize = in.readLong();
             return new StreamSummary(cfId, files, totalSize);
         }
 
-        public long serializedSize(StreamSummary summary, int version)
-        {
+        public long serializedSize(StreamSummary summary, int version) {
             long size = UUIDSerializer.serializer.serializedSize(summary.cfId, MessagingService.current_version);
             size += TypeSizes.NATIVE.sizeof(summary.files);
             size += TypeSizes.NATIVE.sizeof(summary.totalSize);

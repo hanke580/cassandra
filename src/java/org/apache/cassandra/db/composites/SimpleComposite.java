@@ -18,7 +18,6 @@
 package org.apache.cassandra.db.composites;
 
 import java.nio.ByteBuffer;
-
 import org.apache.cassandra.config.CFMetaData;
 import org.apache.cassandra.utils.memory.AbstractAllocator;
 import org.apache.cassandra.utils.ObjectSizes;
@@ -26,14 +25,23 @@ import org.apache.cassandra.utils.ObjectSizes;
 /**
  * A "simple" (not-truly-composite) Composite.
  */
-public class SimpleComposite extends AbstractComposite
-{
+public class SimpleComposite extends AbstractComposite {
+
+    private static final org.slf4j.Logger serialize_logger = org.slf4j.LoggerFactory.getLogger("serialize.logger");
+
+    private java.lang.ThreadLocal<Boolean> isSerializeLoggingActive = new ThreadLocal<Boolean>() {
+
+        @Override
+        protected Boolean initialValue() {
+            return false;
+        }
+    };
+
     private static final long EMPTY_SIZE = ObjectSizes.measure(new SimpleComposite(ByteBuffer.allocate(1)));
 
     protected final ByteBuffer element;
 
-    SimpleComposite(ByteBuffer element)
-    {
+    SimpleComposite(ByteBuffer element) {
         // We have to be careful with empty ByteBuffers as we shouldn't store them.
         // To avoid errors (and so isEmpty() works as we intend), we don't allow simpleComposite with
         // an empty element (but it's ok for CompoundComposite, it's a row marker in that case).
@@ -41,39 +49,46 @@ public class SimpleComposite extends AbstractComposite
         this.element = element;
     }
 
-    public int size()
-    {
+    public int size() {
         return 1;
     }
 
-    public ByteBuffer get(int i)
-    {
+    public ByteBuffer get(int i) {
         if (i != 0)
             throw new IndexOutOfBoundsException();
-
+        if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+            if (!isSerializeLoggingActive.get()) {
+                isSerializeLoggingActive.set(true);
+                serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(this, this.element, "this.element").toJsonString());
+                isSerializeLoggingActive.set(false);
+            }
+        }
         return element;
     }
 
     @Override
-    public Composite withEOC(EOC newEoc)
-    {
+    public Composite withEOC(EOC newEoc) {
         // EOC makes no sense for not truly composites.
         return this;
     }
 
     @Override
-    public ByteBuffer toByteBuffer()
-    {
+    public ByteBuffer toByteBuffer() {
+        if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+            if (!isSerializeLoggingActive.get()) {
+                isSerializeLoggingActive.set(true);
+                serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(this, this.element, "this.element").toJsonString());
+                isSerializeLoggingActive.set(false);
+            }
+        }
         return element;
     }
 
-    public long unsharedHeapSize()
-    {
+    public long unsharedHeapSize() {
         return EMPTY_SIZE + ObjectSizes.sizeOnHeapOf(element);
     }
 
-    public Composite copy(CFMetaData cfm, AbstractAllocator allocator)
-    {
+    public Composite copy(CFMetaData cfm, AbstractAllocator allocator) {
         return new SimpleComposite(allocator.clone(element));
     }
 }

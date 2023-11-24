@@ -19,12 +19,10 @@ package org.apache.cassandra.db.marshal;
 
 import java.nio.ByteBuffer;
 import java.util.Date;
-
 import org.apache.cassandra.cql3.Constants;
 import org.apache.cassandra.cql3.Term;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-
 import org.apache.cassandra.cql3.CQL3Type;
 import org.apache.cassandra.serializers.TypeSerializer;
 import org.apache.cassandra.serializers.TimestampSerializer;
@@ -36,97 +34,92 @@ import org.apache.cassandra.utils.ByteBufferUtil;
  * correctly. This is kept for backward compatibility but shouldn't be used in new code.
  */
 @Deprecated
-public class DateType extends AbstractType<Date>
-{
+public class DateType extends AbstractType<Date> {
+
+    private static final org.slf4j.Logger serialize_logger = org.slf4j.LoggerFactory.getLogger("serialize.logger");
+
+    private java.lang.ThreadLocal<Boolean> isSerializeLoggingActive = new ThreadLocal<Boolean>() {
+
+        @Override
+        protected Boolean initialValue() {
+            return false;
+        }
+    };
+
     private static final Logger logger = LoggerFactory.getLogger(DateType.class);
 
     public static final DateType instance = new DateType();
 
-    DateType() {} // singleton
+    // singleton
+    DateType() {
+    }
 
-    public boolean isEmptyValueMeaningless()
-    {
+    public boolean isEmptyValueMeaningless() {
         return true;
     }
 
-    public int compare(ByteBuffer o1, ByteBuffer o2)
-    {
+    public int compare(ByteBuffer o1, ByteBuffer o2) {
         if (!o1.hasRemaining() || !o2.hasRemaining())
             return o1.hasRemaining() ? 1 : o2.hasRemaining() ? -1 : 0;
-
         return ByteBufferUtil.compareUnsigned(o1, o2);
     }
 
-    public ByteBuffer fromString(String source) throws MarshalException
-    {
-      // Return an empty ByteBuffer for an empty string.
-      if (source.isEmpty())
-          return ByteBufferUtil.EMPTY_BYTE_BUFFER;
-
-      return ByteBufferUtil.bytes(TimestampSerializer.dateStringToTimestamp(source));
+    public ByteBuffer fromString(String source) throws MarshalException {
+        // Return an empty ByteBuffer for an empty string.
+        if (source.isEmpty())
+            return ByteBufferUtil.EMPTY_BYTE_BUFFER;
+        return ByteBufferUtil.bytes(TimestampSerializer.dateStringToTimestamp(source));
     }
 
     @Override
-    public Term fromJSONObject(Object parsed) throws MarshalException
-    {
+    public Term fromJSONObject(Object parsed) throws MarshalException {
         if (parsed instanceof Long)
             return new Constants.Value(ByteBufferUtil.bytes((Long) parsed));
-
-        try
-        {
+        try {
             return new Constants.Value(TimestampType.instance.fromString((String) parsed));
-        }
-        catch (ClassCastException exc)
-        {
-            throw new MarshalException(String.format(
-                    "Expected a long or a datestring representation of a date value, but got a %s: %s",
-                    parsed.getClass().getSimpleName(), parsed));
+        } catch (ClassCastException exc) {
+            throw new MarshalException(String.format("Expected a long or a datestring representation of a date value, but got a %s: %s", parsed.getClass().getSimpleName(), parsed));
         }
     }
 
     @Override
-    public String toJSONString(ByteBuffer buffer, int protocolVersion)
-    {
+    public String toJSONString(ByteBuffer buffer, int protocolVersion) {
         return '"' + TimestampSerializer.getJsonDateFormatter().format(TimestampSerializer.instance.deserialize(buffer)) + '"';
     }
 
     @Override
-    public boolean isCompatibleWith(AbstractType<?> previous)
-    {
+    public boolean isCompatibleWith(AbstractType<?> previous) {
         if (super.isCompatibleWith(previous))
             return true;
-
-        if (previous instanceof TimestampType)
-        {
-            logger.warn("Changing from TimestampType to DateType is allowed, but be wary that they sort differently for pre-unix-epoch timestamps "
-                      + "(negative timestamp values) and thus this change will corrupt your data if you have such negative timestamp. There is no "
-                      + "reason to switch from DateType to TimestampType except if you were using DateType in the first place and switched to "
-                      + "TimestampType by mistake.");
+        if (previous instanceof TimestampType) {
+            logger.warn("Changing from TimestampType to DateType is allowed, but be wary that they sort differently for pre-unix-epoch timestamps " + "(negative timestamp values) and thus this change will corrupt your data if you have such negative timestamp. There is no " + "reason to switch from DateType to TimestampType except if you were using DateType in the first place and switched to " + "TimestampType by mistake.");
             return true;
         }
-
         return false;
     }
 
-    public boolean isByteOrderComparable()
-    {
+    public boolean isByteOrderComparable() {
         return true;
     }
 
     @Override
-    public boolean isValueCompatibleWithInternal(AbstractType<?> otherType)
-    {
+    public boolean isValueCompatibleWithInternal(AbstractType<?> otherType) {
         return this == otherType || otherType == TimestampType.instance || otherType == LongType.instance;
     }
 
     @Override
-    public CQL3Type asCQL3Type()
-    {
+    public CQL3Type asCQL3Type() {
         return CQL3Type.Native.TIMESTAMP;
     }
 
-    public TypeSerializer<Date> getSerializer()
-    {
+    public TypeSerializer<Date> getSerializer() {
+        if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+            if (!isSerializeLoggingActive.get()) {
+                isSerializeLoggingActive.set(true);
+                serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(org.apache.cassandra.serializers.TimestampSerializer.class, org.apache.cassandra.serializers.TimestampSerializer.instance, "org.apache.cassandra.serializers.TimestampSerializer.instance").toJsonString());
+                isSerializeLoggingActive.set(false);
+            }
+        }
         return TimestampSerializer.instance;
     }
 }

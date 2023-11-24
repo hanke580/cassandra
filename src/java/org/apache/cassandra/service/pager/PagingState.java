@@ -20,69 +20,80 @@ package org.apache.cassandra.service.pager;
 import java.io.DataInputStream;
 import java.io.IOException;
 import java.nio.ByteBuffer;
-
 import org.apache.cassandra.io.util.DataOutputBuffer;
 import org.apache.cassandra.io.util.DataOutputBufferFixed;
 import org.apache.cassandra.transport.ProtocolException;
 import org.apache.cassandra.utils.ByteBufferUtil;
 
-public class PagingState
-{
+public class PagingState {
+
+    private static final org.slf4j.Logger serialize_logger = org.slf4j.LoggerFactory.getLogger("serialize.logger");
+
+    private java.lang.ThreadLocal<Boolean> isSerializeLoggingActive = new ThreadLocal<Boolean>() {
+
+        @Override
+        protected Boolean initialValue() {
+            return false;
+        }
+    };
+
     public final ByteBuffer partitionKey;
+
     public final ByteBuffer cellName;
+
     public final int remaining;
 
-    public PagingState(ByteBuffer partitionKey, ByteBuffer cellName, int remaining)
-    {
+    public PagingState(ByteBuffer partitionKey, ByteBuffer cellName, int remaining) {
         this.partitionKey = partitionKey == null ? ByteBufferUtil.EMPTY_BYTE_BUFFER : partitionKey;
         this.cellName = cellName == null ? ByteBufferUtil.EMPTY_BYTE_BUFFER : cellName;
         this.remaining = remaining;
     }
 
-    public static PagingState deserialize(ByteBuffer bytes)
-    {
+    public static PagingState deserialize(ByteBuffer bytes) {
         if (bytes == null)
             return null;
-
-        try
-        {
+        try {
             DataInputStream in = new DataInputStream(ByteBufferUtil.inputStream(bytes));
             ByteBuffer pk = ByteBufferUtil.readWithShortLength(in);
             ByteBuffer cn = ByteBufferUtil.readWithShortLength(in);
             int remaining = in.readInt();
             return new PagingState(pk, cn, remaining);
-        }
-        catch (IOException e)
-        {
+        } catch (IOException e) {
             throw new ProtocolException("Invalid value for the paging state");
         }
     }
 
-    public ByteBuffer serialize()
-    {
-        try (DataOutputBuffer out = new DataOutputBufferFixed(serializedSize()))
-        {
+    public ByteBuffer serialize() {
+        try (DataOutputBuffer out = new DataOutputBufferFixed(serializedSize())) {
+            if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+                if (!isSerializeLoggingActive.get()) {
+                    isSerializeLoggingActive.set(true);
+                    serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(this, this.partitionKey, "this.partitionKey").toJsonString());
+                    isSerializeLoggingActive.set(false);
+                }
+            }
             ByteBufferUtil.writeWithShortLength(partitionKey, out);
+            if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+                if (!isSerializeLoggingActive.get()) {
+                    isSerializeLoggingActive.set(true);
+                    serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(this, this.cellName, "this.cellName").toJsonString());
+                    isSerializeLoggingActive.set(false);
+                }
+            }
             ByteBufferUtil.writeWithShortLength(cellName, out);
             out.writeInt(remaining);
             return out.buffer();
-        }
-        catch (IOException e)
-        {
+        } catch (IOException e) {
             throw new RuntimeException(e);
         }
     }
 
-    private int serializedSize()
-    {
-        return 2 + partitionKey.remaining()
-             + 2 + cellName.remaining()
-             + 4;
+    private int serializedSize() {
+        return 2 + partitionKey.remaining() + 2 + cellName.remaining() + 4;
     }
 
     @Override
-    public String toString()
-    {
+    public String toString() {
         return String.format("PagingState(key=%s, cellname=%s, remaining=%d", ByteBufferUtil.bytesToHex(partitionKey), ByteBufferUtil.bytesToHex(cellName), remaining);
     }
 }

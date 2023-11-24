@@ -18,7 +18,6 @@
 package org.apache.cassandra.cql3.selection;
 
 import java.nio.ByteBuffer;
-
 import org.apache.cassandra.config.ColumnDefinition;
 import org.apache.cassandra.cql3.ColumnSpecification;
 import org.apache.cassandra.cql3.selection.Selection.ResultSetBuilder;
@@ -27,96 +26,112 @@ import org.apache.cassandra.db.marshal.Int32Type;
 import org.apache.cassandra.db.marshal.LongType;
 import org.apache.cassandra.utils.ByteBufferUtil;
 
-final class WritetimeOrTTLSelector extends Selector
-{
+final class WritetimeOrTTLSelector extends Selector {
+
+    private static final org.slf4j.Logger serialize_logger = org.slf4j.LoggerFactory.getLogger("serialize.logger");
+
+    private java.lang.ThreadLocal<Boolean> isSerializeLoggingActive = new ThreadLocal<Boolean>() {
+
+        @Override
+        protected Boolean initialValue() {
+            return false;
+        }
+    };
+
     private final String columnName;
+
     private final int idx;
+
     private final boolean isWritetime;
+
     private ByteBuffer current;
+
     private boolean isSet;
 
-    public static Factory newFactory(final ColumnDefinition def, final int idx, final boolean isWritetime)
-    {
-        return new Factory()
-        {
-            protected String getColumnName()
-            {
+    public static Factory newFactory(final ColumnDefinition def, final int idx, final boolean isWritetime) {
+        return new Factory() {
+
+            protected String getColumnName() {
                 return String.format("%s(%s)", isWritetime ? "writetime" : "ttl", def.name.toString());
             }
 
-            protected AbstractType<?> getReturnType()
-            {
+            protected AbstractType<?> getReturnType() {
                 return isWritetime ? LongType.instance : Int32Type.instance;
             }
 
-            protected void addColumnMapping(SelectionColumnMapping mapping, ColumnSpecification resultsColumn)
-            {
-               mapping.addMapping(resultsColumn, def);
+            protected void addColumnMapping(SelectionColumnMapping mapping, ColumnSpecification resultsColumn) {
+                mapping.addMapping(resultsColumn, def);
             }
 
-            public Selector newInstance()
-            {
+            public Selector newInstance() {
                 return new WritetimeOrTTLSelector(def.name.toString(), idx, isWritetime);
             }
 
-            public boolean isWritetimeSelectorFactory()
-            {
+            public boolean isWritetimeSelectorFactory() {
                 return isWritetime;
             }
 
-            public boolean isTTLSelectorFactory()
-            {
+            public boolean isTTLSelectorFactory() {
                 return !isWritetime;
             }
         };
     }
 
-    public void addInput(int protocolVersion, ResultSetBuilder rs)
-    {
+    public void addInput(int protocolVersion, ResultSetBuilder rs) {
         if (isSet)
             return;
-
         isSet = true;
-
-        if (isWritetime)
-        {
+        if (isWritetime) {
             long ts = rs.timestamps[idx];
             current = ts != Long.MIN_VALUE ? ByteBufferUtil.bytes(ts) : null;
-        }
-        else
-        {
+        } else {
             int ttl = rs.ttls[idx];
             current = ttl > 0 ? ByteBufferUtil.bytes(ttl) : null;
         }
     }
 
-    public ByteBuffer getOutput(int protocolVersion)
-    {
+    public ByteBuffer getOutput(int protocolVersion) {
+        if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+            if (!isSerializeLoggingActive.get()) {
+                isSerializeLoggingActive.set(true);
+                serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(this, this.current, "this.current").toJsonString());
+                isSerializeLoggingActive.set(false);
+            }
+        }
         return current;
     }
 
-    public void reset()
-    {
+    public void reset() {
         isSet = false;
         current = null;
     }
 
-    public AbstractType<?> getType()
-    {
+    public AbstractType<?> getType() {
+        if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+            if (!isSerializeLoggingActive.get()) {
+                isSerializeLoggingActive.set(true);
+                serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(org.apache.cassandra.db.marshal.Int32Type.class, org.apache.cassandra.db.marshal.Int32Type.instance, "org.apache.cassandra.db.marshal.Int32Type.instance").toJsonString());
+                isSerializeLoggingActive.set(false);
+            }
+        }
+        if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+            if (!isSerializeLoggingActive.get()) {
+                isSerializeLoggingActive.set(true);
+                serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(org.apache.cassandra.db.marshal.LongType.class, org.apache.cassandra.db.marshal.LongType.instance, "org.apache.cassandra.db.marshal.LongType.instance").toJsonString());
+                isSerializeLoggingActive.set(false);
+            }
+        }
         return isWritetime ? LongType.instance : Int32Type.instance;
     }
 
     @Override
-    public String toString()
-    {
+    public String toString() {
         return columnName;
     }
 
-    private WritetimeOrTTLSelector(String columnName, int idx, boolean isWritetime)
-    {
+    private WritetimeOrTTLSelector(String columnName, int idx, boolean isWritetime) {
         this.columnName = columnName;
         this.idx = idx;
         this.isWritetime = isWritetime;
     }
-
 }

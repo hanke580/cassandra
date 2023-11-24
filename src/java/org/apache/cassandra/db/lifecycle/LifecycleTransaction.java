@@ -18,20 +18,16 @@
 package org.apache.cassandra.db.lifecycle;
 
 import java.util.*;
-
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.Function;
 import com.google.common.base.Predicate;
 import com.google.common.collect.*;
-
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-
 import org.apache.cassandra.db.compaction.OperationType;
 import org.apache.cassandra.io.sstable.format.SSTableReader;
 import org.apache.cassandra.io.sstable.format.SSTableReader.UniqueIdentifier;
 import org.apache.cassandra.utils.concurrent.Transactional;
-
 import static com.google.common.base.Functions.compose;
 import static com.google.common.base.Predicates.*;
 import static com.google.common.collect.ImmutableSet.copyOf;
@@ -44,8 +40,18 @@ import static org.apache.cassandra.utils.Throwables.maybeFail;
 import static org.apache.cassandra.utils.concurrent.Refs.release;
 import static org.apache.cassandra.utils.concurrent.Refs.selfRefs;
 
-public class LifecycleTransaction extends Transactional.AbstractTransactional
-{
+public class LifecycleTransaction extends Transactional.AbstractTransactional {
+
+    private static final org.slf4j.Logger serialize_logger = org.slf4j.LoggerFactory.getLogger("serialize.logger");
+
+    private java.lang.ThreadLocal<Boolean> isSerializeLoggingActive = new ThreadLocal<Boolean>() {
+
+        @Override
+        protected Boolean initialValue() {
+            return false;
+        }
+    };
+
     private static final Logger logger = LoggerFactory.getLogger(LifecycleTransaction.class);
 
     /**
@@ -53,45 +59,82 @@ public class LifecycleTransaction extends Transactional.AbstractTransactional
      * has two instances, one containing modifications that are "staged" (i.e. invisible)
      * and one containing those "logged" that have been made visible through a call to checkpoint()
      */
-    private static class State
-    {
+    private static class State {
+
+        private java.lang.ThreadLocal<Boolean> isSerializeLoggingActive = new ThreadLocal<Boolean>() {
+
+            @Override
+            protected Boolean initialValue() {
+                return false;
+            }
+        };
+
         // readers that are either brand new, update a previous new reader, or update one of the original readers
         final Set<SSTableReader> update = new HashSet<>();
+
         // disjoint from update, represents a subset of originals that is no longer needed
         final Set<SSTableReader> obsolete = new HashSet<>();
 
-        void log(State staged)
-        {
+        void log(State staged) {
+            if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+                if (!isSerializeLoggingActive.get()) {
+                    isSerializeLoggingActive.set(true);
+                    serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(staged, staged.obsolete, "staged.obsolete").toJsonString());
+                    isSerializeLoggingActive.set(false);
+                }
+            }
             update.removeAll(staged.obsolete);
+            if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+                if (!isSerializeLoggingActive.get()) {
+                    isSerializeLoggingActive.set(true);
+                    serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(staged, staged.update, "staged.update").toJsonString());
+                    isSerializeLoggingActive.set(false);
+                }
+            }
             update.removeAll(staged.update);
+            if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+                if (!isSerializeLoggingActive.get()) {
+                    isSerializeLoggingActive.set(true);
+                    serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(staged, staged.update, "staged.update").toJsonString());
+                    isSerializeLoggingActive.set(false);
+                }
+            }
             update.addAll(staged.update);
+            if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+                if (!isSerializeLoggingActive.get()) {
+                    isSerializeLoggingActive.set(true);
+                    serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(staged, staged.obsolete, "staged.obsolete").toJsonString());
+                    isSerializeLoggingActive.set(false);
+                }
+            }
             obsolete.addAll(staged.obsolete);
         }
 
-        boolean contains(SSTableReader reader)
-        {
+        boolean contains(SSTableReader reader) {
             return update.contains(reader) || obsolete.contains(reader);
         }
 
-        boolean isEmpty()
-        {
+        boolean isEmpty() {
             return update.isEmpty() && obsolete.isEmpty();
         }
 
-        void clear()
-        {
+        void clear() {
             update.clear();
             obsolete.clear();
         }
     }
 
     public final Tracker tracker;
+
     private final OperationType operationType;
+
     // the original readers this transaction was opened over, and that it guards
     // (no other transactions may operate over these readers concurrently)
     private final Set<SSTableReader> originals = new HashSet<>();
+
     // the set of readers we've marked as compacting (only updated on creation and in checkpoint())
     private final Set<SSTableReader> marked = new HashSet<>();
+
     // the identity set of readers we've ever encountered; used to ensure we don't accidentally revisit the
     // same version of a reader. potentially a dangerous property if there are reference counting bugs
     // as they won't be caught until the transaction's lifespan is over.
@@ -99,22 +142,21 @@ public class LifecycleTransaction extends Transactional.AbstractTransactional
 
     // changes that have been made visible
     private final State logged = new State();
+
     // changes that are pending
     private final State staged = new State();
 
     /**
      * construct a Transaction for use in an offline operation
      */
-    public static LifecycleTransaction offline(OperationType operationType, SSTableReader reader)
-    {
+    public static LifecycleTransaction offline(OperationType operationType, SSTableReader reader) {
         return offline(operationType, singleton(reader));
     }
 
     /**
      * construct a Transaction for use in an offline operation
      */
-    public static LifecycleTransaction offline(OperationType operationType, Iterable<SSTableReader> readers)
-    {
+    public static LifecycleTransaction offline(OperationType operationType, Iterable<SSTableReader> readers) {
         // if offline, for simplicity we just use a dummy tracker
         Tracker dummy = new Tracker(null, false);
         dummy.addInitialSSTables(readers);
@@ -122,20 +164,17 @@ public class LifecycleTransaction extends Transactional.AbstractTransactional
         return new LifecycleTransaction(dummy, operationType, readers);
     }
 
-    LifecycleTransaction(Tracker tracker, OperationType operationType, Iterable<SSTableReader> readers)
-    {
+    LifecycleTransaction(Tracker tracker, OperationType operationType, Iterable<SSTableReader> readers) {
         this.tracker = tracker;
         this.operationType = operationType;
-        for (SSTableReader reader : readers)
-        {
+        for (SSTableReader reader : readers) {
             originals.add(reader);
             marked.add(reader);
             identities.add(reader.instanceId);
         }
     }
 
-    public void doPrepare()
-    {
+    public void doPrepare() {
         // note for future: in anticompaction two different operations use the same Transaction, and both prepareToCommit()
         // separately: the second prepareToCommit is ignored as a "redundant" transition. since it is only a checkpoint
         // (and these happen anyway) this is fine but if more logic gets inserted here than is performed in a checkpoint,
@@ -146,12 +185,9 @@ public class LifecycleTransaction extends Transactional.AbstractTransactional
     /**
      * point of no return: commit all changes, but leave all readers marked as compacting
      */
-    public Throwable doCommit(Throwable accumulate)
-    {
+    public Throwable doCommit(Throwable accumulate) {
         assert staged.isEmpty() : "must be no actions introduced between prepareToCommit and a commit";
-
         logger.trace("Committing update:{}, obsolete:{}", staged.update, staged.obsolete);
-
         // this is now the point of no return; we cannot safely rollback, so we ignore exceptions until we're done
         // we restore state by obsoleting our obsolete files, releasing our references to them, and updating our size
         // and notification status for the obsolete and new files
@@ -165,21 +201,17 @@ public class LifecycleTransaction extends Transactional.AbstractTransactional
     /**
      * undo all of the changes made by this transaction, resetting the state to its original form
      */
-    public Throwable doAbort(Throwable accumulate)
-    {
+    public Throwable doAbort(Throwable accumulate) {
         if (logger.isTraceEnabled())
             logger.trace("Aborting transaction over {}, with ({},{}) logged and ({},{}) staged", originals, logged.update, logged.obsolete, staged.update, staged.obsolete);
-
         if (logged.isEmpty() && staged.isEmpty())
             return accumulate;
-
         // mark obsolete all readers that are not versions of those present in the original set
         Iterable<SSTableReader> obsolete = filterOut(concatUniq(staged.update, logged.update), originals);
         logger.trace("Obsoleting {}", obsolete);
         // we don't pass the tracker in for the obsoletion, since these readers have never been notified externally
         // nor had their size accounting affected
         accumulate = markObsolete(null, obsolete, accumulate);
-
         // replace all updated readers with a version restored to its original state
         List<SSTableReader> restored = restoreUpdatedOriginals();
         List<SSTableReader> invalid = Lists.newArrayList(Iterables.concat(logged.update, logged.obsolete));
@@ -198,18 +230,15 @@ public class LifecycleTransaction extends Transactional.AbstractTransactional
     }
 
     @Override
-    protected Throwable doPostCleanup(Throwable accumulate)
-    {
+    protected Throwable doPostCleanup(Throwable accumulate) {
         return unmarkCompacting(marked, accumulate);
     }
 
-    public boolean isOffline()
-    {
+    public boolean isOffline() {
         return tracker.isDummy();
     }
 
-    public void permitRedundantTransitions()
-    {
+    public void permitRedundantTransitions() {
         super.permitRedundantTransitions();
     }
 
@@ -218,39 +247,37 @@ public class LifecycleTransaction extends Transactional.AbstractTransactional
      * these will be exposed in the Tracker atomically, or an exception will be thrown; in this case
      * the transaction should be rolled back
      */
-    public void checkpoint()
-    {
+    public void checkpoint() {
         maybeFail(checkpoint(null));
     }
-    private Throwable checkpoint(Throwable accumulate)
-    {
+
+    private Throwable checkpoint(Throwable accumulate) {
         if (logger.isTraceEnabled())
             logger.trace("Checkpointing update:{}, obsolete:{}", staged.update, staged.obsolete);
-
         if (staged.isEmpty())
             return accumulate;
-
         Set<SSTableReader> toUpdate = toUpdate();
         Set<SSTableReader> fresh = copyOf(fresh());
-
         // check the current versions of the readers we're replacing haven't somehow been replaced by someone else
         checkNotReplaced(filterIn(toUpdate, staged.update));
-
         // ensure any new readers are in the compacting set, since we aren't done with them yet
         // and don't want anyone else messing with them
         // apply atomically along with updating the live set of readers
-        tracker.apply(compose(updateCompacting(emptySet(), fresh),
-                              updateLiveSet(toUpdate, staged.update)));
-
+        tracker.apply(compose(updateCompacting(emptySet(), fresh), updateLiveSet(toUpdate, staged.update)));
         // log the staged changes and our newly marked readers
         marked.addAll(fresh);
+        if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+            if (!isSerializeLoggingActive.get()) {
+                isSerializeLoggingActive.set(true);
+                serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(this, this.staged, "this.staged").toJsonString());
+                isSerializeLoggingActive.set(false);
+            }
+        }
         logged.log(staged);
-
         // setup our tracker, and mark our prior versions replaced, also releasing our references to them
         // we do not replace/release obsoleted readers, since we may need to restore them on rollback
         accumulate = setReplaced(filterOut(toUpdate, staged.obsolete), accumulate);
         accumulate = release(selfRefs(filterOut(toUpdate, staged.obsolete)), accumulate);
-
         staged.clear();
         return accumulate;
     }
@@ -259,14 +286,27 @@ public class LifecycleTransaction extends Transactional.AbstractTransactional
      * update a reader: if !original, this is a reader that is being introduced by this transaction;
      * otherwise it must be in the originals() set, i.e. a reader guarded by this transaction
      */
-    public void update(SSTableReader reader, boolean original)
-    {
+    public void update(SSTableReader reader, boolean original) {
         assert !staged.update.contains(reader) : "each reader may only be updated once per checkpoint: " + reader;
+        if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+            if (!isSerializeLoggingActive.get()) {
+                isSerializeLoggingActive.set(true);
+                serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(reader, reader.instanceId, "reader.instanceId").toJsonString());
+                isSerializeLoggingActive.set(false);
+            }
+        }
         assert !identities.contains(reader.instanceId) : "each reader instance may only be provided as an update once: " + reader;
         // check it isn't obsolete, and that it matches the original flag
         assert !(logged.obsolete.contains(reader) || staged.obsolete.contains(reader)) : "may not update a reader that has been obsoleted";
         assert original == originals.contains(reader) : String.format("the 'original' indicator was incorrect (%s provided): %s", original, reader);
         staged.update.add(reader);
+        if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+            if (!isSerializeLoggingActive.get()) {
+                isSerializeLoggingActive.set(true);
+                serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(reader, reader.instanceId, "reader.instanceId").toJsonString());
+                isSerializeLoggingActive.set(false);
+            }
+        }
         identities.add(reader.instanceId);
         if (!isOffline())
             reader.setupKeyCache();
@@ -276,9 +316,15 @@ public class LifecycleTransaction extends Transactional.AbstractTransactional
      * mark this reader as for obsoletion. this does not actually obsolete the reader until commit() is called,
      * but on checkpoint() the reader will be removed from the live set
      */
-    public void obsolete(SSTableReader reader)
-    {
+    public void obsolete(SSTableReader reader) {
         logger.trace("Staging for obsolescence {}", reader);
+        if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+            if (!isSerializeLoggingActive.get()) {
+                isSerializeLoggingActive.set(true);
+                serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(reader, reader.instanceId, "reader.instanceId").toJsonString());
+                isSerializeLoggingActive.set(false);
+            }
+        }
         // check this is: a reader guarded by the transaction, an instance we have already worked with
         // and that we haven't already obsoleted it, nor do we have other changes staged for it
         assert identities.contains(reader.instanceId) : "only reader instances that have previously been provided may be obsoleted: " + reader;
@@ -292,12 +338,10 @@ public class LifecycleTransaction extends Transactional.AbstractTransactional
     /**
      * obsolete every file in the original transaction
      */
-    public void obsoleteOriginals()
-    {
+    public void obsoleteOriginals() {
         logger.trace("Staging for obsolescence {}", originals);
         // if we're obsoleting, we should have no staged updates for the original files
         assert Iterables.isEmpty(filterIn(staged.update, originals)) : staged.update;
-
         // stage obsoletes for any currently visible versions of any original readers
         Iterables.addAll(staged.obsolete, filterIn(current(), originals));
     }
@@ -305,25 +349,21 @@ public class LifecycleTransaction extends Transactional.AbstractTransactional
     /**
      * return the readers we're replacing in checkpoint(), i.e. the currently visible version of those in staged
      */
-    private Set<SSTableReader> toUpdate()
-    {
+    private Set<SSTableReader> toUpdate() {
         return copyOf(filterIn(current(), staged.obsolete, staged.update));
     }
 
     /**
      * new readers that haven't appeared previously (either in the original set or the logged updates)
      */
-    private Iterable<SSTableReader> fresh()
-    {
-        return filterOut(staged.update,
-                         originals, logged.update);
+    private Iterable<SSTableReader> fresh() {
+        return filterOut(staged.update, originals, logged.update);
     }
 
     /**
      * returns the currently visible readers managed by this transaction
      */
-    public Iterable<SSTableReader> current()
-    {
+    public Iterable<SSTableReader> current() {
         // i.e., those that are updates that have been logged (made visible),
         // and any original readers that have neither been obsoleted nor updated
         return concat(logged.update, filterOut(originals, logged.update, logged.obsolete));
@@ -332,33 +372,28 @@ public class LifecycleTransaction extends Transactional.AbstractTransactional
     /**
      * update the current replacement of any original reader back to its original start
      */
-    private List<SSTableReader> restoreUpdatedOriginals()
-    {
+    private List<SSTableReader> restoreUpdatedOriginals() {
         Iterable<SSTableReader> torestore = filterIn(originals, logged.update, logged.obsolete);
-        return ImmutableList.copyOf(transform(torestore,
-                                              new Function<SSTableReader, SSTableReader>()
-                                              {
-                                                  public SSTableReader apply(SSTableReader reader)
-                                                  {
-                                                      return current(reader).cloneWithNewStart(reader.first, null);
-                                                  }
-                                              }));
+        return ImmutableList.copyOf(transform(torestore, new Function<SSTableReader, SSTableReader>() {
+
+            public SSTableReader apply(SSTableReader reader) {
+                return current(reader).cloneWithNewStart(reader.first, null);
+            }
+        }));
     }
 
     /**
      * the set of readers guarded by this transaction _in their original instance/state_
      * call current(SSTableReader) on any reader in this set to get the latest instance
      */
-    public Set<SSTableReader> originals()
-    {
+    public Set<SSTableReader> originals() {
         return Collections.unmodifiableSet(originals);
     }
 
     /**
      * indicates if the reader has been marked for obsoletion
      */
-    public boolean isObsolete(SSTableReader reader)
-    {
+    public boolean isObsolete(SSTableReader reader) {
         return logged.obsolete.contains(reader) || staged.obsolete.contains(reader);
     }
 
@@ -366,8 +401,7 @@ public class LifecycleTransaction extends Transactional.AbstractTransactional
      * return the current version of the provided reader, whether or not it is visible or staged;
      * i.e. returns the first version present by testing staged, logged and originals in order.
      */
-    public SSTableReader current(SSTableReader reader)
-    {
+    public SSTableReader current(SSTableReader reader) {
         Set<SSTableReader> container;
         if (staged.contains(reader))
             container = staged.update.contains(reader) ? staged.update : staged.obsolete;
@@ -375,20 +409,27 @@ public class LifecycleTransaction extends Transactional.AbstractTransactional
             container = logged.update.contains(reader) ? logged.update : logged.obsolete;
         else if (originals.contains(reader))
             container = originals;
-        else throw new AssertionError();
+        else
+            throw new AssertionError();
         return select(reader, container);
     }
 
     /**
      * remove the reader from the set we're modifying
      */
-    public void cancel(SSTableReader cancel)
-    {
+    public void cancel(SSTableReader cancel) {
         logger.trace("Cancelling {} from transaction", cancel);
         assert originals.contains(cancel) : "may only cancel a reader in the 'original' set: " + cancel + " vs " + originals;
         assert !(staged.contains(cancel) || logged.contains(cancel)) : "may only cancel a reader that has not been updated or obsoleted in this transaction: " + cancel;
         originals.remove(cancel);
         marked.remove(cancel);
+        if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+            if (!isSerializeLoggingActive.get()) {
+                isSerializeLoggingActive.set(true);
+                serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(cancel, cancel.instanceId, "cancel.instanceId").toJsonString());
+                isSerializeLoggingActive.set(false);
+            }
+        }
         identities.remove(cancel.instanceId);
         maybeFail(unmarkCompacting(singleton(cancel), null));
     }
@@ -396,25 +437,35 @@ public class LifecycleTransaction extends Transactional.AbstractTransactional
     /**
      * remove the readers from the set we're modifying
      */
-    public void cancel(Iterable<SSTableReader> cancels)
-    {
-        for (SSTableReader cancel : cancels)
-            cancel(cancel);
+    public void cancel(Iterable<SSTableReader> cancels) {
+        for (SSTableReader cancel : cancels) cancel(cancel);
     }
 
     /**
      * remove the provided readers from this Transaction, and return a new Transaction to manage them
      * only permitted to be called if the current Transaction has never been used
      */
-    public LifecycleTransaction split(Collection<SSTableReader> readers)
-    {
+    public LifecycleTransaction split(Collection<SSTableReader> readers) {
         logger.trace("Splitting {} into new transaction", readers);
         checkUnused();
-        for (SSTableReader reader : readers)
+        for (SSTableReader reader : readers) {
+            if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+                if (!isSerializeLoggingActive.get()) {
+                    isSerializeLoggingActive.set(true);
+                    serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(readers, reader, "reader").toJsonString());
+                    isSerializeLoggingActive.set(false);
+                }
+            }
             assert identities.contains(reader.instanceId) : "may only split the same reader instance the transaction was opened with: " + reader;
-
-        for (SSTableReader reader : readers)
-        {
+        }
+        for (SSTableReader reader : readers) {
+            if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+                if (!isSerializeLoggingActive.get()) {
+                    isSerializeLoggingActive.set(true);
+                    serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(readers, reader, "reader").toJsonString());
+                    isSerializeLoggingActive.set(false);
+                }
+            }
             identities.remove(reader.instanceId);
             originals.remove(reader);
             marked.remove(reader);
@@ -425,16 +476,14 @@ public class LifecycleTransaction extends Transactional.AbstractTransactional
     /**
      * check this transaction has never been used
      */
-    private void checkUnused()
-    {
+    private void checkUnused() {
         assert logged.isEmpty();
         assert staged.isEmpty();
         assert identities.size() == originals.size();
         assert originals.size() == marked.size();
     }
 
-    private Throwable unmarkCompacting(Set<SSTableReader> unmark, Throwable accumulate)
-    {
+    private Throwable unmarkCompacting(Set<SSTableReader> unmark, Throwable accumulate) {
         accumulate = tracker.apply(updateCompacting(unmark, emptySet()), accumulate);
         // when the CFS is invalidated, it will call unreferenceSSTables().  However, unreferenceSSTables only deals
         // with sstables that aren't currently being compacted.  If there are ongoing compactions that finish or are
@@ -444,8 +493,7 @@ public class LifecycleTransaction extends Transactional.AbstractTransactional
     }
 
     // convenience method for callers that know only one sstable is involved in the transaction
-    public SSTableReader onlyOne()
-    {
+    public SSTableReader onlyOne() {
         assert originals.size() == 1;
         return getFirst(originals, null);
     }
@@ -455,26 +503,29 @@ public class LifecycleTransaction extends Transactional.AbstractTransactional
     // indicating either obsolescence, or that the reader does not occur in the transaction; which is defined
     // by the corresponding Action)
     @VisibleForTesting
-    public static class ReaderState
-    {
-        public static enum Action
-        {
+    public static class ReaderState {
+
+        public static enum Action {
+
             UPDATED, OBSOLETED, NONE;
-            public static Action get(boolean updated, boolean obsoleted)
-            {
+
+            public static Action get(boolean updated, boolean obsoleted) {
                 assert !(updated && obsoleted);
                 return updated ? UPDATED : obsoleted ? OBSOLETED : NONE;
             }
         }
 
         final Action staged;
+
         final Action logged;
+
         final SSTableReader nextVisible;
+
         final SSTableReader currentlyVisible;
+
         final boolean original;
 
-        public ReaderState(Action logged, Action staged, SSTableReader currentlyVisible, SSTableReader nextVisible, boolean original)
-        {
+        public ReaderState(Action logged, Action staged, SSTableReader currentlyVisible, SSTableReader nextVisible, boolean original) {
             this.staged = staged;
             this.logged = logged;
             this.currentlyVisible = currentlyVisible;
@@ -482,41 +533,31 @@ public class LifecycleTransaction extends Transactional.AbstractTransactional
             this.original = original;
         }
 
-        public boolean equals(Object that)
-        {
+        public boolean equals(Object that) {
             return that instanceof ReaderState && equals((ReaderState) that);
         }
 
-        public boolean equals(ReaderState that)
-        {
-            return this.staged == that.staged && this.logged == that.logged && this.original == that.original
-                && this.currentlyVisible == that.currentlyVisible && this.nextVisible == that.nextVisible;
+        public boolean equals(ReaderState that) {
+            return this.staged == that.staged && this.logged == that.logged && this.original == that.original && this.currentlyVisible == that.currentlyVisible && this.nextVisible == that.nextVisible;
         }
 
-        public String toString()
-        {
+        public String toString() {
             return String.format("[logged=%s staged=%s original=%s]", logged, staged, original);
         }
 
-        public static SSTableReader visible(SSTableReader reader, Predicate<SSTableReader> obsolete, Collection<SSTableReader> ... selectFrom)
-        {
+        public static SSTableReader visible(SSTableReader reader, Predicate<SSTableReader> obsolete, Collection<SSTableReader>... selectFrom) {
             return obsolete.apply(reader) ? null : selectFirst(reader, selectFrom);
         }
     }
 
     @VisibleForTesting
-    public ReaderState state(SSTableReader reader)
-    {
+    public ReaderState state(SSTableReader reader) {
         SSTableReader currentlyVisible = ReaderState.visible(reader, in(logged.obsolete), logged.update, originals);
         SSTableReader nextVisible = ReaderState.visible(reader, orIn(staged.obsolete, logged.obsolete), staged.update, logged.update, originals);
-        return new ReaderState(ReaderState.Action.get(logged.update.contains(reader), logged.obsolete.contains(reader)),
-                               ReaderState.Action.get(staged.update.contains(reader), staged.obsolete.contains(reader)),
-                               currentlyVisible, nextVisible, originals.contains(reader)
-        );
+        return new ReaderState(ReaderState.Action.get(logged.update.contains(reader), logged.obsolete.contains(reader)), ReaderState.Action.get(staged.update.contains(reader), staged.obsolete.contains(reader)), currentlyVisible, nextVisible, originals.contains(reader));
     }
 
-    public String toString()
-    {
+    public String toString() {
         return originals.toString();
     }
 }

@@ -19,25 +19,35 @@ package org.apache.cassandra.net;
 
 import java.io.IOException;
 import java.util.EnumSet;
-
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-
 import org.apache.cassandra.db.filter.TombstoneOverwhelmingException;
 import org.apache.cassandra.db.index.IndexNotAvailableException;
 import org.apache.cassandra.gms.Gossiper;
 
-public class MessageDeliveryTask implements Runnable
-{
+public class MessageDeliveryTask implements Runnable {
+
+    private static final org.slf4j.Logger serialize_logger = org.slf4j.LoggerFactory.getLogger("serialize.logger");
+
+    private java.lang.ThreadLocal<Boolean> isSerializeLoggingActive = new ThreadLocal<Boolean>() {
+
+        @Override
+        protected Boolean initialValue() {
+            return false;
+        }
+    };
+
     private static final Logger logger = LoggerFactory.getLogger(MessageDeliveryTask.class);
 
     private final MessageIn message;
+
     private final int id;
+
     private final long constructionTime;
+
     private final boolean isCrossNodeTimestamp;
 
-    public MessageDeliveryTask(MessageIn message, int id, long timestamp, boolean isCrossNodeTimestamp)
-    {
+    public MessageDeliveryTask(MessageIn message, int id, long timestamp, boolean isCrossNodeTimestamp) {
         assert message != null;
         this.message = message;
         this.id = id;
@@ -45,58 +55,53 @@ public class MessageDeliveryTask implements Runnable
         this.isCrossNodeTimestamp = isCrossNodeTimestamp;
     }
 
-    public void run()
-    {
+    public void run() {
+        if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+            if (!isSerializeLoggingActive.get()) {
+                isSerializeLoggingActive.set(true);
+                serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(this, this.message, "this.message").toJsonString());
+                isSerializeLoggingActive.set(false);
+            }
+        }
         MessagingService.Verb verb = message.verb;
-        if (MessagingService.DROPPABLE_VERBS.contains(verb)
-            && System.currentTimeMillis() > constructionTime + message.getTimeout())
-        {
+        if (MessagingService.DROPPABLE_VERBS.contains(verb) && System.currentTimeMillis() > constructionTime + message.getTimeout()) {
             MessagingService.instance().incrementDroppedMessages(verb, isCrossNodeTimestamp);
             return;
         }
-
         IVerbHandler verbHandler = MessagingService.instance().getVerbHandler(verb);
-        if (verbHandler == null)
-        {
+        if (verbHandler == null) {
             logger.trace("Unknown verb {}", verb);
             return;
         }
-
-        try
-        {
+        try {
+            if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+                if (!isSerializeLoggingActive.get()) {
+                    isSerializeLoggingActive.set(true);
+                    serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(this, this.message, "this.message").toJsonString());
+                    isSerializeLoggingActive.set(false);
+                }
+            }
             verbHandler.doVerb(message, id);
-        }
-        catch (IOException ioe)
-        {
+        } catch (IOException ioe) {
             handleFailure(ioe);
             throw new RuntimeException(ioe);
-        }
-        catch (TombstoneOverwhelmingException | IndexNotAvailableException e)
-        {
+        } catch (TombstoneOverwhelmingException | IndexNotAvailableException e) {
             handleFailure(e);
             logger.error(e.getMessage());
-        }
-        catch (Throwable t)
-        {
+        } catch (Throwable t) {
             handleFailure(t);
             throw t;
         }
-
         if (GOSSIP_VERBS.contains(message.verb))
             Gossiper.instance.setLastProcessedMessageAt(constructionTime);
     }
 
-    private void handleFailure(Throwable t)
-    {
-        if (message.doCallbackOnFailure())
-        {
-            MessageOut response = new MessageOut(MessagingService.Verb.INTERNAL_RESPONSE)
-                                                .withParameter(MessagingService.FAILURE_RESPONSE_PARAM, MessagingService.ONE_BYTE);
+    private void handleFailure(Throwable t) {
+        if (message.doCallbackOnFailure()) {
+            MessageOut response = new MessageOut(MessagingService.Verb.INTERNAL_RESPONSE).withParameter(MessagingService.FAILURE_RESPONSE_PARAM, MessagingService.ONE_BYTE);
             MessagingService.instance().sendReply(response, id, message.from);
         }
     }
 
-    private static final EnumSet<MessagingService.Verb> GOSSIP_VERBS = EnumSet.of(MessagingService.Verb.GOSSIP_DIGEST_ACK,
-                                                                                  MessagingService.Verb.GOSSIP_DIGEST_ACK2,
-                                                                                  MessagingService.Verb.GOSSIP_DIGEST_SYN);
+    private static final EnumSet<MessagingService.Verb> GOSSIP_VERBS = EnumSet.of(MessagingService.Verb.GOSSIP_DIGEST_ACK, MessagingService.Verb.GOSSIP_DIGEST_ACK2, MessagingService.Verb.GOSSIP_DIGEST_SYN);
 }

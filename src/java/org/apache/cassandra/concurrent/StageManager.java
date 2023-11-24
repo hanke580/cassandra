@@ -19,31 +19,29 @@ package org.apache.cassandra.concurrent;
 
 import java.util.EnumMap;
 import java.util.concurrent.*;
-
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-
 import org.apache.cassandra.net.MessagingService;
 import org.apache.cassandra.utils.FBUtilities;
-
 import static org.apache.cassandra.config.DatabaseDescriptor.*;
-
 
 /**
  * This class manages executor services for Messages recieved: each Message requests
  * running on a specific "stage" for concurrency control; hence the Map approach,
  * even though stages (executors) are not created dynamically.
  */
-public class StageManager
-{
+public class StageManager {
+
+    private static final org.slf4j.Logger serialize_logger = org.slf4j.LoggerFactory.getLogger("serialize.logger");
+
     private static final Logger logger = LoggerFactory.getLogger(StageManager.class);
 
     private static final EnumMap<Stage, LocalAwareExecutorService> stages = new EnumMap<Stage, LocalAwareExecutorService>(Stage.class);
 
-    public static final long KEEPALIVE = 60; // seconds to keep "extra" threads alive for when idle
+    // seconds to keep "extra" threads alive for when idle
+    public static final long KEEPALIVE = 60;
 
-    static
-    {
+    static {
         stages.put(Stage.MUTATION, multiThreadedLowSignalStage(Stage.MUTATION, getConcurrentWriters()));
         stages.put(Stage.COUNTER_MUTATION, multiThreadedLowSignalStage(Stage.COUNTER_MUTATION, getConcurrentCounterWriters()));
         stages.put(Stage.READ, multiThreadedLowSignalStage(Stage.READ, getConcurrentReaders()));
@@ -58,36 +56,21 @@ public class StageManager
         stages.put(Stage.TRACING, tracingExecutor());
     }
 
-    private static ExecuteOnlyExecutor tracingExecutor()
-    {
-        RejectedExecutionHandler reh = new RejectedExecutionHandler()
-        {
-            public void rejectedExecution(Runnable r, ThreadPoolExecutor executor)
-            {
+    private static ExecuteOnlyExecutor tracingExecutor() {
+        RejectedExecutionHandler reh = new RejectedExecutionHandler() {
+
+            public void rejectedExecution(Runnable r, ThreadPoolExecutor executor) {
                 MessagingService.instance().incrementDroppedMessages(MessagingService.Verb._TRACE);
             }
         };
-        return new ExecuteOnlyExecutor(1,
-                                       1,
-                                       KEEPALIVE,
-                                       TimeUnit.SECONDS,
-                                       new ArrayBlockingQueue<Runnable>(1000),
-                                       new NamedThreadFactory(Stage.TRACING.getJmxName()),
-                                       reh);
+        return new ExecuteOnlyExecutor(1, 1, KEEPALIVE, TimeUnit.SECONDS, new ArrayBlockingQueue<Runnable>(1000), new NamedThreadFactory(Stage.TRACING.getJmxName()), reh);
     }
 
-    private static JMXEnabledThreadPoolExecutor multiThreadedStage(Stage stage, int numThreads)
-    {
-        return new JMXEnabledThreadPoolExecutor(numThreads,
-                                                KEEPALIVE,
-                                                TimeUnit.SECONDS,
-                                                new LinkedBlockingQueue<Runnable>(),
-                                                new NamedThreadFactory(stage.getJmxName()),
-                                                stage.getJmxType());
+    private static JMXEnabledThreadPoolExecutor multiThreadedStage(Stage stage, int numThreads) {
+        return new JMXEnabledThreadPoolExecutor(numThreads, KEEPALIVE, TimeUnit.SECONDS, new LinkedBlockingQueue<Runnable>(), new NamedThreadFactory(stage.getJmxName()), stage.getJmxType());
     }
 
-    private static LocalAwareExecutorService multiThreadedLowSignalStage(Stage stage, int numThreads)
-    {
+    private static LocalAwareExecutorService multiThreadedLowSignalStage(Stage stage, int numThreads) {
         return SharedExecutorPool.SHARED.newExecutor(numThreads, Integer.MAX_VALUE, stage.getJmxType(), stage.getJmxName());
     }
 
@@ -95,27 +78,22 @@ public class StageManager
      * Retrieve a stage from the StageManager
      * @param stage name of the stage to be retrieved.
      */
-    public static LocalAwareExecutorService getStage(Stage stage)
-    {
+    public static LocalAwareExecutorService getStage(Stage stage) {
         return stages.get(stage);
     }
 
     /**
      * This method shuts down all registered stages.
      */
-    public static void shutdownNow()
-    {
-        for (Stage stage : Stage.values())
-        {
+    public static void shutdownNow() {
+        for (Stage stage : Stage.values()) {
             StageManager.stages.get(stage).shutdownNow();
         }
     }
 
-    public final static Runnable NO_OP_TASK = new Runnable()
-    {
-        public void run()
-        {
+    public final static Runnable NO_OP_TASK = new Runnable() {
 
+        public void run() {
         }
     };
 
@@ -125,29 +103,39 @@ public class StageManager
      * a final wait on pending trace events since typically the tracing executor is single-threaded, see
      * CASSANDRA-11465.
      */
-    private static class ExecuteOnlyExecutor extends ThreadPoolExecutor implements LocalAwareExecutorService
-    {
-        public ExecuteOnlyExecutor(int corePoolSize, int maximumPoolSize, long keepAliveTime, TimeUnit unit, BlockingQueue<Runnable> workQueue, ThreadFactory threadFactory, RejectedExecutionHandler handler)
-        {
+    private static class ExecuteOnlyExecutor extends ThreadPoolExecutor implements LocalAwareExecutorService {
+
+        private java.lang.ThreadLocal<Boolean> isSerializeLoggingActive = new ThreadLocal<Boolean>() {
+
+            @Override
+            protected Boolean initialValue() {
+                return false;
+            }
+        };
+
+        public ExecuteOnlyExecutor(int corePoolSize, int maximumPoolSize, long keepAliveTime, TimeUnit unit, BlockingQueue<Runnable> workQueue, ThreadFactory threadFactory, RejectedExecutionHandler handler) {
             super(corePoolSize, maximumPoolSize, keepAliveTime, unit, workQueue, threadFactory, handler);
         }
 
-        public void execute(Runnable command, ExecutorLocals locals)
-        {
+        public void execute(Runnable command, ExecutorLocals locals) {
             assert locals == null;
             super.execute(command);
         }
 
-        public void maybeExecuteImmediately(Runnable command)
-        {
+        public void maybeExecuteImmediately(Runnable command) {
             execute(command);
         }
 
         @Override
-        public Future<?> submit(Runnable task)
-        {
-            if (task.equals(NO_OP_TASK))
-            {
+        public Future<?> submit(Runnable task) {
+            if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+                if (!isSerializeLoggingActive.get()) {
+                    isSerializeLoggingActive.set(true);
+                    serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(org.apache.cassandra.concurrent.StageManager.class, org.apache.cassandra.concurrent.StageManager.NO_OP_TASK, "org.apache.cassandra.concurrent.StageManager.NO_OP_TASK").toJsonString());
+                    isSerializeLoggingActive.set(false);
+                }
+            }
+            if (task.equals(NO_OP_TASK)) {
                 assert getMaximumPoolSize() == 1 : "Cannot wait for pending tasks if running more than 1 thread";
                 return super.submit(task);
             }
@@ -155,14 +143,12 @@ public class StageManager
         }
 
         @Override
-        public <T> Future<T> submit(Runnable task, T result)
-        {
+        public <T> Future<T> submit(Runnable task, T result) {
             throw new UnsupportedOperationException();
         }
 
         @Override
-        public <T> Future<T> submit(Callable<T> task)
-        {
+        public <T> Future<T> submit(Callable<T> task) {
             throw new UnsupportedOperationException();
         }
     }

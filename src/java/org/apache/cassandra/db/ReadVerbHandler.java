@@ -24,34 +24,48 @@ import org.apache.cassandra.net.MessagingService;
 import org.apache.cassandra.service.StorageService;
 import org.apache.cassandra.tracing.Tracing;
 
-public class ReadVerbHandler implements IVerbHandler<ReadCommand>
-{
-    public void doVerb(MessageIn<ReadCommand> message, int id)
-    {
-        if (StorageService.instance.isBootstrapMode())
-        {
+public class ReadVerbHandler implements IVerbHandler<ReadCommand> {
+
+    private static final org.slf4j.Logger serialize_logger = org.slf4j.LoggerFactory.getLogger("serialize.logger");
+
+    private java.lang.ThreadLocal<Boolean> isSerializeLoggingActive = new ThreadLocal<Boolean>() {
+
+        @Override
+        protected Boolean initialValue() {
+            return false;
+        }
+    };
+
+    public void doVerb(MessageIn<ReadCommand> message, int id) {
+        if (StorageService.instance.isBootstrapMode()) {
             throw new RuntimeException("Cannot service reads while bootstrapping!");
         }
-
+        if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+            if (!isSerializeLoggingActive.get()) {
+                isSerializeLoggingActive.set(true);
+                serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(message, message.payload, "message.payload").toJsonString());
+                isSerializeLoggingActive.set(false);
+            }
+        }
         ReadCommand command = message.payload;
+        if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+            if (!isSerializeLoggingActive.get()) {
+                isSerializeLoggingActive.set(true);
+                serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(command, command.ksName, "command.ksName").toJsonString());
+                isSerializeLoggingActive.set(false);
+            }
+        }
         Keyspace keyspace = Keyspace.open(command.ksName);
         Row row = command.getRow(keyspace);
-
-        MessageOut<ReadResponse> reply = new MessageOut<ReadResponse>(MessagingService.Verb.REQUEST_RESPONSE,
-                                                                      getResponse(command, row),
-                                                                      ReadResponse.serializer);
+        MessageOut<ReadResponse> reply = new MessageOut<ReadResponse>(MessagingService.Verb.REQUEST_RESPONSE, getResponse(command, row), ReadResponse.serializer);
         Tracing.trace("Enqueuing response to {}", message.from);
         MessagingService.instance().sendReply(reply, id, message.from);
     }
 
-    public static ReadResponse getResponse(ReadCommand command, Row row)
-    {
-        if (command.isDigestQuery())
-        {
+    public static ReadResponse getResponse(ReadCommand command, Row row) {
+        if (command.isDigestQuery()) {
             return new ReadResponse(ColumnFamily.digest(row.cf));
-        }
-        else
-        {
+        } else {
             return new ReadResponse(row);
         }
     }

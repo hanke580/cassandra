@@ -18,87 +18,103 @@
 package org.apache.cassandra.db.composites;
 
 import java.nio.ByteBuffer;
-
 import org.apache.cassandra.config.CFMetaData;
 import org.apache.cassandra.cql3.ColumnIdentifier;
 import org.apache.cassandra.utils.memory.AbstractAllocator;
 import org.apache.cassandra.utils.ObjectSizes;
 
-public class SimpleSparseCellName extends AbstractComposite implements CellName
-{
+public class SimpleSparseCellName extends AbstractComposite implements CellName {
+
+    private static final org.slf4j.Logger serialize_logger = org.slf4j.LoggerFactory.getLogger("serialize.logger");
+
+    private java.lang.ThreadLocal<Boolean> isSerializeLoggingActive = new ThreadLocal<Boolean>() {
+
+        @Override
+        protected Boolean initialValue() {
+            return false;
+        }
+    };
+
     private static final long EMPTY_SIZE = ObjectSizes.measure(new SimpleSparseCellName(null));
 
     private final ColumnIdentifier columnName;
 
     // Not meant to be used directly, you should use the CellNameType method instead
-    SimpleSparseCellName(ColumnIdentifier columnName)
-    {
+    SimpleSparseCellName(ColumnIdentifier columnName) {
         this.columnName = columnName;
     }
 
-    public int size()
-    {
+    public int size() {
         return 1;
     }
 
-    public ByteBuffer get(int i)
-    {
+    public ByteBuffer get(int i) {
         if (i != 0)
             throw new IndexOutOfBoundsException();
-
+        if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+            if (!isSerializeLoggingActive.get()) {
+                isSerializeLoggingActive.set(true);
+                serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(this, this.columnName, "this.columnName").toJsonString());
+                isSerializeLoggingActive.set(false);
+            }
+        }
         return columnName.bytes;
     }
 
     @Override
-    public Composite withEOC(EOC newEoc)
-    {
+    public Composite withEOC(EOC newEoc) {
         // EOC makes no sense for not truly composites.
         return this;
     }
 
     @Override
-    public ByteBuffer toByteBuffer()
-    {
+    public ByteBuffer toByteBuffer() {
+        if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+            if (!isSerializeLoggingActive.get()) {
+                isSerializeLoggingActive.set(true);
+                serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(this, this.columnName, "this.columnName").toJsonString());
+                isSerializeLoggingActive.set(false);
+            }
+        }
         return columnName.bytes;
     }
 
-    public int clusteringSize()
-    {
+    public int clusteringSize() {
         return 0;
     }
 
-    public ColumnIdentifier cql3ColumnName(CFMetaData metadata)
-    {
+    public ColumnIdentifier cql3ColumnName(CFMetaData metadata) {
+        if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+            if (!isSerializeLoggingActive.get()) {
+                isSerializeLoggingActive.set(true);
+                serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(this, this.columnName, "this.columnName").toJsonString());
+                isSerializeLoggingActive.set(false);
+            }
+        }
         return columnName;
     }
 
-    public ByteBuffer collectionElement()
-    {
+    public ByteBuffer collectionElement() {
         return null;
     }
 
-    public boolean isCollectionCell()
-    {
+    public boolean isCollectionCell() {
         return false;
     }
 
-    public boolean isSameCQL3RowAs(CellNameType type, CellName other)
-    {
+    public boolean isSameCQL3RowAs(CellNameType type, CellName other) {
         return true;
     }
 
-    public long unsharedHeapSizeExcludingData()
-    {
+    public long unsharedHeapSizeExcludingData() {
         return EMPTY_SIZE + columnName.unsharedHeapSizeExcludingData();
     }
 
-    public long unsharedHeapSize()
-    {
+    public long unsharedHeapSize() {
         return EMPTY_SIZE + columnName.unsharedHeapSize();
     }
 
-    public CellName copy(CFMetaData cfm, AbstractAllocator allocator)
-    {
+    public CellName copy(CFMetaData cfm, AbstractAllocator allocator) {
         return new SimpleSparseCellName(columnName.clone(allocator));
     }
 }

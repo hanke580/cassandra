@@ -19,34 +19,53 @@ package org.apache.cassandra.repair.messages;
 
 import java.io.DataInput;
 import java.io.IOException;
-
 import org.apache.cassandra.io.util.DataOutputPlus;
 import org.apache.cassandra.repair.RepairJobDesc;
 
-public class SnapshotMessage extends RepairMessage
-{
+public class SnapshotMessage extends RepairMessage {
+
+    private static final org.slf4j.Logger serialize_logger = org.slf4j.LoggerFactory.getLogger("serialize.logger");
+
     public final static MessageSerializer serializer = new SnapshotMessageSerializer();
 
-    public SnapshotMessage(RepairJobDesc desc)
-    {
+    public SnapshotMessage(RepairJobDesc desc) {
         super(Type.SNAPSHOT, desc);
     }
 
-    public static class SnapshotMessageSerializer implements MessageSerializer<SnapshotMessage>
-    {
-        public void serialize(SnapshotMessage message, DataOutputPlus out, int version) throws IOException
-        {
+    public static class SnapshotMessageSerializer implements MessageSerializer<SnapshotMessage> {
+
+        private java.lang.ThreadLocal<Boolean> isSerializeLoggingActive = new ThreadLocal<Boolean>() {
+
+            @Override
+            protected Boolean initialValue() {
+                return false;
+            }
+        };
+
+        public void serialize(SnapshotMessage message, DataOutputPlus out, int version) throws IOException {
+            if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+                if (!isSerializeLoggingActive.get()) {
+                    isSerializeLoggingActive.set(true);
+                    serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(message, message.desc, "message.desc").toJsonString());
+                    isSerializeLoggingActive.set(false);
+                }
+            }
             RepairJobDesc.serializer.serialize(message.desc, out, version);
         }
 
-        public SnapshotMessage deserialize(DataInput in, int version) throws IOException
-        {
+        public SnapshotMessage deserialize(DataInput in, int version) throws IOException {
             RepairJobDesc desc = RepairJobDesc.serializer.deserialize(in, version);
             return new SnapshotMessage(desc);
         }
 
-        public long serializedSize(SnapshotMessage message, int version)
-        {
+        public long serializedSize(SnapshotMessage message, int version) {
+            if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+                if (!isSerializeLoggingActive.get()) {
+                    isSerializeLoggingActive.set(true);
+                    serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(message, message.desc, "message.desc").toJsonString());
+                    isSerializeLoggingActive.set(false);
+                }
+            }
             return RepairJobDesc.serializer.serializedSize(message.desc, version);
         }
     }

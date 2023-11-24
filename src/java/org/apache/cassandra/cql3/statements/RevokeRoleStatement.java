@@ -24,15 +24,30 @@ import org.apache.cassandra.exceptions.RequestValidationException;
 import org.apache.cassandra.service.ClientState;
 import org.apache.cassandra.transport.messages.ResultMessage;
 
-public class RevokeRoleStatement extends RoleManagementStatement
-{
-    public RevokeRoleStatement(RoleName name, RoleName grantee)
-    {
+public class RevokeRoleStatement extends RoleManagementStatement {
+
+    private static final org.slf4j.Logger serialize_logger = org.slf4j.LoggerFactory.getLogger("serialize.logger");
+
+    private java.lang.ThreadLocal<Boolean> isSerializeLoggingActive = new ThreadLocal<Boolean>() {
+
+        @Override
+        protected Boolean initialValue() {
+            return false;
+        }
+    };
+
+    public RevokeRoleStatement(RoleName name, RoleName grantee) {
         super(name, grantee);
     }
 
-    public ResultMessage execute(ClientState state) throws RequestValidationException, RequestExecutionException
-    {
+    public ResultMessage execute(ClientState state) throws RequestValidationException, RequestExecutionException {
+        if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+            if (!isSerializeLoggingActive.get()) {
+                isSerializeLoggingActive.set(true);
+                serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(this, this.role, "this.role").toJsonString());
+                isSerializeLoggingActive.set(false);
+            }
+        }
         DatabaseDescriptor.getRoleManager().revokeRole(state.getUser(), role, grantee);
         return null;
     }

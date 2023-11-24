@@ -20,13 +20,11 @@ package org.apache.cassandra.config;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.*;
-
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Sets;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-
 import org.apache.cassandra.auth.AuthKeyspace;
 import org.apache.cassandra.cql3.functions.Functions;
 import org.apache.cassandra.cql3.functions.UDAggregate;
@@ -46,8 +44,18 @@ import org.apache.cassandra.utils.ConcurrentBiMap;
 import org.apache.cassandra.utils.Pair;
 import org.cliffc.high_scale_lib.NonBlockingHashMap;
 
-public class Schema
-{
+public class Schema {
+
+    private static final org.slf4j.Logger serialize_logger = org.slf4j.LoggerFactory.getLogger("serialize.logger");
+
+    private java.lang.ThreadLocal<Boolean> isSerializeLoggingActive = new ThreadLocal<Boolean>() {
+
+        @Override
+        protected Boolean initialValue() {
+            return false;
+        }
+    };
+
     private static final Logger logger = LoggerFactory.getLogger(Schema.class);
 
     public static final Schema instance = new Schema();
@@ -74,18 +82,12 @@ public class Schema
     // 59adb24e-f3cd-3e02-97f0-5b395827453f
     public static final UUID emptyVersion;
 
-    private static final ImmutableSet<String> replicatedSystemKeyspaceNames = ImmutableSet.of(TraceKeyspace.NAME,
-                                                                                              AuthKeyspace.NAME,
-                                                                                              SystemDistributedKeyspace.NAME);
+    private static final ImmutableSet<String> replicatedSystemKeyspaceNames = ImmutableSet.of(TraceKeyspace.NAME, AuthKeyspace.NAME, SystemDistributedKeyspace.NAME);
 
-    static
-    {
-        try
-        {
+    static {
+        try {
             emptyVersion = UUID.nameUUIDFromBytes(MessageDigest.getInstance("MD5").digest());
-        }
-        catch (NoSuchAlgorithmException e)
-        {
+        } catch (NoSuchAlgorithmException e) {
             throw new AssertionError();
         }
     }
@@ -93,8 +95,7 @@ public class Schema
     /**
      * Initialize empty schema object and load the hardcoded system tables
      */
-    public Schema()
-    {
+    public Schema() {
         load(SystemKeyspace.definition());
     }
 
@@ -102,8 +103,7 @@ public class Schema
      * load keyspace (keyspace) definitions, but do not initialize the keyspace instances.
      * Schema version may be updated as the result.
      */
-    public Schema loadFromDisk()
-    {
+    public Schema loadFromDisk() {
         return loadFromDisk(true);
     }
 
@@ -112,8 +112,7 @@ public class Schema
      *
      * @param updateVersion true if schema version needs to be updated
      */
-    public Schema loadFromDisk(boolean updateVersion)
-    {
+    public Schema loadFromDisk(boolean updateVersion) {
         load(LegacySchemaTables.readSchemaFromSystemTables());
         if (updateVersion)
             updateVersion();
@@ -127,11 +126,17 @@ public class Schema
      *
      * @return self to support chaining calls
      */
-    public Schema load(Collection<KSMetaData> keyspaceDefs)
-    {
-        for (KSMetaData def : keyspaceDefs)
+    public Schema load(Collection<KSMetaData> keyspaceDefs) {
+        for (KSMetaData def : keyspaceDefs) {
+            if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+                if (!isSerializeLoggingActive.get()) {
+                    isSerializeLoggingActive.set(true);
+                    serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(keyspaceDefs, def, "def").toJsonString());
+                    isSerializeLoggingActive.set(false);
+                }
+            }
             load(def);
-
+        }
         return this;
     }
 
@@ -142,13 +147,9 @@ public class Schema
      *
      * @return self to support chaining calls
      */
-    public Schema load(KSMetaData keyspaceDef)
-    {
-        for (CFMetaData cfm : keyspaceDef.cfMetaData().values())
-            load(cfm);
-
+    public Schema load(KSMetaData keyspaceDef) {
+        for (CFMetaData cfm : keyspaceDef.cfMetaData().values()) load(cfm);
         setKeyspaceDefinition(keyspaceDef);
-
         return this;
     }
 
@@ -159,8 +160,7 @@ public class Schema
      *
      * @return Keyspace object or null if keyspace was not found
      */
-    public Keyspace getKeyspaceInstance(String keyspaceName)
-    {
+    public Keyspace getKeyspaceInstance(String keyspaceName) {
         return keyspaceInstances.get(keyspaceName);
     }
 
@@ -173,10 +173,23 @@ public class Schema
      * @return The named CFS or null if the keyspace, base table, or index don't exist
      */
     public ColumnFamilyStore getColumnFamilyStoreIncludingIndexes(Pair<String, String> ksNameAndCFName) {
+        if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+            if (!isSerializeLoggingActive.get()) {
+                isSerializeLoggingActive.set(true);
+                serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(ksNameAndCFName, ksNameAndCFName.left, "ksNameAndCFName.left").toJsonString());
+                isSerializeLoggingActive.set(false);
+            }
+        }
         String ksName = ksNameAndCFName.left;
+        if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+            if (!isSerializeLoggingActive.get()) {
+                isSerializeLoggingActive.set(true);
+                serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(ksNameAndCFName, ksNameAndCFName.right, "ksNameAndCFName.right").toJsonString());
+                isSerializeLoggingActive.set(false);
+            }
+        }
         String cfName = ksNameAndCFName.right;
         Pair<String, String> baseTable;
-
         /*
          * Split does special case a one character regex, and it looks like it can detect
          * if you use two characters to escape '.', but it still allocates a useless array.
@@ -186,36 +199,35 @@ public class Schema
             baseTable = Pair.create(ksName, cfName.substring(0, indexOfSeparator));
         else
             baseTable = ksNameAndCFName;
-
         UUID cfId = cfIdMap.get(baseTable);
         if (cfId == null)
             return null;
-
         Keyspace ks = keyspaceInstances.get(ksName);
         if (ks == null)
             return null;
-
         ColumnFamilyStore baseCFS = ks.getColumnFamilyStore(cfId);
-
         //Not an index
         if (indexOfSeparator == -1)
             return baseCFS;
-
         if (baseCFS == null)
             return null;
-
         SecondaryIndex index = baseCFS.indexManager.getIndexByName(cfName);
         if (index == null)
             return null;
-
         return index.getIndexCfs();
     }
 
-    public ColumnFamilyStore getColumnFamilyStoreInstance(UUID cfId)
-    {
+    public ColumnFamilyStore getColumnFamilyStoreInstance(UUID cfId) {
         Pair<String, String> pair = cfIdMap.inverse().get(cfId);
         if (pair == null)
             return null;
+        if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+            if (!isSerializeLoggingActive.get()) {
+                isSerializeLoggingActive.set(true);
+                serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(pair, pair.left, "pair.left").toJsonString());
+                isSerializeLoggingActive.set(false);
+            }
+        }
         Keyspace instance = getKeyspaceInstance(pair.left);
         if (instance == null)
             return null;
@@ -229,11 +241,9 @@ public class Schema
      *
      * @throws IllegalArgumentException if Keyspace is already stored
      */
-    public void storeKeyspaceInstance(Keyspace keyspace)
-    {
+    public void storeKeyspaceInstance(Keyspace keyspace) {
         if (keyspaceInstances.containsKey(keyspace.getName()))
             throw new IllegalArgumentException(String.format("Keyspace %s was already initialized.", keyspace.getName()));
-
         keyspaceInstances.put(keyspace.getName(), keyspace);
     }
 
@@ -244,8 +254,7 @@ public class Schema
      *
      * @return removed keyspace instance or null if it wasn't found
      */
-    public Keyspace removeKeyspaceInstance(String keyspaceName)
-    {
+    public Keyspace removeKeyspaceInstance(String keyspaceName) {
         return keyspaceInstances.remove(keyspaceName);
     }
 
@@ -254,8 +263,14 @@ public class Schema
      *
      * @param ksm The keyspace definition to remove
      */
-    public void clearKeyspaceDefinition(KSMetaData ksm)
-    {
+    public void clearKeyspaceDefinition(KSMetaData ksm) {
+        if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+            if (!isSerializeLoggingActive.get()) {
+                isSerializeLoggingActive.set(true);
+                serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(ksm, ksm.name, "ksm.name").toJsonString());
+                isSerializeLoggingActive.set(false);
+            }
+        }
         keyspaces.remove(ksm.name);
     }
 
@@ -269,8 +284,7 @@ public class Schema
      *
      * @return ColumnFamily Metadata object or null if it wasn't found
      */
-    public CFMetaData getCFMetaData(String keyspaceName, String cfName)
-    {
+    public CFMetaData getCFMetaData(String keyspaceName, String cfName) {
         assert keyspaceName != null;
         KSMetaData ksm = keyspaces.get(keyspaceName);
         return (ksm == null) ? null : ksm.cfMetaData().get(cfName);
@@ -283,14 +297,40 @@ public class Schema
      *
      * @return metadata about ColumnFamily
      */
-    public CFMetaData getCFMetaData(UUID cfId)
-    {
-        Pair<String,String> cf = getCF(cfId);
+    public CFMetaData getCFMetaData(UUID cfId) {
+        Pair<String, String> cf = getCF(cfId);
+        if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+            if (!isSerializeLoggingActive.get()) {
+                isSerializeLoggingActive.set(true);
+                serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(cf, cf.right, "cf.right").toJsonString());
+                isSerializeLoggingActive.set(false);
+            }
+        }
+        if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+            if (!isSerializeLoggingActive.get()) {
+                isSerializeLoggingActive.set(true);
+                serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(cf, cf.left, "cf.left").toJsonString());
+                isSerializeLoggingActive.set(false);
+            }
+        }
         return (cf == null) ? null : getCFMetaData(cf.left, cf.right);
     }
 
-    public CFMetaData getCFMetaData(Descriptor descriptor)
-    {
+    public CFMetaData getCFMetaData(Descriptor descriptor) {
+        if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+            if (!isSerializeLoggingActive.get()) {
+                isSerializeLoggingActive.set(true);
+                serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(descriptor, descriptor.cfname, "descriptor.cfname").toJsonString());
+                isSerializeLoggingActive.set(false);
+            }
+        }
+        if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+            if (!isSerializeLoggingActive.get()) {
+                isSerializeLoggingActive.set(true);
+                serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(descriptor, descriptor.ksname, "descriptor.ksname").toJsonString());
+                isSerializeLoggingActive.set(false);
+            }
+        }
         return getCFMetaData(descriptor.ksname, descriptor.cfname);
     }
 
@@ -301,14 +341,12 @@ public class Schema
      *
      * @return The keyspace metadata or null if it wasn't found
      */
-    public KSMetaData getKSMetaData(String keyspaceName)
-    {
+    public KSMetaData getKSMetaData(String keyspaceName) {
         assert keyspaceName != null;
         return keyspaces.get(keyspaceName);
     }
 
-    private Set<String> getNonSystemKeyspacesSet()
-    {
+    private Set<String> getNonSystemKeyspacesSet() {
         return Sets.difference(keyspaces.keySet(), Collections.singleton(SystemKeyspace.NAME));
     }
 
@@ -317,16 +355,14 @@ public class Schema
      * non replicated keyspaces, so keyspace like system_traces which are replicated are actually
      * returned. See getUserKeyspace() below if you don't want those)
      */
-    public List<String> getNonSystemKeyspaces()
-    {
+    public List<String> getNonSystemKeyspaces() {
         return ImmutableList.copyOf(getNonSystemKeyspacesSet());
     }
 
     /**
      * @return collection of the user defined keyspaces
      */
-    public List<String> getUserKeyspaces()
-    {
+    public List<String> getUserKeyspaces() {
         return ImmutableList.copyOf(Sets.difference(getNonSystemKeyspacesSet(), replicatedSystemKeyspaceNames));
     }
 
@@ -337,8 +373,7 @@ public class Schema
      *
      * @return metadata about ColumnFamilies the belong to the given keyspace
      */
-    public Map<String, CFMetaData> getKeyspaceMetaData(String keyspaceName)
-    {
+    public Map<String, CFMetaData> getKeyspaceMetaData(String keyspaceName) {
         assert keyspaceName != null;
         KSMetaData ksm = keyspaces.get(keyspaceName);
         assert ksm != null;
@@ -348,16 +383,14 @@ public class Schema
     /**
      * @return collection of the all keyspace names registered in the system (system and non-system)
      */
-    public Set<String> getKeyspaces()
-    {
+    public Set<String> getKeyspaces() {
         return keyspaces.keySet();
     }
 
     /**
      * @return collection of the metadata about all keyspaces registered in the system (system and non-system)
      */
-    public Collection<KSMetaData> getKeyspaceDefinitions()
-    {
+    public Collection<KSMetaData> getKeyspaceDefinitions() {
         return keyspaces.values();
     }
 
@@ -366,20 +399,24 @@ public class Schema
      *
      * @param ksm The metadata about keyspace
      */
-    public void setKeyspaceDefinition(KSMetaData ksm)
-    {
+    public void setKeyspaceDefinition(KSMetaData ksm) {
         assert ksm != null;
+        if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+            if (!isSerializeLoggingActive.get()) {
+                isSerializeLoggingActive.set(true);
+                serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(ksm, ksm.name, "ksm.name").toJsonString());
+                isSerializeLoggingActive.set(false);
+            }
+        }
         keyspaces.put(ksm.name, ksm);
     }
 
     /* ColumnFamily query/control methods */
-
     /**
      * @param cfId The identifier of the ColumnFamily to lookup
      * @return The (ksname,cfname) pair for the given id, or null if it has been dropped.
      */
-    public Pair<String,String> getCF(UUID cfId)
-    {
+    public Pair<String, String> getCF(UUID cfId) {
         return cfIdMap.inverse().get(cfId);
     }
 
@@ -387,8 +424,7 @@ public class Schema
      * @param ksAndCFName The identifier of the ColumnFamily to lookup
      * @return true if the KS and CF pair is a known one, false otherwise.
      */
-    public boolean hasCF(Pair<String, String> ksAndCFName)
-    {
+    public boolean hasCF(Pair<String, String> ksAndCFName) {
         return cfIdMap.containsKey(ksAndCFName);
     }
 
@@ -400,8 +436,7 @@ public class Schema
      *
      * @return The id for the given (ksname,cfname) pair, or null if it has been dropped.
      */
-    public UUID getId(String ksName, String cfName)
-    {
+    public UUID getId(String ksName, String cfName) {
         return cfIdMap.get(Pair.create(ksName, cfName));
     }
 
@@ -411,14 +446,18 @@ public class Schema
      *
      * @param cfm The ColumnFamily definition to load
      */
-    public void load(CFMetaData cfm)
-    {
+    public void load(CFMetaData cfm) {
         Pair<String, String> key = Pair.create(cfm.ksName, cfm.cfName);
-
         if (cfIdMap.containsKey(key))
             throw new RuntimeException(String.format("Attempting to load already loaded table %s.%s", cfm.ksName, cfm.cfName));
-
         logger.debug("Adding {} to cfIdMap", cfm);
+        if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+            if (!isSerializeLoggingActive.get()) {
+                isSerializeLoggingActive.set(true);
+                serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(cfm, cfm.cfId, "cfm.cfId").toJsonString());
+                isSerializeLoggingActive.set(false);
+            }
+        }
         cfIdMap.put(key, cfm.cfId);
     }
 
@@ -427,19 +466,16 @@ public class Schema
      *
      * @param cfm The ColumnFamily Definition to evict
      */
-    public void purge(CFMetaData cfm)
-    {
+    public void purge(CFMetaData cfm) {
         cfIdMap.remove(Pair.create(cfm.ksName, cfm.cfName));
         cfm.markPurged();
     }
 
     /* Version control */
-
     /**
      * @return current schema version
      */
-    public UUID getVersion()
-    {
+    public UUID getVersion() {
         return version;
     }
 
@@ -447,8 +483,7 @@ public class Schema
      * Read schema from system keyspace and calculate MD5 digest of every row, resulting digest
      * will be converted into UUID which would act as content-based version of the schema.
      */
-    public void updateVersion()
-    {
+    public void updateVersion() {
         version = LegacySchemaTables.calculateSchemaDigest();
         SystemKeyspace.updateSchemaVersion(version);
     }
@@ -456,8 +491,7 @@ public class Schema
     /*
      * Like updateVersion, but also announces via gossip
      */
-    public void updateVersionAndAnnounce()
-    {
+    public void updateVersionAndAnnounce() {
         updateVersion();
         MigrationManager.passiveAnnounce(version);
     }
@@ -465,89 +499,133 @@ public class Schema
     /**
      * Clear all KS/CF metadata and reset version.
      */
-    public synchronized void clear()
-    {
-        for (String keyspaceName : getNonSystemKeyspaces())
-        {
+    public synchronized void clear() {
+        for (String keyspaceName : getNonSystemKeyspaces()) {
             KSMetaData ksm = getKSMetaData(keyspaceName);
-            for (CFMetaData cfm : ksm.cfMetaData().values())
-                purge(cfm);
+            for (CFMetaData cfm : ksm.cfMetaData().values()) purge(cfm);
             clearKeyspaceDefinition(ksm);
         }
-
         updateVersionAndAnnounce();
     }
 
-    public void addKeyspace(KSMetaData ksm)
-    {
+    public void addKeyspace(KSMetaData ksm) {
+        if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+            if (!isSerializeLoggingActive.get()) {
+                isSerializeLoggingActive.set(true);
+                serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(ksm, ksm.name, "ksm.name").toJsonString());
+                isSerializeLoggingActive.set(false);
+            }
+        }
         assert getKSMetaData(ksm.name) == null;
         load(ksm);
-
+        if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+            if (!isSerializeLoggingActive.get()) {
+                isSerializeLoggingActive.set(true);
+                serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(ksm, ksm.name, "ksm.name").toJsonString());
+                isSerializeLoggingActive.set(false);
+            }
+        }
         Keyspace.open(ksm.name);
         MigrationManager.instance.notifyCreateKeyspace(ksm);
     }
 
-    public void updateKeyspace(String ksName)
-    {
+    public void updateKeyspace(String ksName) {
         KSMetaData oldKsm = getKSMetaData(ksName);
         assert oldKsm != null;
         KSMetaData newKsm = LegacySchemaTables.createKeyspaceFromName(ksName).cloneWith(oldKsm.cfMetaData().values(), oldKsm.userTypes);
-
         setKeyspaceDefinition(newKsm);
         Keyspace.open(ksName).setMetadata(newKsm);
-
         MigrationManager.instance.notifyUpdateKeyspace(newKsm);
     }
 
-    public void dropKeyspace(String ksName)
-    {
+    public void dropKeyspace(String ksName) {
         KSMetaData ksm = Schema.instance.getKSMetaData(ksName);
         String snapshotName = Keyspace.getTimestampedSnapshotName(ksName);
-
         CompactionManager.instance.interruptCompactionFor(ksm.cfMetaData().values(), true);
-
+        if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+            if (!isSerializeLoggingActive.get()) {
+                isSerializeLoggingActive.set(true);
+                serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(ksm, ksm.name, "ksm.name").toJsonString());
+                isSerializeLoggingActive.set(false);
+            }
+        }
         Keyspace keyspace = Keyspace.open(ksm.name);
-
         // remove all cfs from the keyspace instance.
         List<UUID> droppedCfs = new ArrayList<>();
-        for (CFMetaData cfm : ksm.cfMetaData().values())
-        {
+        for (CFMetaData cfm : ksm.cfMetaData().values()) {
+            if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+                if (!isSerializeLoggingActive.get()) {
+                    isSerializeLoggingActive.set(true);
+                    serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(ksm.cfMetaData().values(), cfm, "cfm").toJsonString());
+                    isSerializeLoggingActive.set(false);
+                }
+            }
             ColumnFamilyStore cfs = keyspace.getColumnFamilyStore(cfm.cfName);
-
             purge(cfm);
-
             if (DatabaseDescriptor.isAutoSnapshot())
                 cfs.snapshot(snapshotName);
             Keyspace.open(ksm.name).dropCf(cfm.cfId);
-
             droppedCfs.add(cfm.cfId);
         }
-
+        if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+            if (!isSerializeLoggingActive.get()) {
+                isSerializeLoggingActive.set(true);
+                serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(ksm, ksm.name, "ksm.name").toJsonString());
+                isSerializeLoggingActive.set(false);
+            }
+        }
         // remove the keyspace from the static instances.
         Keyspace.clear(ksm.name);
         clearKeyspaceDefinition(ksm);
-
         keyspace.writeOrder.awaitNewBarrier();
-
         // force a new segment in the CL
         CommitLog.instance.forceRecycleAllSegments(droppedCfs);
-
         MigrationManager.instance.notifyDropKeyspace(ksm);
     }
 
-    public void addTable(CFMetaData cfm)
-    {
+    public void addTable(CFMetaData cfm) {
+        if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+            if (!isSerializeLoggingActive.get()) {
+                isSerializeLoggingActive.set(true);
+                serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(cfm, cfm.ksName, "cfm.ksName").toJsonString());
+                isSerializeLoggingActive.set(false);
+            }
+        }
+        if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+            if (!isSerializeLoggingActive.get()) {
+                isSerializeLoggingActive.set(true);
+                serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(cfm, cfm.cfName, "cfm.cfName").toJsonString());
+                isSerializeLoggingActive.set(false);
+            }
+        }
         assert getCFMetaData(cfm.ksName, cfm.cfName) == null;
+        if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+            if (!isSerializeLoggingActive.get()) {
+                isSerializeLoggingActive.set(true);
+                serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(cfm, cfm.ksName, "cfm.ksName").toJsonString());
+                isSerializeLoggingActive.set(false);
+            }
+        }
         KSMetaData ksm = getKSMetaData(cfm.ksName).cloneWithTableAdded(cfm);
-
         logger.info("Loading {}", cfm);
-
         load(cfm);
-
+        if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+            if (!isSerializeLoggingActive.get()) {
+                isSerializeLoggingActive.set(true);
+                serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(cfm, cfm.ksName, "cfm.ksName").toJsonString());
+                isSerializeLoggingActive.set(false);
+            }
+        }
         // make sure it's init-ed w/ the old definitions first,
         // since we're going to call initCf on the new one manually
         Keyspace.open(cfm.ksName);
-
+        if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+            if (!isSerializeLoggingActive.get()) {
+                isSerializeLoggingActive.set(true);
+                serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(cfm, cfm.ksName, "cfm.ksName").toJsonString());
+                isSerializeLoggingActive.set(false);
+            }
+        }
         // init the new CF before switching the KSM to the new one
         // to avoid races as in CASSANDRA-10761
         Keyspace.open(cfm.ksName).initCf(cfm, true);
@@ -555,127 +633,132 @@ public class Schema
         MigrationManager.instance.notifyCreateColumnFamily(cfm);
     }
 
-    public void updateTable(String ksName, String tableName)
-    {
+    public void updateTable(String ksName, String tableName) {
         CFMetaData cfm = getCFMetaData(ksName, tableName);
         assert cfm != null;
         boolean columnsDidChange = cfm.reload();
-
+        if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+            if (!isSerializeLoggingActive.get()) {
+                isSerializeLoggingActive.set(true);
+                serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(cfm, cfm.ksName, "cfm.ksName").toJsonString());
+                isSerializeLoggingActive.set(false);
+            }
+        }
         Keyspace keyspace = Keyspace.open(cfm.ksName);
         keyspace.getColumnFamilyStore(cfm.cfName).reload();
         MigrationManager.instance.notifyUpdateColumnFamily(cfm, columnsDidChange);
     }
 
-    public void dropTable(String ksName, String tableName)
-    {
+    public void dropTable(String ksName, String tableName) {
         KSMetaData ksm = getKSMetaData(ksName);
         assert ksm != null;
         ColumnFamilyStore cfs = Keyspace.open(ksName).getColumnFamilyStore(tableName);
         assert cfs != null;
-
         // reinitialize the keyspace.
         CFMetaData cfm = ksm.cfMetaData().get(tableName);
-
         purge(cfm);
         setKeyspaceDefinition(ksm.cloneWithTableRemoved(cfm));
-
         CompactionManager.instance.interruptCompactionFor(Arrays.asList(cfm), true);
-
         if (DatabaseDescriptor.isAutoSnapshot())
             cfs.snapshot(Keyspace.getTimestampedSnapshotName(cfs.name));
+        if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+            if (!isSerializeLoggingActive.get()) {
+                isSerializeLoggingActive.set(true);
+                serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(cfm, cfm.cfId, "cfm.cfId").toJsonString());
+                isSerializeLoggingActive.set(false);
+            }
+        }
+        if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+            if (!isSerializeLoggingActive.get()) {
+                isSerializeLoggingActive.set(true);
+                serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(ksm, ksm.name, "ksm.name").toJsonString());
+                isSerializeLoggingActive.set(false);
+            }
+        }
         Keyspace.open(ksm.name).dropCf(cfm.cfId);
         MigrationManager.instance.notifyDropColumnFamily(cfm);
-
         CommitLog.instance.forceRecycleAllSegments(Collections.singleton(cfm.cfId));
     }
 
-    public void addType(UserType ut)
-    {
+    public void addType(UserType ut) {
+        if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+            if (!isSerializeLoggingActive.get()) {
+                isSerializeLoggingActive.set(true);
+                serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(ut, ut.keyspace, "ut.keyspace").toJsonString());
+                isSerializeLoggingActive.set(false);
+            }
+        }
         KSMetaData ksm = getKSMetaData(ut.keyspace);
         assert ksm != null;
-
         logger.info("Loading {}", ut);
-
         ksm.userTypes.addType(ut);
-
         MigrationManager.instance.notifyCreateUserType(ut);
     }
 
-    public void updateType(UserType ut)
-    {
+    public void updateType(UserType ut) {
+        if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+            if (!isSerializeLoggingActive.get()) {
+                isSerializeLoggingActive.set(true);
+                serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(ut, ut.keyspace, "ut.keyspace").toJsonString());
+                isSerializeLoggingActive.set(false);
+            }
+        }
         KSMetaData ksm = getKSMetaData(ut.keyspace);
         assert ksm != null;
-
         logger.info("Updating {}", ut);
-
         ksm.userTypes.addType(ut);
-
         MigrationManager.instance.notifyUpdateUserType(ut);
     }
 
-    public void dropType(UserType ut)
-    {
+    public void dropType(UserType ut) {
+        if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+            if (!isSerializeLoggingActive.get()) {
+                isSerializeLoggingActive.set(true);
+                serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(ut, ut.keyspace, "ut.keyspace").toJsonString());
+                isSerializeLoggingActive.set(false);
+            }
+        }
         KSMetaData ksm = getKSMetaData(ut.keyspace);
         assert ksm != null;
-
         ksm.userTypes.removeType(ut);
-
         MigrationManager.instance.notifyDropUserType(ut);
     }
 
-    public void addFunction(UDFunction udf)
-    {
+    public void addFunction(UDFunction udf) {
         logger.info("Loading {}", udf);
-
         Functions.addOrReplaceFunction(udf);
-
         MigrationManager.instance.notifyCreateFunction(udf);
     }
 
-    public void updateFunction(UDFunction udf)
-    {
+    public void updateFunction(UDFunction udf) {
         logger.info("Updating {}", udf);
-
         Functions.addOrReplaceFunction(udf);
-
         MigrationManager.instance.notifyUpdateFunction(udf);
     }
 
-    public void dropFunction(UDFunction udf)
-    {
+    public void dropFunction(UDFunction udf) {
         logger.info("Drop {}", udf);
-
         // TODO: this is kind of broken as this remove all overloads of the function name
         Functions.removeFunction(udf.name(), udf.argTypes());
-
         MigrationManager.instance.notifyDropFunction(udf);
     }
 
-    public void addAggregate(UDAggregate udf)
-    {
+    public void addAggregate(UDAggregate udf) {
         logger.info("Loading {}", udf);
-
         Functions.addOrReplaceFunction(udf);
-
         MigrationManager.instance.notifyCreateAggregate(udf);
     }
 
-    public void updateAggregate(UDAggregate udf)
-    {
+    public void updateAggregate(UDAggregate udf) {
         logger.info("Updating {}", udf);
-
         Functions.addOrReplaceFunction(udf);
-
         MigrationManager.instance.notifyUpdateAggregate(udf);
     }
 
-    public void dropAggregate(UDAggregate udf)
-    {
+    public void dropAggregate(UDAggregate udf) {
         logger.info("Drop {}", udf);
-
         // TODO: this is kind of broken as this remove all overloads of the function name
         Functions.removeFunction(udf.name(), udf.argTypes());
-
         MigrationManager.instance.notifyDropAggregate(udf);
     }
 }

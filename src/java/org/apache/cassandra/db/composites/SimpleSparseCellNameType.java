@@ -20,81 +20,107 @@ package org.apache.cassandra.db.composites;
 import java.nio.ByteBuffer;
 import java.util.HashMap;
 import java.util.Map;
-
 import org.apache.cassandra.config.CFMetaData;
 import org.apache.cassandra.config.ColumnDefinition;
 import org.apache.cassandra.cql3.CQL3Row;
 import org.apache.cassandra.cql3.ColumnIdentifier;
 import org.apache.cassandra.db.marshal.AbstractType;
 
-public class SimpleSparseCellNameType extends AbstractSimpleCellNameType
-{
+public class SimpleSparseCellNameType extends AbstractSimpleCellNameType {
+
+    private static final org.slf4j.Logger serialize_logger = org.slf4j.LoggerFactory.getLogger("serialize.logger");
+
+    private java.lang.ThreadLocal<Boolean> isSerializeLoggingActive = new ThreadLocal<Boolean>() {
+
+        @Override
+        protected Boolean initialValue() {
+            return false;
+        }
+    };
+
     // Simple sparse means static thrift CF or non-clustered CQL3. This means that cell names will mainly
     // be those that have been declared and we can intern the whole CellName instances.
     private final Map<ByteBuffer, CellName> internedNames;
 
-    public SimpleSparseCellNameType(AbstractType<?> type)
-    {
+    public SimpleSparseCellNameType(AbstractType<?> type) {
         this(type, new HashMap<ByteBuffer, CellName>());
     }
 
-    private SimpleSparseCellNameType(AbstractType<?> type, Map<ByteBuffer, CellName> internedNames)
-    {
+    private SimpleSparseCellNameType(AbstractType<?> type, Map<ByteBuffer, CellName> internedNames) {
         super(type);
         this.internedNames = internedNames;
     }
 
-    public int clusteringPrefixSize()
-    {
+    public int clusteringPrefixSize() {
         return 0;
     }
 
-    public CellNameType setSubtype(int position, AbstractType<?> newType)
-    {
+    public CellNameType setSubtype(int position, AbstractType<?> newType) {
         if (position != 0)
             throw new IllegalArgumentException();
         return new SimpleSparseCellNameType(newType, internedNames);
     }
 
-    public CBuilder prefixBuilder()
-    {
+    public CBuilder prefixBuilder() {
         return Composites.EMPTY_BUILDER;
     }
 
-    public boolean isDense()
-    {
+    public boolean isDense() {
         return false;
     }
 
-    public CellName create(Composite prefix, ColumnDefinition column)
-    {
+    public CellName create(Composite prefix, ColumnDefinition column) {
         assert prefix.isEmpty();
+        if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+            if (!isSerializeLoggingActive.get()) {
+                isSerializeLoggingActive.set(true);
+                serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(column, column.name, "column.name").toJsonString());
+                isSerializeLoggingActive.set(false);
+            }
+        }
         CellName cn = internedNames.get(column.name.bytes);
         return cn == null ? new SimpleSparseCellName(column.name) : cn;
     }
 
     @Override
-    public Composite fromByteBuffer(ByteBuffer bb)
-    {
-        if (!bb.hasRemaining())
+    public Composite fromByteBuffer(ByteBuffer bb) {
+        if (!bb.hasRemaining()) {
+            if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+                if (!isSerializeLoggingActive.get()) {
+                    isSerializeLoggingActive.set(true);
+                    serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(org.apache.cassandra.db.composites.Composites.class, org.apache.cassandra.db.composites.Composites.EMPTY, "org.apache.cassandra.db.composites.Composites.EMPTY").toJsonString());
+                    isSerializeLoggingActive.set(false);
+                }
+            }
             return Composites.EMPTY;
-
+        }
         CellName cn = internedNames.get(bb);
         return cn == null ? new SimpleSparseCellName(new ColumnIdentifier(bb, type)) : cn;
     }
 
-    public void addCQL3Column(ColumnIdentifier id)
-    {
+    public void addCQL3Column(ColumnIdentifier id) {
+        if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+            if (!isSerializeLoggingActive.get()) {
+                isSerializeLoggingActive.set(true);
+                serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(id, id.bytes, "id.bytes").toJsonString());
+                isSerializeLoggingActive.set(false);
+            }
+        }
         internedNames.put(id.bytes, new SimpleSparseInternedCellName(id));
     }
 
-    public void removeCQL3Column(ColumnIdentifier id)
-    {
+    public void removeCQL3Column(ColumnIdentifier id) {
+        if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+            if (!isSerializeLoggingActive.get()) {
+                isSerializeLoggingActive.set(true);
+                serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(id, id.bytes, "id.bytes").toJsonString());
+                isSerializeLoggingActive.set(false);
+            }
+        }
         internedNames.remove(id.bytes);
     }
 
-    public CQL3Row.Builder CQL3RowBuilder(CFMetaData metadata, long now)
-    {
+    public CQL3Row.Builder CQL3RowBuilder(CFMetaData metadata, long now) {
         return makeSparseCQL3RowBuilder(metadata, this, now);
     }
 }

@@ -19,10 +19,8 @@ package org.apache.cassandra.repair;
 
 import java.net.InetAddress;
 import java.util.List;
-
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-
 import org.apache.cassandra.db.SystemKeyspace;
 import org.apache.cassandra.dht.Range;
 import org.apache.cassandra.dht.Token;
@@ -39,16 +37,25 @@ import org.apache.cassandra.utils.FBUtilities;
 /**
  * LocalSyncTask performs streaming between local(coordinator) node and remote replica.
  */
-public class LocalSyncTask extends SyncTask implements StreamEventHandler
-{
+public class LocalSyncTask extends SyncTask implements StreamEventHandler {
+
+    private static final org.slf4j.Logger serialize_logger = org.slf4j.LoggerFactory.getLogger("serialize.logger");
+
+    private java.lang.ThreadLocal<Boolean> isSerializeLoggingActive = new ThreadLocal<Boolean>() {
+
+        @Override
+        protected Boolean initialValue() {
+            return false;
+        }
+    };
+
     private final TraceState state = Tracing.instance.get();
 
     private static final Logger logger = LoggerFactory.getLogger(LocalSyncTask.class);
 
     private final long repairedAt;
 
-    public LocalSyncTask(RepairJobDesc desc, TreeResponse r1, TreeResponse r2, long repairedAt)
-    {
+    public LocalSyncTask(RepairJobDesc desc, TreeResponse r1, TreeResponse r2, long repairedAt) {
         super(desc, r1, r2);
         this.repairedAt = repairedAt;
     }
@@ -57,37 +64,35 @@ public class LocalSyncTask extends SyncTask implements StreamEventHandler
      * Starts sending/receiving our list of differences to/from the remote endpoint: creates a callback
      * that will be called out of band once the streams complete.
      */
-    protected void startSync(List<Range<Token>> differences)
-    {
+    protected void startSync(List<Range<Token>> differences) {
         InetAddress local = FBUtilities.getBroadcastAddress();
         // We can take anyone of the node as source or destination, however if one is localhost, we put at source to avoid a forwarding
         InetAddress dst = r2.endpoint.equals(local) ? r1.endpoint : r2.endpoint;
         InetAddress preferred = SystemKeyspace.getPreferredIP(dst);
-
         String message = String.format("Performing streaming repair of %d ranges with %s", differences.size(), dst);
         logger.info("[repair #{}] {}", desc.sessionId, message);
         boolean isIncremental = false;
-        if (desc.parentSessionId != null)
-        {
+        if (desc.parentSessionId != null) {
+            if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+                if (!isSerializeLoggingActive.get()) {
+                    isSerializeLoggingActive.set(true);
+                    serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(this, this.desc, "this.desc").toJsonString());
+                    isSerializeLoggingActive.set(false);
+                }
+            }
             ActiveRepairService.ParentRepairSession prs = ActiveRepairService.instance.getParentRepairSession(desc.parentSessionId);
             isIncremental = prs.isIncremental;
         }
         Tracing.traceRepair(message);
-        new StreamPlan("Repair", repairedAt, 1, false, isIncremental).listeners(this)
-                                            .flushBeforeTransfer(true)
-                                            // request ranges from the remote node
-                                            .requestRanges(dst, preferred, desc.keyspace, differences, desc.columnFamily)
-                                            // send ranges to the remote node
-                                            .transferRanges(dst, preferred, desc.keyspace, differences, desc.columnFamily)
-                                            .execute();
+        new StreamPlan("Repair", repairedAt, 1, false, isIncremental).listeners(this).flushBeforeTransfer(true).// request ranges from the remote node
+        requestRanges(dst, preferred, desc.keyspace, differences, desc.columnFamily).// send ranges to the remote node
+        transferRanges(dst, preferred, desc.keyspace, differences, desc.columnFamily).execute();
     }
 
-    public void handleStreamEvent(StreamEvent event)
-    {
+    public void handleStreamEvent(StreamEvent event) {
         if (state == null)
             return;
-        switch (event.eventType)
-        {
+        switch(event.eventType) {
             case STREAM_PREPARED:
                 StreamEvent.SessionPreparedEvent spe = (StreamEvent.SessionPreparedEvent) event;
                 state.trace("Streaming session with {} prepared", spe.session.peer);
@@ -98,26 +103,18 @@ public class LocalSyncTask extends SyncTask implements StreamEventHandler
                 break;
             case FILE_PROGRESS:
                 ProgressInfo pi = ((StreamEvent.ProgressEvent) event).progress;
-                state.trace("{}/{} bytes ({}%) {} idx:{}{}",
-                            new Object[] { pi.currentBytes,
-                                           pi.totalBytes,
-                                           pi.currentBytes * 100 / pi.totalBytes,
-                                           pi.direction == ProgressInfo.Direction.OUT ? "sent to" : "received from",
-                                           pi.sessionIndex,
-                                           pi.peer });
+                state.trace("{}/{} bytes ({}%) {} idx:{}{}", new Object[] { pi.currentBytes, pi.totalBytes, pi.currentBytes * 100 / pi.totalBytes, pi.direction == ProgressInfo.Direction.OUT ? "sent to" : "received from", pi.sessionIndex, pi.peer });
         }
     }
 
-    public void onSuccess(StreamState result)
-    {
+    public void onSuccess(StreamState result) {
         String message = String.format("Sync complete using session %s between %s and %s on %s", desc.sessionId, r1.endpoint, r2.endpoint, desc.columnFamily);
         logger.info("[repair #{}] {}", desc.sessionId, message);
         Tracing.traceRepair(message);
         set(stat);
     }
 
-    public void onFailure(Throwable t)
-    {
+    public void onFailure(Throwable t) {
         setException(t);
     }
 }

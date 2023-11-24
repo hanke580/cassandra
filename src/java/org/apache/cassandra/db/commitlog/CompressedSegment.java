@@ -21,7 +21,6 @@ import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.util.Queue;
 import java.util.concurrent.ConcurrentLinkedQueue;
-
 import org.apache.cassandra.config.DatabaseDescriptor;
 import org.apache.cassandra.io.FSWriteError;
 import org.apache.cassandra.io.compress.BufferType;
@@ -33,14 +32,25 @@ import org.apache.cassandra.utils.SyncUtil;
  * Compressed commit log segment. Provides an in-memory buffer for the mutation threads. On sync compresses the written
  * section of the buffer and writes it to the destination channel.
  */
-public class CompressedSegment extends CommitLogSegment
-{
+public class CompressedSegment extends CommitLogSegment {
+
+    private static final org.slf4j.Logger serialize_logger = org.slf4j.LoggerFactory.getLogger("serialize.logger");
+
+    private java.lang.ThreadLocal<Boolean> isSerializeLoggingActive = new ThreadLocal<Boolean>() {
+
+        @Override
+        protected Boolean initialValue() {
+            return false;
+        }
+    };
+
     static private final ThreadLocal<ByteBuffer> compressedBufferHolder = new ThreadLocal<ByteBuffer>() {
-        protected ByteBuffer initialValue()
-        {
+
+        protected ByteBuffer initialValue() {
             return ByteBuffer.allocate(0);
         }
     };
+
     static Queue<ByteBuffer> bufferPool = new ConcurrentLinkedQueue<>();
 
     /**
@@ -51,6 +61,7 @@ public class CompressedSegment extends CommitLogSegment
     static final int MAX_BUFFERPOOL_SIZE = DatabaseDescriptor.getCommitLogMaxCompressionBuffersInPool();
 
     static final int COMPRESSED_MARKER_SIZE = SYNC_MARKER_SIZE + 4;
+
     final ICompressor compressor;
 
     volatile long lastWrittenPos = 0;
@@ -58,35 +69,26 @@ public class CompressedSegment extends CommitLogSegment
     /**
      * Constructs a new segment file.
      */
-    CompressedSegment(CommitLog commitLog)
-    {
+    CompressedSegment(CommitLog commitLog) {
         super(commitLog);
         this.compressor = commitLog.configuration.getCompressor();
-        try
-        {
+        try {
             channel.write((ByteBuffer) buffer.duplicate().flip());
             commitLog.allocator.addSize(lastWrittenPos = buffer.position());
-        }
-        catch (IOException e)
-        {
+        } catch (IOException e) {
             throw new FSWriteError(e, getPath());
         }
     }
 
-    ByteBuffer allocate(int size)
-    {
+    ByteBuffer allocate(int size) {
         return compressor.preferredBufferType().allocate(size);
     }
 
-    ByteBuffer createBuffer(CommitLog commitLog)
-    {
+    ByteBuffer createBuffer(CommitLog commitLog) {
         ByteBuffer buf = bufferPool.poll();
-        if (buf == null)
-        {
+        if (buf == null) {
             // this.compressor is not yet set, so we must use the commitLog's one.
-            buf = commitLog.configuration.getCompressor()
-                                         .preferredBufferType()
-                                         .allocate(DatabaseDescriptor.getCommitLogSegmentSize());
+            buf = commitLog.configuration.getCompressor().preferredBufferType().allocate(DatabaseDescriptor.getCommitLogSegmentSize());
         } else
             buf.clear();
         return buf;
@@ -95,33 +97,25 @@ public class CompressedSegment extends CommitLogSegment
     static long startMillis = System.currentTimeMillis();
 
     @Override
-    void write(int startMarker, int nextMarker)
-    {
+    void write(int startMarker, int nextMarker) {
         int contentStart = startMarker + SYNC_MARKER_SIZE;
         int length = nextMarker - contentStart;
         // The length may be 0 when the segment is being closed.
         assert length > 0 || length == 0 && !isStillAllocating();
-
-        try
-        {
+        try {
             int neededBufferSize = compressor.initialCompressedBufferLength(length) + COMPRESSED_MARKER_SIZE;
             ByteBuffer compressedBuffer = compressedBufferHolder.get();
-            if (compressor.preferredBufferType() != BufferType.typeOf(compressedBuffer) ||
-                compressedBuffer.capacity() < neededBufferSize)
-            {
+            if (compressor.preferredBufferType() != BufferType.typeOf(compressedBuffer) || compressedBuffer.capacity() < neededBufferSize) {
                 FileUtils.clean(compressedBuffer);
                 compressedBuffer = allocate(neededBufferSize);
                 compressedBufferHolder.set(compressedBuffer);
             }
-
             ByteBuffer inputBuffer = buffer.duplicate();
             inputBuffer.limit(contentStart + length).position(contentStart);
             compressedBuffer.limit(compressedBuffer.capacity()).position(COMPRESSED_MARKER_SIZE);
             compressor.compress(inputBuffer, compressedBuffer);
-
             compressedBuffer.flip();
             compressedBuffer.putInt(SYNC_MARKER_SIZE, length);
-
             // Only one thread can be here at a given time.
             // Protected by synchronization on CommitLogSegment.sync().
             writeSyncMarker(compressedBuffer, 0, (int) channel.position(), (int) channel.position() + compressedBuffer.remaining());
@@ -130,32 +124,33 @@ public class CompressedSegment extends CommitLogSegment
             assert channel.position() - lastWrittenPos == compressedBuffer.limit();
             lastWrittenPos = channel.position();
             SyncUtil.force(channel, true);
-        }
-        catch (Exception e)
-        {
+        } catch (Exception e) {
             throw new FSWriteError(e, getPath());
         }
     }
 
     @Override
-    protected void internalClose()
-    {
-        if (bufferPool.size() < MAX_BUFFERPOOL_SIZE)
+    protected void internalClose() {
+        if (bufferPool.size() < MAX_BUFFERPOOL_SIZE) {
+            if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+                if (!isSerializeLoggingActive.get()) {
+                    isSerializeLoggingActive.set(true);
+                    serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(this, this.buffer, "this.buffer").toJsonString());
+                    isSerializeLoggingActive.set(false);
+                }
+            }
             bufferPool.add(buffer);
-        else
+        } else
             FileUtils.clean(buffer);
-
         super.internalClose();
     }
 
-    static void shutdown()
-    {
+    static void shutdown() {
         bufferPool.clear();
     }
 
     @Override
-    public long onDiskSize()
-    {
+    public long onDiskSize() {
         return lastWrittenPos;
     }
 }

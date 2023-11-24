@@ -22,16 +22,24 @@ import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.TimeUnit;
-
 import org.apache.cassandra.metrics.StorageMetrics;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-
 import org.apache.cassandra.concurrent.ScheduledExecutors;
 import org.apache.cassandra.gms.*;
 
-public class LoadBroadcaster implements IEndpointStateChangeSubscriber
-{
+public class LoadBroadcaster implements IEndpointStateChangeSubscriber {
+
+    private static final org.slf4j.Logger serialize_logger = org.slf4j.LoggerFactory.getLogger("serialize.logger");
+
+    private java.lang.ThreadLocal<Boolean> isSerializeLoggingActive = new ThreadLocal<Boolean>() {
+
+        @Override
+        protected Boolean initialValue() {
+            return false;
+        }
+    };
+
     static final int BROADCAST_INTERVAL = Integer.getInteger("cassandra.broadcast_interval_ms", 60 * 1000);
 
     public static final LoadBroadcaster instance = new LoadBroadcaster();
@@ -40,60 +48,61 @@ public class LoadBroadcaster implements IEndpointStateChangeSubscriber
 
     private ConcurrentMap<InetAddress, Double> loadInfo = new ConcurrentHashMap<InetAddress, java.lang.Double>();
 
-    private LoadBroadcaster()
-    {
+    private LoadBroadcaster() {
         Gossiper.instance.register(this);
     }
 
-    public void onChange(InetAddress endpoint, ApplicationState state, VersionedValue value)
-    {
+    public void onChange(InetAddress endpoint, ApplicationState state, VersionedValue value) {
         if (state != ApplicationState.LOAD)
             return;
         loadInfo.put(endpoint, Double.valueOf(value.value));
     }
 
-    public void onJoin(InetAddress endpoint, EndpointState epState)
-    {
+    public void onJoin(InetAddress endpoint, EndpointState epState) {
+        if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+            if (!isSerializeLoggingActive.get()) {
+                isSerializeLoggingActive.set(true);
+                serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(org.apache.cassandra.gms.ApplicationState.class, org.apache.cassandra.gms.ApplicationState.LOAD, "org.apache.cassandra.gms.ApplicationState.LOAD").toJsonString());
+                isSerializeLoggingActive.set(false);
+            }
+        }
         VersionedValue localValue = epState.getApplicationState(ApplicationState.LOAD);
-        if (localValue != null)
-        {
+        if (localValue != null) {
             onChange(endpoint, ApplicationState.LOAD, localValue);
         }
     }
-    
-    public void beforeChange(InetAddress endpoint, EndpointState currentState, ApplicationState newStateKey, VersionedValue newValue) {}
 
-    public void onAlive(InetAddress endpoint, EndpointState state) {}
+    public void beforeChange(InetAddress endpoint, EndpointState currentState, ApplicationState newStateKey, VersionedValue newValue) {
+    }
 
-    public void onDead(InetAddress endpoint, EndpointState state) {}
+    public void onAlive(InetAddress endpoint, EndpointState state) {
+    }
 
-    public void onRestart(InetAddress endpoint, EndpointState state) {}
+    public void onDead(InetAddress endpoint, EndpointState state) {
+    }
 
-    public void onRemove(InetAddress endpoint)
-    {
+    public void onRestart(InetAddress endpoint, EndpointState state) {
+    }
+
+    public void onRemove(InetAddress endpoint) {
         loadInfo.remove(endpoint);
     }
 
-    public Map<InetAddress, Double> getLoadInfo()
-    {
+    public Map<InetAddress, Double> getLoadInfo() {
         return Collections.unmodifiableMap(loadInfo);
     }
 
-    public void startBroadcasting()
-    {
+    public void startBroadcasting() {
         // send the first broadcast "right away" (i.e., in 2 gossip heartbeats, when we should have someone to talk to);
         // after that send every BROADCAST_INTERVAL.
-        Runnable runnable = new Runnable()
-        {
-            public void run()
-            {
+        Runnable runnable = new Runnable() {
+
+            public void run() {
                 if (logger.isTraceEnabled())
                     logger.trace("Disseminating load info ...");
-                Gossiper.instance.addLocalApplicationState(ApplicationState.LOAD,
-                                                           StorageService.instance.valueFactory.load(StorageMetrics.load.getCount()));
+                Gossiper.instance.addLocalApplicationState(ApplicationState.LOAD, StorageService.instance.valueFactory.load(StorageMetrics.load.getCount()));
             }
         };
         ScheduledExecutors.scheduledTasks.scheduleWithFixedDelay(runnable, 2 * Gossiper.intervalInMillis, BROADCAST_INTERVAL, TimeUnit.MILLISECONDS);
     }
 }
-

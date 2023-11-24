@@ -23,66 +23,81 @@ import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
 import java.util.UUID;
-
 import org.apache.cassandra.dht.Range;
 import org.apache.cassandra.dht.Token;
 import org.apache.cassandra.io.util.DataOutputPlus;
 import org.apache.cassandra.net.MessagingService;
 import org.apache.cassandra.utils.UUIDSerializer;
 
-public class AnticompactionRequest extends RepairMessage
-{
+public class AnticompactionRequest extends RepairMessage {
+
+    private static final org.slf4j.Logger serialize_logger = org.slf4j.LoggerFactory.getLogger("serialize.logger");
+
     public static MessageSerializer serializer = new AnticompactionRequestSerializer();
+
     public final UUID parentRepairSession;
+
     /**
      * Successfully repaired ranges. Does not contain null.
      */
     public final Collection<Range<Token>> successfulRanges;
 
-    public AnticompactionRequest(UUID parentRepairSession, Collection<Range<Token>> ranges)
-    {
+    public AnticompactionRequest(UUID parentRepairSession, Collection<Range<Token>> ranges) {
         super(Type.ANTICOMPACTION_REQUEST, null);
         this.parentRepairSession = parentRepairSession;
         this.successfulRanges = ranges;
     }
 
-    public static class AnticompactionRequestSerializer implements MessageSerializer<AnticompactionRequest>
-    {
-        public void serialize(AnticompactionRequest message, DataOutputPlus out, int version) throws IOException
-        {
+    public static class AnticompactionRequestSerializer implements MessageSerializer<AnticompactionRequest> {
+
+        private java.lang.ThreadLocal<Boolean> isSerializeLoggingActive = new ThreadLocal<Boolean>() {
+
+            @Override
+            protected Boolean initialValue() {
+                return false;
+            }
+        };
+
+        public void serialize(AnticompactionRequest message, DataOutputPlus out, int version) throws IOException {
             UUIDSerializer.serializer.serialize(message.parentRepairSession, out, version);
             out.writeInt(message.successfulRanges.size());
-            for (Range<Token> r : message.successfulRanges)
-            {
+            if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+                if (!isSerializeLoggingActive.get()) {
+                    isSerializeLoggingActive.set(true);
+                    serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(message, message.successfulRanges, "message.successfulRanges").toJsonString());
+                    isSerializeLoggingActive.set(false);
+                }
+            }
+            for (Range<Token> r : message.successfulRanges) {
+                if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+                    if (!isSerializeLoggingActive.get()) {
+                        isSerializeLoggingActive.set(true);
+                        serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(message.successfulRanges, r, "r").toJsonString());
+                        isSerializeLoggingActive.set(false);
+                    }
+                }
                 MessagingService.validatePartitioner(r);
                 Range.tokenSerializer.serialize(r, out, version);
             }
         }
 
-        public AnticompactionRequest deserialize(DataInput in, int version) throws IOException
-        {
+        public AnticompactionRequest deserialize(DataInput in, int version) throws IOException {
             UUID parentRepairSession = UUIDSerializer.serializer.deserialize(in, version);
             int rangeCount = in.readInt();
             List<Range<Token>> ranges = new ArrayList<>(rangeCount);
-            for (int i = 0; i < rangeCount; i++)
-                ranges.add((Range<Token>) Range.tokenSerializer.deserialize(in, MessagingService.globalPartitioner(), version));
+            for (int i = 0; i < rangeCount; i++) ranges.add((Range<Token>) Range.tokenSerializer.deserialize(in, MessagingService.globalPartitioner(), version));
             return new AnticompactionRequest(parentRepairSession, ranges);
         }
 
-        public long serializedSize(AnticompactionRequest message, int version)
-        {
+        public long serializedSize(AnticompactionRequest message, int version) {
             long size = UUIDSerializer.serializer.serializedSize(message.parentRepairSession, version);
-            for (Range<Token> r : message.successfulRanges)
-                size += Range.tokenSerializer.serializedSize(r, version);
+            for (Range<Token> r : message.successfulRanges) size += Range.tokenSerializer.serializedSize(r, version);
             return size;
         }
     }
 
     @Override
-    public String toString()
-    {
-        return "AnticompactionRequest{" +
-                "parentRepairSession=" + parentRepairSession +
-                "} " + super.toString();
+    public String toString() {
+        return "AnticompactionRequest{" + "parentRepairSession=" + parentRepairSession + "} " + super.toString();
     }
 }

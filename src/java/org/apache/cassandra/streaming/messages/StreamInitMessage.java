@@ -22,7 +22,6 @@ import java.io.IOException;
 import java.net.InetAddress;
 import java.nio.ByteBuffer;
 import java.util.UUID;
-
 import org.apache.cassandra.db.TypeSizes;
 import org.apache.cassandra.io.IVersionedSerializer;
 import org.apache.cassandra.io.util.DataOutputBuffer;
@@ -36,22 +35,28 @@ import org.apache.cassandra.utils.UUIDSerializer;
  * StreamInitMessage is first sent from the node where {@link org.apache.cassandra.streaming.StreamSession} is started,
  * to initiate corresponding {@link org.apache.cassandra.streaming.StreamSession} on the other side.
  */
-public class StreamInitMessage
-{
+public class StreamInitMessage {
+
+    private static final org.slf4j.Logger serialize_logger = org.slf4j.LoggerFactory.getLogger("serialize.logger");
+
     public static IVersionedSerializer<StreamInitMessage> serializer = new StreamInitMessageSerializer();
 
     public final InetAddress from;
+
     public final int sessionIndex;
+
     public final UUID planId;
+
     public final String description;
 
     // true if this init message is to connect for outgoing message on receiving side
     public final boolean isForOutgoing;
+
     public final boolean keepSSTableLevel;
+
     public final boolean isIncremental;
 
-    public StreamInitMessage(InetAddress from, int sessionIndex, UUID planId, String description, boolean isForOutgoing, boolean keepSSTableLevel, boolean isIncremental)
-    {
+    public StreamInitMessage(InetAddress from, int sessionIndex, UUID planId, String description, boolean isForOutgoing, boolean keepSSTableLevel, boolean isIncremental) {
         this.from = from;
         this.sessionIndex = sessionIndex;
         this.planId = planId;
@@ -68,8 +73,7 @@ public class StreamInitMessage
      * @param version Streaming protocol version
      * @return serialized message in ByteBuffer format
      */
-    public ByteBuffer createMessage(boolean compress, int version)
-    {
+    public ByteBuffer createMessage(boolean compress, int version) {
         int header = 0;
         // set compression bit.
         if (compress)
@@ -78,23 +82,17 @@ public class StreamInitMessage
         header |= 8;
         // Setting up the version bit
         header |= (version << 8);
-
         byte[] bytes;
-        try
-        {
-            int size = (int)StreamInitMessage.serializer.serializedSize(this, version);
-            try (DataOutputBuffer buffer = new DataOutputBufferFixed(size))
-            {
+        try {
+            int size = (int) StreamInitMessage.serializer.serializedSize(this, version);
+            try (DataOutputBuffer buffer = new DataOutputBufferFixed(size)) {
                 StreamInitMessage.serializer.serialize(this, buffer, version);
                 bytes = buffer.getData();
             }
-        }
-        catch (IOException e)
-        {
+        } catch (IOException e) {
             throw new RuntimeException(e);
         }
         assert bytes.length > 0;
-
         ByteBuffer buffer = ByteBuffer.allocate(4 + 4 + bytes.length);
         buffer.putInt(MessagingService.PROTOCOL_MAGIC);
         buffer.putInt(header);
@@ -103,21 +101,62 @@ public class StreamInitMessage
         return buffer;
     }
 
-    private static class StreamInitMessageSerializer implements IVersionedSerializer<StreamInitMessage>
-    {
-        public void serialize(StreamInitMessage message, DataOutputPlus out, int version) throws IOException
-        {
+    private static class StreamInitMessageSerializer implements IVersionedSerializer<StreamInitMessage> {
+
+        private java.lang.ThreadLocal<Boolean> isSerializeLoggingActive = new ThreadLocal<Boolean>() {
+
+            @Override
+            protected Boolean initialValue() {
+                return false;
+            }
+        };
+
+        public void serialize(StreamInitMessage message, DataOutputPlus out, int version) throws IOException {
             CompactEndpointSerializationHelper.serialize(message.from, out);
+            if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+                if (!isSerializeLoggingActive.get()) {
+                    isSerializeLoggingActive.set(true);
+                    serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(message, message.sessionIndex, "message.sessionIndex").toJsonString());
+                    isSerializeLoggingActive.set(false);
+                }
+            }
             out.writeInt(message.sessionIndex);
             UUIDSerializer.serializer.serialize(message.planId, out, MessagingService.current_version);
+            if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+                if (!isSerializeLoggingActive.get()) {
+                    isSerializeLoggingActive.set(true);
+                    serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(message, message.description, "message.description").toJsonString());
+                    isSerializeLoggingActive.set(false);
+                }
+            }
             out.writeUTF(message.description);
+            if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+                if (!isSerializeLoggingActive.get()) {
+                    isSerializeLoggingActive.set(true);
+                    serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(message, message.isForOutgoing, "message.isForOutgoing").toJsonString());
+                    isSerializeLoggingActive.set(false);
+                }
+            }
             out.writeBoolean(message.isForOutgoing);
+            if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+                if (!isSerializeLoggingActive.get()) {
+                    isSerializeLoggingActive.set(true);
+                    serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(message, message.keepSSTableLevel, "message.keepSSTableLevel").toJsonString());
+                    isSerializeLoggingActive.set(false);
+                }
+            }
             out.writeBoolean(message.keepSSTableLevel);
+            if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+                if (!isSerializeLoggingActive.get()) {
+                    isSerializeLoggingActive.set(true);
+                    serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(message, message.isIncremental, "message.isIncremental").toJsonString());
+                    isSerializeLoggingActive.set(false);
+                }
+            }
             out.writeBoolean(message.isIncremental);
         }
 
-        public StreamInitMessage deserialize(DataInput in, int version) throws IOException
-        {
+        public StreamInitMessage deserialize(DataInput in, int version) throws IOException {
             InetAddress from = CompactEndpointSerializationHelper.deserialize(in);
             int sessionIndex = in.readInt();
             UUID planId = UUIDSerializer.serializer.deserialize(in, MessagingService.current_version);
@@ -128,8 +167,7 @@ public class StreamInitMessage
             return new StreamInitMessage(from, sessionIndex, planId, description, sentByInitiator, keepSSTableLevel, isIncremental);
         }
 
-        public long serializedSize(StreamInitMessage message, int version)
-        {
+        public long serializedSize(StreamInitMessage message, int version) {
             long size = CompactEndpointSerializationHelper.serializedSize(message.from);
             size += TypeSizes.NATIVE.sizeof(message.sessionIndex);
             size += UUIDSerializer.serializer.serializedSize(message.planId, MessagingService.current_version);

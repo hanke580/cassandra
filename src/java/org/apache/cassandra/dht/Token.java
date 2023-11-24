@@ -21,48 +21,51 @@ import java.io.DataInput;
 import java.io.IOException;
 import java.io.Serializable;
 import java.nio.ByteBuffer;
-
 import org.apache.cassandra.db.RowPosition;
 import org.apache.cassandra.db.TypeSizes;
 import org.apache.cassandra.exceptions.ConfigurationException;
 import org.apache.cassandra.io.util.DataOutputPlus;
 import org.apache.cassandra.utils.ByteBufferUtil;
 
-public abstract class Token implements RingPosition<Token>, Serializable
-{
+public abstract class Token implements RingPosition<Token>, Serializable {
+
+    private static final org.slf4j.Logger serialize_logger = org.slf4j.LoggerFactory.getLogger("serialize.logger");
+
     private static final long serialVersionUID = 1L;
 
     public static final TokenSerializer serializer = new TokenSerializer();
 
-    public static abstract class TokenFactory
-    {
+    public static abstract class TokenFactory {
+
         public abstract ByteBuffer toByteArray(Token token);
+
         public abstract Token fromByteArray(ByteBuffer bytes);
-        public abstract String toString(Token token); // serialize as string, not necessarily human-readable
-        public abstract Token fromString(String string); // deserialize
+
+        // serialize as string, not necessarily human-readable
+        public abstract String toString(Token token);
+
+        // deserialize
+        public abstract Token fromString(String string);
 
         public abstract void validate(String token) throws ConfigurationException;
     }
 
-    public static class TokenSerializer implements IPartitionerDependentSerializer<Token>
-    {
-        public void serialize(Token token, DataOutputPlus out, int version) throws IOException
-        {
+    public static class TokenSerializer implements IPartitionerDependentSerializer<Token> {
+
+        public void serialize(Token token, DataOutputPlus out, int version) throws IOException {
             IPartitioner p = token.getPartitioner();
             ByteBuffer b = p.getTokenFactory().toByteArray(token);
             ByteBufferUtil.writeWithLength(b, out);
         }
 
-        public Token deserialize(DataInput in, IPartitioner p, int version) throws IOException
-        {
+        public Token deserialize(DataInput in, IPartitioner p, int version) throws IOException {
             int size = in.readInt();
             byte[] bytes = new byte[size];
             in.readFully(bytes);
             return p.getTokenFactory().fromByteArray(ByteBuffer.wrap(bytes));
         }
 
-        public long serializedSize(Token object, int version)
-        {
+        public long serializedSize(Token object, int version) {
             IPartitioner p = object.getPartitioner();
             ByteBuffer b = p.getTokenFactory().toByteArray(object);
             return TypeSizes.NATIVE.sizeof(b.remaining()) + b.remaining();
@@ -70,21 +73,20 @@ public abstract class Token implements RingPosition<Token>, Serializable
     }
 
     abstract public IPartitioner getPartitioner();
+
     abstract public long getHeapSize();
+
     abstract public Object getTokenValue();
 
-    public Token getToken()
-    {
+    public Token getToken() {
         return this;
     }
 
-    public Token minValue()
-    {
+    public Token minValue() {
         return getPartitioner().getMinimumToken();
     }
 
-    public boolean isMinimum()
-    {
+    public boolean isMinimum() {
         return this.equals(minValue());
     }
 
@@ -102,13 +104,11 @@ public abstract class Token implements RingPosition<Token>, Serializable
      * Note that those are "fake" keys and should only be used for comparison
      * of other keys, for selection of keys when only a token is known.
      */
-    public KeyBound minKeyBound()
-    {
+    public KeyBound minKeyBound() {
         return new KeyBound(this, true);
     }
 
-    public KeyBound maxKeyBound()
-    {
+    public KeyBound maxKeyBound() {
         /*
          * For each token, we needs both minKeyBound and maxKeyBound
          * because a token corresponds to a range of keys. But the minimun
@@ -122,86 +122,102 @@ public abstract class Token implements RingPosition<Token>, Serializable
     }
 
     @SuppressWarnings("unchecked")
-    public <R extends RingPosition<R>> R upperBound(Class<R> klass)
-    {
+    public <R extends RingPosition<R>> R upperBound(Class<R> klass) {
         if (klass.equals(getClass()))
-            return (R)this;
+            return (R) this;
         else
-            return (R)maxKeyBound();
+            return (R) maxKeyBound();
     }
 
-    public static class KeyBound implements RowPosition
-    {
+    public static class KeyBound implements RowPosition {
+
+        private java.lang.ThreadLocal<Boolean> isSerializeLoggingActive = new ThreadLocal<Boolean>() {
+
+            @Override
+            protected Boolean initialValue() {
+                return false;
+            }
+        };
+
         private final Token token;
+
         public final boolean isMinimumBound;
 
-        private KeyBound(Token t, boolean isMinimumBound)
-        {
+        private KeyBound(Token t, boolean isMinimumBound) {
             this.token = t;
             this.isMinimumBound = isMinimumBound;
         }
 
-        public Token getToken()
-        {
+        public Token getToken() {
+            if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+                if (!isSerializeLoggingActive.get()) {
+                    isSerializeLoggingActive.set(true);
+                    serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(this, this.token, "this.token").toJsonString());
+                    isSerializeLoggingActive.set(false);
+                }
+            }
             return token;
         }
 
-        public int compareTo(RowPosition pos)
-        {
+        public int compareTo(RowPosition pos) {
             if (this == pos)
                 return 0;
-
             int cmp = getToken().compareTo(pos.getToken());
             if (cmp != 0)
                 return cmp;
-
             if (isMinimumBound)
-                return ((pos instanceof KeyBound) && ((KeyBound)pos).isMinimumBound) ? 0 : -1;
+                return ((pos instanceof KeyBound) && ((KeyBound) pos).isMinimumBound) ? 0 : -1;
             else
-                return ((pos instanceof KeyBound) && !((KeyBound)pos).isMinimumBound) ? 0 : 1;
+                return ((pos instanceof KeyBound) && !((KeyBound) pos).isMinimumBound) ? 0 : 1;
         }
 
-        public IPartitioner getPartitioner()
-        {
+        public IPartitioner getPartitioner() {
             return getToken().getPartitioner();
         }
 
-        public KeyBound minValue()
-        {
+        public KeyBound minValue() {
             return getPartitioner().getMinimumToken().minKeyBound();
         }
 
-        public boolean isMinimum()
-        {
+        public boolean isMinimum() {
             return getToken().isMinimum();
         }
 
-        public RowPosition.Kind kind()
-        {
+        public RowPosition.Kind kind() {
+            if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+                if (!isSerializeLoggingActive.get()) {
+                    isSerializeLoggingActive.set(true);
+                    serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(org.apache.cassandra.db.RowPosition.Kind.class, org.apache.cassandra.db.RowPosition.Kind.MAX_BOUND, "org.apache.cassandra.db.RowPosition.Kind.MAX_BOUND").toJsonString());
+                    isSerializeLoggingActive.set(false);
+                }
+            }
+            if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+                if (!isSerializeLoggingActive.get()) {
+                    isSerializeLoggingActive.set(true);
+                    serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(org.apache.cassandra.db.RowPosition.Kind.class, org.apache.cassandra.db.RowPosition.Kind.MIN_BOUND, "org.apache.cassandra.db.RowPosition.Kind.MIN_BOUND").toJsonString());
+                    isSerializeLoggingActive.set(false);
+                }
+            }
             return isMinimumBound ? RowPosition.Kind.MIN_BOUND : RowPosition.Kind.MAX_BOUND;
         }
 
         @Override
-        public boolean equals(Object obj)
-        {
+        public boolean equals(Object obj) {
             if (this == obj)
                 return true;
             if (obj == null || this.getClass() != obj.getClass())
                 return false;
-
-            KeyBound other = (KeyBound)obj;
+            KeyBound other = (KeyBound) obj;
             return token.equals(other.token) && isMinimumBound == other.isMinimumBound;
         }
 
         @Override
-        public int hashCode()
-        {
+        public int hashCode() {
             return getToken().hashCode() + (isMinimumBound ? 0 : 1);
         }
 
         @Override
-        public String toString()
-        {
+        public String toString() {
             return String.format("%s(%s)", isMinimumBound ? "min" : "max", getToken().toString());
         }
     }

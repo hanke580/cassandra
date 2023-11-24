@@ -18,10 +18,8 @@
 package org.apache.cassandra.repair;
 
 import java.net.InetAddress;
-
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-
 import org.apache.cassandra.db.SystemKeyspace;
 import org.apache.cassandra.net.MessagingService;
 import org.apache.cassandra.repair.messages.SyncComplete;
@@ -36,43 +34,54 @@ import org.apache.cassandra.streaming.StreamState;
  * StreamingRepairTask performs data streaming between two remote replica which neither is not repair coordinator.
  * Task will send {@link SyncComplete} message back to coordinator upon streaming completion.
  */
-public class StreamingRepairTask implements Runnable, StreamEventHandler
-{
+public class StreamingRepairTask implements Runnable, StreamEventHandler {
+
+    private static final org.slf4j.Logger serialize_logger = org.slf4j.LoggerFactory.getLogger("serialize.logger");
+
+    private java.lang.ThreadLocal<Boolean> isSerializeLoggingActive = new ThreadLocal<Boolean>() {
+
+        @Override
+        protected Boolean initialValue() {
+            return false;
+        }
+    };
+
     private static final Logger logger = LoggerFactory.getLogger(StreamingRepairTask.class);
 
     private final RepairJobDesc desc;
+
     private final SyncRequest request;
+
     private final long repairedAt;
 
-    public StreamingRepairTask(RepairJobDesc desc, SyncRequest request, long repairedAt)
-    {
+    public StreamingRepairTask(RepairJobDesc desc, SyncRequest request, long repairedAt) {
         this.desc = desc;
         this.request = request;
         this.repairedAt = repairedAt;
     }
 
-    public void run()
-    {
+    public void run() {
         InetAddress dest = request.dst;
         InetAddress preferred = SystemKeyspace.getPreferredIP(dest);
         logger.info(String.format("[streaming task #%s] Performing streaming repair of %d ranges with %s", desc.sessionId, request.ranges.size(), request.dst));
         boolean isIncremental = false;
-        if (desc.parentSessionId != null)
-        {
+        if (desc.parentSessionId != null) {
+            if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+                if (!isSerializeLoggingActive.get()) {
+                    isSerializeLoggingActive.set(true);
+                    serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(this, this.desc, "this.desc").toJsonString());
+                    isSerializeLoggingActive.set(false);
+                }
+            }
             ActiveRepairService.ParentRepairSession prs = ActiveRepairService.instance.getParentRepairSession(desc.parentSessionId);
             isIncremental = prs.isIncremental;
         }
-        new StreamPlan("Repair", repairedAt, 1, false, isIncremental).listeners(this)
-                                            .flushBeforeTransfer(true)
-                                            // request ranges from the remote node
-                                            .requestRanges(dest, preferred, desc.keyspace, request.ranges, desc.columnFamily)
-                                            // send ranges to the remote node
-                                            .transferRanges(dest, preferred, desc.keyspace, request.ranges, desc.columnFamily)
-                                            .execute();
+        new StreamPlan("Repair", repairedAt, 1, false, isIncremental).listeners(this).flushBeforeTransfer(true).// request ranges from the remote node
+        requestRanges(dest, preferred, desc.keyspace, request.ranges, desc.columnFamily).// send ranges to the remote node
+        transferRanges(dest, preferred, desc.keyspace, request.ranges, desc.columnFamily).execute();
     }
 
-    public void handleStreamEvent(StreamEvent event)
-    {
+    public void handleStreamEvent(StreamEvent event) {
         // Nothing to do here, all we care about is the final success or failure and that's handled by
         // onSuccess and onFailure
     }
@@ -80,8 +89,7 @@ public class StreamingRepairTask implements Runnable, StreamEventHandler
     /**
      * If we succeeded on both stream in and out, reply back to coordinator
      */
-    public void onSuccess(StreamState state)
-    {
+    public void onSuccess(StreamState state) {
         logger.info(String.format("[repair #%s] streaming task succeed, returning response to %s", desc.sessionId, request.initiator));
         MessagingService.instance().sendOneWay(new SyncComplete(desc, request.src, request.dst, true).createMessage(), request.initiator);
     }
@@ -89,8 +97,7 @@ public class StreamingRepairTask implements Runnable, StreamEventHandler
     /**
      * If we failed on either stream in or out, reply fail to coordinator
      */
-    public void onFailure(Throwable t)
-    {
+    public void onFailure(Throwable t) {
         MessagingService.instance().sendOneWay(new SyncComplete(desc, request.src, request.dst, false).createMessage(), request.initiator);
     }
 }

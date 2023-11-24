@@ -1,4 +1,5 @@
 package org.apache.cassandra.service.paxos;
+
 /*
  * 
  * Licensed to the Apache Software Foundation (ASF) under one
@@ -19,12 +20,9 @@ package org.apache.cassandra.service.paxos;
  * under the License.
  * 
  */
-
-
 import java.io.DataInput;
 import java.io.IOException;
 import java.nio.ByteBuffer;
-
 import org.apache.cassandra.db.ArrayBackedSortedColumns;
 import org.apache.cassandra.db.ColumnFamily;
 import org.apache.cassandra.db.ColumnSerializer;
@@ -33,8 +31,10 @@ import org.apache.cassandra.io.util.DataOutputPlus;
 import org.apache.cassandra.utils.ByteBufferUtil;
 import org.apache.cassandra.utils.UUIDSerializer;
 
-public class PrepareResponse
-{
+public class PrepareResponse {
+
+    private static final org.slf4j.Logger serialize_logger = org.slf4j.LoggerFactory.getLogger("serialize.logger");
+
     public static final PrepareResponseSerializer serializer = new PrepareResponseSerializer();
 
     public final boolean promised;
@@ -45,29 +45,48 @@ public class PrepareResponse
      * the previously promised ballot that made us refuse this one.
      */
     public final Commit inProgressCommit;
+
     public final Commit mostRecentCommit;
 
-    public PrepareResponse(boolean promised, Commit inProgressCommit, Commit mostRecentCommit)
-    {
+    public PrepareResponse(boolean promised, Commit inProgressCommit, Commit mostRecentCommit) {
         assert inProgressCommit.key == mostRecentCommit.key;
         assert inProgressCommit.update.metadata() == mostRecentCommit.update.metadata();
-
         this.promised = promised;
         this.mostRecentCommit = mostRecentCommit;
         this.inProgressCommit = inProgressCommit;
     }
 
     @Override
-    public String toString()
-    {
+    public String toString() {
         return String.format("PrepareResponse(%s, %s, %s)", promised, mostRecentCommit, inProgressCommit);
     }
 
-    public static class PrepareResponseSerializer implements IVersionedSerializer<PrepareResponse>
-    {
-        public void serialize(PrepareResponse response, DataOutputPlus out, int version) throws IOException
-        {
+    public static class PrepareResponseSerializer implements IVersionedSerializer<PrepareResponse> {
+
+        private java.lang.ThreadLocal<Boolean> isSerializeLoggingActive = new ThreadLocal<Boolean>() {
+
+            @Override
+            protected Boolean initialValue() {
+                return false;
+            }
+        };
+
+        public void serialize(PrepareResponse response, DataOutputPlus out, int version) throws IOException {
+            if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+                if (!isSerializeLoggingActive.get()) {
+                    isSerializeLoggingActive.set(true);
+                    serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(response, response.promised, "response.promised").toJsonString());
+                    isSerializeLoggingActive.set(false);
+                }
+            }
             out.writeBoolean(response.promised);
+            if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+                if (!isSerializeLoggingActive.get()) {
+                    isSerializeLoggingActive.set(true);
+                    serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(response, response.inProgressCommit, "response.inProgressCommit").toJsonString());
+                    isSerializeLoggingActive.set(false);
+                }
+            }
             ByteBufferUtil.writeWithShortLength(response.inProgressCommit.key, out);
             UUIDSerializer.serializer.serialize(response.inProgressCommit.ballot, out, version);
             ColumnFamily.serializer.serialize(response.inProgressCommit.update, out, version);
@@ -75,31 +94,14 @@ public class PrepareResponse
             ColumnFamily.serializer.serialize(response.mostRecentCommit.update, out, version);
         }
 
-        public PrepareResponse deserialize(DataInput in, int version) throws IOException
-        {
+        public PrepareResponse deserialize(DataInput in, int version) throws IOException {
             boolean success = in.readBoolean();
             ByteBuffer key = ByteBufferUtil.readWithShortLength(in);
-            return new PrepareResponse(success,
-                                       new Commit(key,
-                                                  UUIDSerializer.serializer.deserialize(in, version),
-                                                  ColumnFamily.serializer.deserialize(in,
-                                                                                      ArrayBackedSortedColumns.factory,
-                                                                                      ColumnSerializer.Flag.LOCAL, version)),
-                                       new Commit(key,
-                                                  UUIDSerializer.serializer.deserialize(in, version),
-                                                  ColumnFamily.serializer.deserialize(in,
-                                                                                      ArrayBackedSortedColumns.factory,
-                                                                                      ColumnSerializer.Flag.LOCAL, version)));
+            return new PrepareResponse(success, new Commit(key, UUIDSerializer.serializer.deserialize(in, version), ColumnFamily.serializer.deserialize(in, ArrayBackedSortedColumns.factory, ColumnSerializer.Flag.LOCAL, version)), new Commit(key, UUIDSerializer.serializer.deserialize(in, version), ColumnFamily.serializer.deserialize(in, ArrayBackedSortedColumns.factory, ColumnSerializer.Flag.LOCAL, version)));
         }
 
-        public long serializedSize(PrepareResponse response, int version)
-        {
-            return 1
-                   + 2 + response.inProgressCommit.key.remaining()
-                   + UUIDSerializer.serializer.serializedSize(response.inProgressCommit.ballot, version)
-                   + ColumnFamily.serializer.serializedSize(response.inProgressCommit.update, version)
-                   + UUIDSerializer.serializer.serializedSize(response.mostRecentCommit.ballot, version)
-                   + ColumnFamily.serializer.serializedSize(response.mostRecentCommit.update, version);
+        public long serializedSize(PrepareResponse response, int version) {
+            return 1 + 2 + response.inProgressCommit.key.remaining() + UUIDSerializer.serializer.serializedSize(response.inProgressCommit.ballot, version) + ColumnFamily.serializer.serializedSize(response.inProgressCommit.update, version) + UUIDSerializer.serializer.serializedSize(response.mostRecentCommit.ballot, version) + ColumnFamily.serializer.serializedSize(response.mostRecentCommit.update, version);
         }
     }
 }

@@ -23,12 +23,10 @@ import java.util.Comparator;
 import java.util.Iterator;
 import java.util.SortedSet;
 import java.util.TreeSet;
-
 import org.apache.cassandra.io.sstable.format.SSTableReader;
 import org.apache.commons.lang3.StringUtils;
 import com.google.common.collect.AbstractIterator;
 import com.google.common.collect.Iterators;
-
 import org.apache.cassandra.db.*;
 import org.apache.cassandra.db.columniterator.OnDiskAtomIterator;
 import org.apache.cassandra.db.composites.CellName;
@@ -41,171 +39,171 @@ import org.apache.cassandra.io.util.DataOutputPlus;
 import org.apache.cassandra.io.util.FileDataInput;
 import org.apache.cassandra.utils.SearchIterator;
 
-public class NamesQueryFilter implements IDiskAtomFilter
-{
+public class NamesQueryFilter implements IDiskAtomFilter {
+
+    private static final org.slf4j.Logger serialize_logger = org.slf4j.LoggerFactory.getLogger("serialize.logger");
+
+    private java.lang.ThreadLocal<Boolean> isSerializeLoggingActive = new ThreadLocal<Boolean>() {
+
+        @Override
+        protected Boolean initialValue() {
+            return false;
+        }
+    };
+
     public final SortedSet<CellName> columns;
 
-    // If true, getLiveCount will always return either 0 or 1. This uses the fact that we know 
+    // If true, getLiveCount will always return either 0 or 1. This uses the fact that we know
     // CQL3 will never use a name filter with cell names spanning multiple CQL3 rows.
     private final boolean countCQL3Rows;
 
-    public NamesQueryFilter(SortedSet<CellName> columns)
-    {
+    public NamesQueryFilter(SortedSet<CellName> columns) {
         this(columns, false);
     }
 
-    public NamesQueryFilter(SortedSet<CellName> columns, boolean countCQL3Rows)
-    {
+    public NamesQueryFilter(SortedSet<CellName> columns, boolean countCQL3Rows) {
         this.columns = columns;
         this.countCQL3Rows = countCQL3Rows;
     }
 
-    public NamesQueryFilter cloneShallow()
-    {
+    public NamesQueryFilter cloneShallow() {
         // NQF is immutable as far as shallow cloning is concerned, so save the allocation.
         return this;
     }
 
-    public NamesQueryFilter withUpdatedColumns(SortedSet<CellName> newColumns)
-    {
-       return new NamesQueryFilter(newColumns, countCQL3Rows);
+    public NamesQueryFilter withUpdatedColumns(SortedSet<CellName> newColumns) {
+        return new NamesQueryFilter(newColumns, countCQL3Rows);
     }
 
     @SuppressWarnings("unchecked")
-    public Iterator<Cell> getColumnIterator(ColumnFamily cf)
-    {
+    public Iterator<Cell> getColumnIterator(ColumnFamily cf) {
         assert cf != null;
         return (Iterator<Cell>) (Iterator<?>) new ByNameColumnIterator(columns.iterator(), null, cf);
     }
 
-    public OnDiskAtomIterator getColumnIterator(DecoratedKey key, ColumnFamily cf)
-    {
+    public OnDiskAtomIterator getColumnIterator(DecoratedKey key, ColumnFamily cf) {
         assert cf != null;
         return new ByNameColumnIterator(columns.iterator(), key, cf);
     }
 
-    public OnDiskAtomIterator getSSTableColumnIterator(SSTableReader sstable, DecoratedKey key)
-    {
+    public OnDiskAtomIterator getSSTableColumnIterator(SSTableReader sstable, DecoratedKey key) {
         return sstable.iterator(key, columns);
     }
 
-    public OnDiskAtomIterator getSSTableColumnIterator(SSTableReader sstable, FileDataInput file, DecoratedKey key, RowIndexEntry indexEntry)
-    {
+    public OnDiskAtomIterator getSSTableColumnIterator(SSTableReader sstable, FileDataInput file, DecoratedKey key, RowIndexEntry indexEntry) {
         return sstable.iterator(file, key, columns, indexEntry);
     }
 
-    public void collectReducedColumns(ColumnFamily container, Iterator<Cell> reducedColumns, DecoratedKey key, int gcBefore, long now)
-    {
+    public void collectReducedColumns(ColumnFamily container, Iterator<Cell> reducedColumns, DecoratedKey key, int gcBefore, long now) {
         DeletionInfo.InOrderTester tester = container.inOrderDeletionTester();
-        while (reducedColumns.hasNext())
-            container.maybeAppendColumn(reducedColumns.next(), tester, gcBefore);
+        while (reducedColumns.hasNext()) container.maybeAppendColumn(reducedColumns.next(), tester, gcBefore);
     }
 
-    public Comparator<Cell> getColumnComparator(CellNameType comparator)
-    {
+    public Comparator<Cell> getColumnComparator(CellNameType comparator) {
         return comparator.columnComparator(false);
     }
 
     @Override
-    public String toString()
-    {
-        return "NamesQueryFilter(" +
-               "columns=" + StringUtils.join(columns, ",") +
-               ')';
+    public String toString() {
+        return "NamesQueryFilter(" + "columns=" + StringUtils.join(columns, ",") + ')';
     }
 
-    public boolean isReversed()
-    {
+    public boolean isReversed() {
         return false;
     }
 
-    public void updateColumnsLimit(int newLimit)
-    {
+    public void updateColumnsLimit(int newLimit) {
     }
 
-    public int getLiveCount(ColumnFamily cf, long now)
-    {
+    public int getLiveCount(ColumnFamily cf, long now) {
         // Note: we could use columnCounter() but we save the object allocation as it's simple enough
-
         if (countCQL3Rows)
             return cf.hasOnlyTombstones(now) ? 0 : 1;
-
         int count = 0;
-        for (Cell cell : cf)
-        {
+        for (Cell cell : cf) {
             if (cell.isLive(now))
                 count++;
         }
         return count;
     }
 
-    public boolean maySelectPrefix(CType type, Composite prefix)
-    {
-        for (CellName column : columns)
-        {
+    public boolean maySelectPrefix(CType type, Composite prefix) {
+        for (CellName column : columns) {
             if (prefix.isPrefixOf(type, column))
                 return true;
         }
         return false;
     }
 
-    public boolean shouldInclude(SSTableReader sstable)
-    {
+    public boolean shouldInclude(SSTableReader sstable) {
         return true;
     }
 
-    public boolean isFullyCoveredBy(ColumnFamily cf, long now)
-    {
+    public boolean isFullyCoveredBy(ColumnFamily cf, long now) {
+        if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+            if (!isSerializeLoggingActive.get()) {
+                isSerializeLoggingActive.set(true);
+                serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(org.apache.cassandra.db.filter.ColumnSlice.class, org.apache.cassandra.db.filter.ColumnSlice.ALL_COLUMNS_ARRAY, "org.apache.cassandra.db.filter.ColumnSlice.ALL_COLUMNS_ARRAY").toJsonString());
+                isSerializeLoggingActive.set(false);
+            }
+        }
         // cf will cover all the requested columns if the range it covers include
         // all said columns
         CellName first = cf.iterator(ColumnSlice.ALL_COLUMNS_ARRAY).next().name();
+        if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+            if (!isSerializeLoggingActive.get()) {
+                isSerializeLoggingActive.set(true);
+                serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(org.apache.cassandra.db.filter.ColumnSlice.class, org.apache.cassandra.db.filter.ColumnSlice.ALL_COLUMNS_ARRAY, "org.apache.cassandra.db.filter.ColumnSlice.ALL_COLUMNS_ARRAY").toJsonString());
+                isSerializeLoggingActive.set(false);
+            }
+        }
         CellName last = cf.reverseIterator(ColumnSlice.ALL_COLUMNS_ARRAY).next().name();
-
-        return cf.getComparator().compare(first, columns.first()) <= 0
-            && cf.getComparator().compare(columns.last(), last) <= 0;
+        return cf.getComparator().compare(first, columns.first()) <= 0 && cf.getComparator().compare(columns.last(), last) <= 0;
     }
 
-    public boolean isHeadFilter()
-    {
+    public boolean isHeadFilter() {
         return false;
     }
 
-    public boolean countCQL3Rows(CellNameType comparator)
-    {
+    public boolean countCQL3Rows(CellNameType comparator) {
         return countCQL3Rows;
     }
 
-    public boolean countCQL3Rows()
-    {
+    public boolean countCQL3Rows() {
         return countCQL3Rows(null);
     }
 
-    public ColumnCounter columnCounter(CellNameType comparator, long now)
-    {
-        return countCQL3Rows
-             ? new ColumnCounter.GroupByPrefix(now, null, 0)
-             : new ColumnCounter(now);
+    public ColumnCounter columnCounter(CellNameType comparator, long now) {
+        return countCQL3Rows ? new ColumnCounter.GroupByPrefix(now, null, 0) : new ColumnCounter(now);
     }
 
-    private static class ByNameColumnIterator extends AbstractIterator<OnDiskAtom> implements OnDiskAtomIterator
-    {
+    private static class ByNameColumnIterator extends AbstractIterator<OnDiskAtom> implements OnDiskAtomIterator {
+
+        private java.lang.ThreadLocal<Boolean> isSerializeLoggingActive = new ThreadLocal<Boolean>() {
+
+            @Override
+            protected Boolean initialValue() {
+                return false;
+            }
+        };
+
         private final ColumnFamily cf;
+
         private final DecoratedKey key;
+
         private final Iterator<CellName> names;
+
         private final SearchIterator<CellName, Cell> cells;
 
-        public ByNameColumnIterator(Iterator<CellName> names, DecoratedKey key, ColumnFamily cf)
-        {
+        public ByNameColumnIterator(Iterator<CellName> names, DecoratedKey key, ColumnFamily cf) {
             this.names = names;
             this.cf = cf;
             this.key = key;
             this.cells = cf.searchIterator();
         }
 
-        protected OnDiskAtom computeNext()
-        {
-            while (names.hasNext() && cells.hasNext())
-            {
+        protected OnDiskAtom computeNext() {
+            while (names.hasNext() && cells.hasNext()) {
                 CellName current = names.next();
                 Cell cell = cells.next(current);
                 if (cell != null)
@@ -214,80 +212,97 @@ public class NamesQueryFilter implements IDiskAtomFilter
             return endOfData();
         }
 
-        public ColumnFamily getColumnFamily()
-        {
+        public ColumnFamily getColumnFamily() {
             return cf;
         }
 
-        public DecoratedKey getKey()
-        {
+        public DecoratedKey getKey() {
+            if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+                if (!isSerializeLoggingActive.get()) {
+                    isSerializeLoggingActive.set(true);
+                    serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(this, this.key, "this.key").toJsonString());
+                    isSerializeLoggingActive.set(false);
+                }
+            }
             return key;
         }
 
-        public void close() throws IOException { }
+        public void close() throws IOException {
+        }
     }
 
-    public static class Serializer implements IVersionedSerializer<NamesQueryFilter>
-    {
+    public static class Serializer implements IVersionedSerializer<NamesQueryFilter> {
+
+        private java.lang.ThreadLocal<Boolean> isSerializeLoggingActive = new ThreadLocal<Boolean>() {
+
+            @Override
+            protected Boolean initialValue() {
+                return false;
+            }
+        };
+
         private CellNameType type;
 
-        public Serializer(CellNameType type)
-        {
+        public Serializer(CellNameType type) {
             this.type = type;
         }
 
-        public void serialize(NamesQueryFilter f, DataOutputPlus out, int version) throws IOException
-        {
+        public void serialize(NamesQueryFilter f, DataOutputPlus out, int version) throws IOException {
             out.writeInt(f.columns.size());
             ISerializer<CellName> serializer = type.cellSerializer();
-            for (CellName cName : f.columns)
-            {
+            if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+                if (!isSerializeLoggingActive.get()) {
+                    isSerializeLoggingActive.set(true);
+                    serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(f, f.columns, "f.columns").toJsonString());
+                    isSerializeLoggingActive.set(false);
+                }
+            }
+            for (CellName cName : f.columns) {
+                if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+                    if (!isSerializeLoggingActive.get()) {
+                        isSerializeLoggingActive.set(true);
+                        serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(f.columns, cName, "cName").toJsonString());
+                        isSerializeLoggingActive.set(false);
+                    }
+                }
                 serializer.serialize(cName, out);
             }
             out.writeBoolean(f.countCQL3Rows);
         }
 
-        public NamesQueryFilter deserialize(DataInput in, int version) throws IOException
-        {
+        public NamesQueryFilter deserialize(DataInput in, int version) throws IOException {
             int size = in.readInt();
             SortedSet<CellName> columns = new TreeSet<>(type);
             ISerializer<CellName> serializer = type.cellSerializer();
-            for (int i = 0; i < size; ++i)
-                columns.add(serializer.deserialize(in));
+            for (int i = 0; i < size; ++i) columns.add(serializer.deserialize(in));
             boolean countCQL3Rows = in.readBoolean();
             return new NamesQueryFilter(columns, countCQL3Rows);
         }
 
-        public long serializedSize(NamesQueryFilter f, int version)
-        {
+        public long serializedSize(NamesQueryFilter f, int version) {
             TypeSizes sizes = TypeSizes.NATIVE;
             int size = sizes.sizeof(f.columns.size());
             ISerializer<CellName> serializer = type.cellSerializer();
-            for (CellName cName : f.columns)
-                size += serializer.serializedSize(cName, sizes);
+            for (CellName cName : f.columns) size += serializer.serializedSize(cName, sizes);
             size += sizes.sizeof(f.countCQL3Rows);
             return size;
         }
     }
 
-    public Iterator<RangeTombstone> getRangeTombstoneIterator(final ColumnFamily source)
-    {
+    public Iterator<RangeTombstone> getRangeTombstoneIterator(final ColumnFamily source) {
         if (!source.deletionInfo().hasRanges())
             return Iterators.emptyIterator();
+        return new AbstractIterator<RangeTombstone>() {
 
-        return new AbstractIterator<RangeTombstone>()
-        {
             private final Iterator<CellName> names = columns.iterator();
+
             private RangeTombstone lastFindRange;
 
-            protected RangeTombstone computeNext()
-            {
-                while (names.hasNext())
-                {
+            protected RangeTombstone computeNext() {
+                while (names.hasNext()) {
                     CellName next = names.next();
                     if (lastFindRange != null && lastFindRange.includes(source.getComparator(), next))
                         return lastFindRange;
-
                     // We keep the last range around as since names are in sort order, it's
                     // possible it will match the next name too.
                     lastFindRange = source.deletionInfo().rangeCovering(next);

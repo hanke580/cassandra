@@ -19,7 +19,6 @@ package org.apache.cassandra.service.pager;
 
 import java.util.ArrayList;
 import java.util.List;
-
 import org.apache.cassandra.db.*;
 import org.apache.cassandra.exceptions.RequestValidationException;
 import org.apache.cassandra.exceptions.RequestExecutionException;
@@ -39,109 +38,104 @@ import org.apache.cassandra.service.ClientState;
  * cfs meanRowSize to decide if parallelizing some of the command might be worth it while being confident we don't
  * blow out memory.
  */
-class MultiPartitionPager implements QueryPager
-{
+class MultiPartitionPager implements QueryPager {
+
+    private static final org.slf4j.Logger serialize_logger = org.slf4j.LoggerFactory.getLogger("serialize.logger");
+
+    private java.lang.ThreadLocal<Boolean> isSerializeLoggingActive = new ThreadLocal<Boolean>() {
+
+        @Override
+        protected Boolean initialValue() {
+            return false;
+        }
+    };
+
     private final SinglePartitionPager[] pagers;
+
     private final long timestamp;
 
     private int remaining;
+
     private int current;
 
-    MultiPartitionPager(List<ReadCommand> commands, ConsistencyLevel consistencyLevel, ClientState cState, boolean localQuery, PagingState state, int limitForQuery)
-    {
+    MultiPartitionPager(List<ReadCommand> commands, ConsistencyLevel consistencyLevel, ClientState cState, boolean localQuery, PagingState state, int limitForQuery) {
         int i = 0;
         // If it's not the beginning (state != null), we need to find where we were and skip previous commands
         // since they are done.
         if (state != null)
-            for (; i < commands.size(); i++)
-                if (commands.get(i).key.equals(state.partitionKey))
-                    break;
-
-        if (i >= commands.size())
-        {
+            for (; i < commands.size(); i++) if (commands.get(i).key.equals(state.partitionKey))
+                break;
+        if (i >= commands.size()) {
             pagers = null;
             timestamp = -1;
             return;
         }
-
         pagers = new SinglePartitionPager[commands.size() - i];
         // 'i' is on the first non exhausted pager for the previous page (or the first one)
         pagers[0] = makePager(commands.get(i), consistencyLevel, cState, localQuery, state);
         timestamp = commands.get(i).timestamp;
-
         // Following ones haven't been started yet
-        for (int j = i + 1; j < commands.size(); j++)
-        {
+        for (int j = i + 1; j < commands.size(); j++) {
             ReadCommand command = commands.get(j);
             if (command.timestamp != timestamp)
                 throw new IllegalArgumentException("All commands must have the same timestamp or weird results may happen.");
             pagers[j - i] = makePager(command, consistencyLevel, cState, localQuery, null);
         }
-
         remaining = state == null ? limitForQuery : state.remaining;
     }
 
-    private static SinglePartitionPager makePager(ReadCommand command, ConsistencyLevel consistencyLevel, ClientState cState, boolean localQuery, PagingState state)
-    {
-        return command instanceof SliceFromReadCommand
-             ? new SliceQueryPager((SliceFromReadCommand)command, consistencyLevel, cState, localQuery, state)
-             : new NamesQueryPager((SliceByNamesReadCommand)command, consistencyLevel, cState, localQuery);
+    private static SinglePartitionPager makePager(ReadCommand command, ConsistencyLevel consistencyLevel, ClientState cState, boolean localQuery, PagingState state) {
+        return command instanceof SliceFromReadCommand ? new SliceQueryPager((SliceFromReadCommand) command, consistencyLevel, cState, localQuery, state) : new NamesQueryPager((SliceByNamesReadCommand) command, consistencyLevel, cState, localQuery);
     }
 
-    public PagingState state()
-    {
+    public PagingState state() {
         // Sets current to the first non-exhausted pager
         if (isExhausted())
             return null;
-
         PagingState state = pagers[current].state();
+        if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+            if (!isSerializeLoggingActive.get()) {
+                isSerializeLoggingActive.set(true);
+                serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(state, state.cellName, "state.cellName").toJsonString());
+                isSerializeLoggingActive.set(false);
+            }
+        }
         return new PagingState(pagers[current].key(), state == null ? null : state.cellName, remaining);
     }
 
-    public boolean isExhausted()
-    {
+    public boolean isExhausted() {
         if (remaining <= 0 || pagers == null)
             return true;
-
-        while (current < pagers.length)
-        {
+        while (current < pagers.length) {
             if (!pagers[current].isExhausted())
                 return false;
-
             current++;
         }
         return true;
     }
 
-    public List<Row> fetchPage(int pageSize) throws RequestValidationException, RequestExecutionException
-    {
+    public List<Row> fetchPage(int pageSize) throws RequestValidationException, RequestExecutionException {
         List<Row> result = new ArrayList<Row>();
-
         int remainingThisQuery = Math.min(remaining, pageSize);
-        while (remainingThisQuery > 0 && !isExhausted())
-        {
+        while (remainingThisQuery > 0 && !isExhausted()) {
             // isExhausted has set us on the first non-exhausted pager
             List<Row> page = pagers[current].fetchPage(remainingThisQuery);
             if (page.isEmpty())
                 continue;
-
             Row row = page.get(0);
             int fetched = pagers[current].columnCounter().countAll(row.cf).live();
             remaining -= fetched;
             remainingThisQuery -= fetched;
             result.add(row);
         }
-
         return result;
     }
 
-    public int maxRemaining()
-    {
+    public int maxRemaining() {
         return remaining;
     }
 
-    public long timestamp()
-    {
+    public long timestamp() {
         return timestamp;
     }
 }

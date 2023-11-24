@@ -23,13 +23,10 @@ import java.io.RandomAccessFile;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.channels.WritableByteChannel;
-
 import com.google.common.base.Function;
 import com.google.common.base.Preconditions;
-
 import org.apache.cassandra.config.Config;
 import org.apache.cassandra.utils.memory.MemoryUtil;
-
 
 /**
  * An implementation of the DataOutputStreamPlus interface using a ByteBuffer to stage writes
@@ -37,87 +34,79 @@ import org.apache.cassandra.utils.memory.MemoryUtil;
  *
  * This class is completely thread unsafe.
  */
-public class BufferedDataOutputStreamPlus extends DataOutputStreamPlus
-{
+public class BufferedDataOutputStreamPlus extends DataOutputStreamPlus {
+
+    private static final org.slf4j.Logger serialize_logger = org.slf4j.LoggerFactory.getLogger("serialize.logger");
+
+    private java.lang.ThreadLocal<Boolean> isSerializeLoggingActive = new ThreadLocal<Boolean>() {
+
+        @Override
+        protected Boolean initialValue() {
+            return false;
+        }
+    };
+
     private static final int DEFAULT_BUFFER_SIZE = Integer.getInteger(Config.PROPERTY_PREFIX + "nio_data_output_stream_plus_buffer_size", 1024 * 32);
 
     ByteBuffer buffer;
 
-    public BufferedDataOutputStreamPlus(RandomAccessFile ras)
-    {
+    public BufferedDataOutputStreamPlus(RandomAccessFile ras) {
         this(ras.getChannel());
     }
 
-    public BufferedDataOutputStreamPlus(RandomAccessFile ras, int bufferSize)
-    {
+    public BufferedDataOutputStreamPlus(RandomAccessFile ras, int bufferSize) {
         this(ras.getChannel(), bufferSize);
     }
 
-    public BufferedDataOutputStreamPlus(FileOutputStream fos)
-    {
+    public BufferedDataOutputStreamPlus(FileOutputStream fos) {
         this(fos.getChannel());
     }
 
-    public BufferedDataOutputStreamPlus(FileOutputStream fos, int bufferSize)
-    {
+    public BufferedDataOutputStreamPlus(FileOutputStream fos, int bufferSize) {
         this(fos.getChannel(), bufferSize);
     }
 
-    public BufferedDataOutputStreamPlus(WritableByteChannel wbc)
-    {
+    public BufferedDataOutputStreamPlus(WritableByteChannel wbc) {
         this(wbc, DEFAULT_BUFFER_SIZE);
     }
 
-    public BufferedDataOutputStreamPlus(WritableByteChannel wbc, int bufferSize)
-    {
+    public BufferedDataOutputStreamPlus(WritableByteChannel wbc, int bufferSize) {
         this(wbc, ByteBuffer.allocateDirect(bufferSize));
         Preconditions.checkNotNull(wbc);
         Preconditions.checkArgument(bufferSize >= 8, "Buffer size must be large enough to accommodate a long/double");
     }
 
-    protected BufferedDataOutputStreamPlus(WritableByteChannel channel, ByteBuffer buffer)
-    {
+    protected BufferedDataOutputStreamPlus(WritableByteChannel channel, ByteBuffer buffer) {
         super(channel);
         this.buffer = buffer;
     }
 
-    protected BufferedDataOutputStreamPlus(ByteBuffer buffer)
-    {
+    protected BufferedDataOutputStreamPlus(ByteBuffer buffer) {
         super();
         this.buffer = buffer;
     }
 
     @Override
-    public void write(byte[] b) throws IOException
-    {
+    public void write(byte[] b) throws IOException {
         write(b, 0, b.length);
     }
 
     @Override
-    public void write(byte[] b, int off, int len) throws IOException
-    {
+    public void write(byte[] b, int off, int len) throws IOException {
         if (b == null)
             throw new NullPointerException();
-
         // avoid int overflow
-        if (off < 0 || off > b.length || len < 0
-            || len > b.length - off)
+        if (off < 0 || off > b.length || len < 0 || len > b.length - off)
             throw new IndexOutOfBoundsException();
-
         if (len == 0)
             return;
-
         int copied = 0;
-        while (copied < len)
-        {
-            if (buffer.hasRemaining())
-            {
+        while (copied < len) {
+            if (buffer.hasRemaining()) {
                 int toCopy = Math.min(len - copied, buffer.remaining());
                 buffer.put(b, off + copied, toCopy);
                 copied += toCopy;
-            }
-            else
-            {
+            } else {
                 doFlush(len - copied);
             }
         }
@@ -133,172 +122,151 @@ public class BufferedDataOutputStreamPlus extends DataOutputStreamPlus
      * @see org.apache.cassandra.io.util.DataOutputPlus#write(java.nio.ByteBuffer)
      */
     @Override
-    public void write(ByteBuffer toWrite) throws IOException
-    {
-        if (toWrite.hasArray())
-        {
+    public void write(ByteBuffer toWrite) throws IOException {
+        if (toWrite.hasArray()) {
             write(toWrite.array(), toWrite.arrayOffset() + toWrite.position(), toWrite.remaining());
-        }
-        else
-        {
+        } else {
             assert toWrite.isDirect();
             int toWriteRemaining = toWrite.remaining();
-            if (toWriteRemaining > buffer.remaining())
-            {
+            if (toWriteRemaining > buffer.remaining()) {
                 doFlush(toWriteRemaining);
                 MemoryUtil.duplicateDirectByteBuffer(toWrite, hollowBuffer);
-                if (toWriteRemaining > buffer.remaining())
-                {
-                    while (hollowBuffer.hasRemaining())
-                        channel.write(hollowBuffer);
-                }
-                else
-                {
+                if (toWriteRemaining > buffer.remaining()) {
+                    while (hollowBuffer.hasRemaining()) channel.write(hollowBuffer);
+                } else {
                     buffer.put(hollowBuffer);
                 }
-            }
-            else
-            {
+            } else {
                 MemoryUtil.duplicateDirectByteBuffer(toWrite, hollowBuffer);
                 buffer.put(hollowBuffer);
             }
         }
     }
 
-
     @Override
-    public void write(int b) throws IOException
-    {
+    public void write(int b) throws IOException {
         ensureRemaining(1);
         buffer.put((byte) (b & 0xFF));
     }
 
     @Override
-    public void writeBoolean(boolean v) throws IOException
-    {
+    public void writeBoolean(boolean v) throws IOException {
         ensureRemaining(1);
-        buffer.put(v ? (byte)1 : (byte)0);
+        buffer.put(v ? (byte) 1 : (byte) 0);
     }
 
     @Override
-    public void writeByte(int v) throws IOException
-    {
+    public void writeByte(int v) throws IOException {
         write(v);
     }
 
     @Override
-    public void writeShort(int v) throws IOException
-    {
+    public void writeShort(int v) throws IOException {
         ensureRemaining(2);
         buffer.putShort((short) v);
     }
 
     @Override
-    public void writeChar(int v) throws IOException
-    {
+    public void writeChar(int v) throws IOException {
         ensureRemaining(2);
         buffer.putChar((char) v);
     }
 
     @Override
-    public void writeInt(int v) throws IOException
-    {
+    public void writeInt(int v) throws IOException {
         ensureRemaining(4);
         buffer.putInt(v);
     }
 
     @Override
-    public void writeLong(long v) throws IOException
-    {
+    public void writeLong(long v) throws IOException {
         ensureRemaining(8);
         buffer.putLong(v);
     }
 
     @Override
-    public void writeFloat(float v) throws IOException
-    {
+    public void writeFloat(float v) throws IOException {
         ensureRemaining(4);
         buffer.putFloat(v);
     }
 
     @Override
-    public void writeDouble(double v) throws IOException
-    {
+    public void writeDouble(double v) throws IOException {
         ensureRemaining(8);
         buffer.putDouble(v);
     }
 
     @Override
-    public void writeBytes(String s) throws IOException
-    {
-        for (int index = 0; index < s.length(); index++)
-            writeByte(s.charAt(index));
+    public void writeBytes(String s) throws IOException {
+        for (int index = 0; index < s.length(); index++) writeByte(s.charAt(index));
     }
 
     @Override
-    public void writeChars(String s) throws IOException
-    {
-        for (int index = 0; index < s.length(); index++)
-            writeChar(s.charAt(index));
+    public void writeChars(String s) throws IOException {
+        for (int index = 0; index < s.length(); index++) writeChar(s.charAt(index));
     }
 
     @Override
-    public void writeUTF(String s) throws IOException
-    {
+    public void writeUTF(String s) throws IOException {
         UnbufferedDataOutputStreamPlus.writeUTF(s, this);
     }
 
     @Override
-    public void write(Memory memory, long offset, long length) throws IOException
-    {
-        for (ByteBuffer buffer : memory.asByteBuffers(offset, length))
+    public void write(Memory memory, long offset, long length) throws IOException {
+        for (ByteBuffer buffer : memory.asByteBuffers(offset, length)) {
+            if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+                if (!isSerializeLoggingActive.get()) {
+                    isSerializeLoggingActive.set(true);
+                    serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(memory.asByteBuffers(offset, length), buffer, "buffer").toJsonString());
+                    isSerializeLoggingActive.set(false);
+                }
+            }
             write(buffer);
+        }
     }
 
     /*
      * Count is the number of bytes remaining to write ignoring already remaining capacity
      */
-    protected void doFlush(int count) throws IOException
-    {
+    protected void doFlush(int count) throws IOException {
         buffer.flip();
-
-        while (buffer.hasRemaining())
-            channel.write(buffer);
-
+        while (buffer.hasRemaining()) channel.write(buffer);
         buffer.clear();
     }
 
     @Override
-    public void flush() throws IOException
-    {
+    public void flush() throws IOException {
         doFlush(0);
     }
 
     @Override
-    public void close() throws IOException
-    {
+    public void close() throws IOException {
         doFlush(0);
         channel.close();
         FileUtils.clean(buffer);
         buffer = null;
     }
 
-    protected void ensureRemaining(int minimum) throws IOException
-    {
+    protected void ensureRemaining(int minimum) throws IOException {
         if (buffer.remaining() < minimum)
             doFlush(minimum);
     }
 
     @Override
-    public <R> R applyToChannel(Function<WritableByteChannel, R> f) throws IOException
-    {
+    public <R> R applyToChannel(Function<WritableByteChannel, R> f) throws IOException {
         //Don't allow writes to the underlying channel while data is buffered
         flush();
+        if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+            if (!isSerializeLoggingActive.get()) {
+                isSerializeLoggingActive.set(true);
+                serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(this, this.channel, "this.channel").toJsonString());
+                isSerializeLoggingActive.set(false);
+            }
+        }
         return f.apply(channel);
     }
 
-    public BufferedDataOutputStreamPlus order(ByteOrder order)
-    {
+    public BufferedDataOutputStreamPlus order(ByteOrder order) {
         this.buffer.order(order);
         return this;
     }

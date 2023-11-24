@@ -18,93 +18,107 @@
 package org.apache.cassandra.cql3.selection;
 
 import java.nio.ByteBuffer;
-
 import org.apache.cassandra.config.ColumnDefinition;
 import org.apache.cassandra.cql3.ColumnSpecification;
 import org.apache.cassandra.cql3.selection.Selection.ResultSetBuilder;
 import org.apache.cassandra.db.marshal.AbstractType;
 import org.apache.cassandra.exceptions.InvalidRequestException;
 
-public final class SimpleSelector extends Selector
-{
+public final class SimpleSelector extends Selector {
+
+    private static final org.slf4j.Logger serialize_logger = org.slf4j.LoggerFactory.getLogger("serialize.logger");
+
+    private java.lang.ThreadLocal<Boolean> isSerializeLoggingActive = new ThreadLocal<Boolean>() {
+
+        @Override
+        protected Boolean initialValue() {
+            return false;
+        }
+    };
+
     private final String columnName;
+
     private final int idx;
+
     private final AbstractType<?> type;
+
     private ByteBuffer current;
+
     private boolean isSet;
 
-    public static Factory newFactory(final ColumnDefinition def, final int idx)
-    {
-        return new Factory()
-        {
+    public static Factory newFactory(final ColumnDefinition def, final int idx) {
+        return new Factory() {
+
             @Override
-            protected String getColumnName()
-            {
+            protected String getColumnName() {
                 return def.name.toString();
             }
 
             @Override
-            protected AbstractType<?> getReturnType()
-            {
+            protected AbstractType<?> getReturnType() {
                 return def.type;
             }
 
-            protected void addColumnMapping(SelectionColumnMapping mapping, ColumnSpecification resultColumn)
-            {
-               mapping.addMapping(resultColumn, def);
+            protected void addColumnMapping(SelectionColumnMapping mapping, ColumnSpecification resultColumn) {
+                mapping.addMapping(resultColumn, def);
             }
 
             @Override
-            public Selector newInstance()
-            {
+            public Selector newInstance() {
                 return new SimpleSelector(def.name.toString(), idx, def.type);
             }
 
             @Override
-            public boolean isSimpleSelectorFactory(int index)
-            {
+            public boolean isSimpleSelectorFactory(int index) {
                 return index == idx;
             }
         };
     }
 
     @Override
-    public void addInput(int protocolVersion, ResultSetBuilder rs) throws InvalidRequestException
-    {
-        if (!isSet)
-        {
+    public void addInput(int protocolVersion, ResultSetBuilder rs) throws InvalidRequestException {
+        if (!isSet) {
             isSet = true;
             current = rs.current.get(idx);
         }
     }
 
     @Override
-    public ByteBuffer getOutput(int protocolVersion) throws InvalidRequestException
-    {
+    public ByteBuffer getOutput(int protocolVersion) throws InvalidRequestException {
+        if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+            if (!isSerializeLoggingActive.get()) {
+                isSerializeLoggingActive.set(true);
+                serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(this, this.current, "this.current").toJsonString());
+                isSerializeLoggingActive.set(false);
+            }
+        }
         return current;
     }
 
     @Override
-    public void reset()
-    {
+    public void reset() {
         isSet = false;
         current = null;
     }
 
     @Override
-    public AbstractType<?> getType()
-    {
+    public AbstractType<?> getType() {
+        if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+            if (!isSerializeLoggingActive.get()) {
+                isSerializeLoggingActive.set(true);
+                serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(this, this.type, "this.type").toJsonString());
+                isSerializeLoggingActive.set(false);
+            }
+        }
         return type;
     }
 
     @Override
-    public String toString()
-    {
+    public String toString() {
         return columnName;
     }
 
-    private SimpleSelector(String columnName, int idx, AbstractType<?> type)
-    {
+    private SimpleSelector(String columnName, int idx, AbstractType<?> type) {
         this.columnName = columnName;
         this.idx = idx;
         this.type = type;

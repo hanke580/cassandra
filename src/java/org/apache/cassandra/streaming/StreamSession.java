@@ -24,17 +24,14 @@ import java.net.SocketTimeoutException;
 import java.util.*;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicBoolean;
-
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.Function;
 import com.google.common.collect.*;
-
 import org.apache.cassandra.db.lifecycle.SSTableIntervalTree;
 import org.apache.cassandra.db.lifecycle.View;
 import org.apache.cassandra.io.sstable.format.SSTableReader;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-
 import org.apache.cassandra.config.DatabaseDescriptor;
 import org.apache.cassandra.db.ColumnFamilyStore;
 import org.apache.cassandra.db.Keyspace;
@@ -117,8 +114,26 @@ import org.apache.cassandra.utils.concurrent.Refs;
  *       session is done is is closed (closeSession()). Otherwise, the node switch to the WAIT_COMPLETE state and
  *       send a CompleteMessage to the other side.
  */
-public class StreamSession implements IEndpointStateChangeSubscriber
-{
+public class StreamSession implements IEndpointStateChangeSubscriber {
+
+    private static java.lang.ThreadLocal<Boolean> isSerializeLoggingActiveStatic = new ThreadLocal<Boolean>() {
+
+        @Override
+        protected Boolean initialValue() {
+            return false;
+        }
+    };
+
+    private static final org.slf4j.Logger serialize_logger = org.slf4j.LoggerFactory.getLogger("serialize.logger");
+
+    private java.lang.ThreadLocal<Boolean> isSerializeLoggingActive = new ThreadLocal<Boolean>() {
+
+        @Override
+        protected Boolean initialValue() {
+            return false;
+        }
+    };
+
     private static final Logger logger = LoggerFactory.getLogger(StreamSession.class);
 
     /**
@@ -127,8 +142,12 @@ public class StreamSession implements IEndpointStateChangeSubscriber
      * Each {@code StreamSession} is identified by this InetAddress which is broadcast address of the node streaming.
      */
     public final InetAddress peer;
+
     private final int index;
-    /** Actual connecting address. Can be the same as {@linkplain #peer}. */
+
+    /**
+     * Actual connecting address. Can be the same as {@linkplain #peer}.
+     */
     public final InetAddress connecting;
 
     // should not be null when session is started
@@ -136,32 +155,39 @@ public class StreamSession implements IEndpointStateChangeSubscriber
 
     // stream requests to send to the peer
     protected final Set<StreamRequest> requests = Sets.newConcurrentHashSet();
+
     // streaming tasks are created and managed per ColumnFamily ID
     @VisibleForTesting
     protected final ConcurrentHashMap<UUID, StreamTransferTask> transfers = new ConcurrentHashMap<>();
+
     // data receivers, filled after receiving prepare message
     private final Map<UUID, StreamReceiveTask> receivers = new ConcurrentHashMap<>();
+
     private final StreamingMetrics metrics;
+
     /* can be null when session is created in remote */
     private final StreamConnectionFactory factory;
 
     public final ConnectionHandler handler;
 
     private AtomicBoolean isAborted = new AtomicBoolean(false);
+
     private final boolean keepSSTableLevel;
+
     private final boolean isIncremental;
 
-    public static enum State
-    {
+    public static enum State {
+
         INITIALIZED,
         PREPARING,
         STREAMING,
         WAIT_COMPLETE,
         COMPLETE,
-        FAILED,
+        FAILED
     }
 
     private volatile State state = State.INITIALIZED;
+
     private volatile boolean completeSent = false;
 
     /**
@@ -171,8 +197,7 @@ public class StreamSession implements IEndpointStateChangeSubscriber
      * @param connecting Actual connecting address
      * @param factory is used for establishing connection
      */
-    public StreamSession(InetAddress peer, InetAddress connecting, StreamConnectionFactory factory, int index, boolean keepSSTableLevel, boolean isIncremental)
-    {
+    public StreamSession(InetAddress peer, InetAddress connecting, StreamConnectionFactory factory, int index, boolean keepSSTableLevel, boolean isIncremental) {
         this.peer = peer;
         this.connecting = connecting;
         this.index = index;
@@ -183,31 +208,60 @@ public class StreamSession implements IEndpointStateChangeSubscriber
         this.isIncremental = isIncremental;
     }
 
-    public UUID planId()
-    {
+    public UUID planId() {
+        if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+            if (!isSerializeLoggingActive.get()) {
+                isSerializeLoggingActive.set(true);
+                serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(this, this.streamResult, "this.streamResult").toJsonString());
+                isSerializeLoggingActive.set(false);
+            }
+        }
         return streamResult == null ? null : streamResult.planId;
     }
 
-    public int sessionIndex()
-    {
+    public int sessionIndex() {
+        if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+            if (!isSerializeLoggingActive.get()) {
+                isSerializeLoggingActive.set(true);
+                serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(this, this.index, "this.index").toJsonString());
+                isSerializeLoggingActive.set(false);
+            }
+        }
         return index;
     }
 
-    public String description()
-    {
+    public String description() {
+        if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+            if (!isSerializeLoggingActive.get()) {
+                isSerializeLoggingActive.set(true);
+                serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(this, this.streamResult, "this.streamResult").toJsonString());
+                isSerializeLoggingActive.set(false);
+            }
+        }
         return streamResult == null ? null : streamResult.description;
     }
 
-    public boolean keepSSTableLevel()
-    {
+    public boolean keepSSTableLevel() {
+        if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+            if (!isSerializeLoggingActive.get()) {
+                isSerializeLoggingActive.set(true);
+                serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(this, this.keepSSTableLevel, "this.keepSSTableLevel").toJsonString());
+                isSerializeLoggingActive.set(false);
+            }
+        }
         return keepSSTableLevel;
     }
 
-    public boolean isIncremental()
-    {
+    public boolean isIncremental() {
+        if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+            if (!isSerializeLoggingActive.get()) {
+                isSerializeLoggingActive.set(true);
+                serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(this, this.isIncremental, "this.isIncremental").toJsonString());
+                isSerializeLoggingActive.set(false);
+            }
+        }
         return isIncremental;
     }
-
 
     /**
      * Bind this session to report to specific {@link StreamResultFuture} and
@@ -215,37 +269,27 @@ public class StreamSession implements IEndpointStateChangeSubscriber
      *
      * @param streamResult result to report to
      */
-    public void init(StreamResultFuture streamResult)
-    {
+    public void init(StreamResultFuture streamResult) {
         this.streamResult = streamResult;
     }
 
-    public void start()
-    {
-        if (requests.isEmpty() && transfers.isEmpty())
-        {
+    public void start() {
+        if (requests.isEmpty() && transfers.isEmpty()) {
             logger.info("[Stream #{}] Session does not have any tasks.", planId());
             closeSession(State.COMPLETE);
             return;
         }
-
-        try
-        {
-            logger.info("[Stream #{}] Starting streaming to {}{}", planId(),
-                                                                   peer,
-                                                                   peer.equals(connecting) ? "" : " through " + connecting);
+        try {
+            logger.info("[Stream #{}] Starting streaming to {}{}", planId(), peer, peer.equals(connecting) ? "" : " through " + connecting);
             handler.initiate();
             onInitializationComplete();
-        }
-        catch (Exception e)
-        {
+        } catch (Exception e) {
             JVMStabilityInspector.inspectThrowable(e);
             onError(e);
         }
     }
 
-    public Socket createConnection() throws IOException
-    {
+    public Socket createConnection() throws IOException {
         assert factory != null;
         return factory.createConnection(connecting);
     }
@@ -257,8 +301,7 @@ public class StreamSession implements IEndpointStateChangeSubscriber
      * @param ranges Ranges to retrieve data
      * @param columnFamilies ColumnFamily names. Can be empty if requesting all CF under the keyspace.
      */
-    public void addStreamRequest(String keyspace, Collection<Range<Token>> ranges, Collection<String> columnFamilies, long repairedAt)
-    {
+    public void addStreamRequest(String keyspace, Collection<Range<Token>> ranges, Collection<String> columnFamilies, long repairedAt) {
         requests.add(new StreamRequest(keyspace, ranges, columnFamilies, repairedAt));
     }
 
@@ -273,117 +316,93 @@ public class StreamSession implements IEndpointStateChangeSubscriber
      * @param flushTables flush tables?
      * @param repairedAt the time the repair started.
      */
-    public void addTransferRanges(String keyspace, Collection<Range<Token>> ranges, Collection<String> columnFamilies, boolean flushTables, long repairedAt)
-    {
+    public void addTransferRanges(String keyspace, Collection<Range<Token>> ranges, Collection<String> columnFamilies, boolean flushTables, long repairedAt) {
         Collection<ColumnFamilyStore> stores = getColumnFamilyStores(keyspace, columnFamilies);
         if (flushTables)
             flushSSTables(stores);
-
         List<Range<Token>> normalizedRanges = Range.normalize(ranges);
         List<SSTableStreamingSections> sections = getSSTableSectionsForRanges(normalizedRanges, stores, repairedAt, isIncremental);
-        try
-        {
+        try {
             addTransferFiles(sections);
-        }
-        finally
-        {
-            for (SSTableStreamingSections release : sections)
-                release.ref.release();
+        } finally {
+            for (SSTableStreamingSections release : sections) release.ref.release();
         }
     }
 
-    private Collection<ColumnFamilyStore> getColumnFamilyStores(String keyspace, Collection<String> columnFamilies)
-    {
+    private Collection<ColumnFamilyStore> getColumnFamilyStores(String keyspace, Collection<String> columnFamilies) {
         Collection<ColumnFamilyStore> stores = new HashSet<>();
         // if columnfamilies are not specified, we add all cf under the keyspace
-        if (columnFamilies.isEmpty())
-        {
+        if (columnFamilies.isEmpty()) {
             stores.addAll(Keyspace.open(keyspace).getColumnFamilyStores());
-        }
-        else
-        {
-            for (String cf : columnFamilies)
-                stores.add(Keyspace.open(keyspace).getColumnFamilyStore(cf));
+        } else {
+            for (String cf : columnFamilies) stores.add(Keyspace.open(keyspace).getColumnFamilyStore(cf));
         }
         return stores;
     }
 
     @VisibleForTesting
-    public static List<SSTableStreamingSections> getSSTableSectionsForRanges(Collection<Range<Token>> ranges, Collection<ColumnFamilyStore> stores, long overriddenRepairedAt, final boolean isIncremental)
-    {
+    public static List<SSTableStreamingSections> getSSTableSectionsForRanges(Collection<Range<Token>> ranges, Collection<ColumnFamilyStore> stores, long overriddenRepairedAt, final boolean isIncremental) {
         Refs<SSTableReader> refs = new Refs<>();
-        try
-        {
-            for (ColumnFamilyStore cfStore : stores)
-            {
+        try {
+            for (ColumnFamilyStore cfStore : stores) {
                 final List<Range<RowPosition>> keyRanges = new ArrayList<>(ranges.size());
-                for (Range<Token> range : ranges)
-                    keyRanges.add(Range.makeRowRange(range));
-                refs.addAll(cfStore.selectAndReference(new Function<View, List<SSTableReader>>()
-                {
-                    public List<SSTableReader> apply(View view)
-                    {
+                for (Range<Token> range : ranges) keyRanges.add(Range.makeRowRange(range));
+                refs.addAll(cfStore.selectAndReference(new Function<View, List<SSTableReader>>() {
+
+                    public List<SSTableReader> apply(View view) {
                         SSTableIntervalTree intervalTree = SSTableIntervalTree.build(ColumnFamilyStore.CANONICAL_SSTABLES.apply(view));
                         Set<SSTableReader> sstables = Sets.newHashSet();
-                        for (Range<RowPosition> keyRange : keyRanges)
-                        {
+                        for (Range<RowPosition> keyRange : keyRanges) {
                             // keyRange excludes its start, while sstableInBounds is inclusive (of both start and end).
                             // This is fine however, because keyRange has been created from a token range through Range.makeRowRange (see above).
                             // And that later method uses the Token.maxKeyBound() method to creates the range, which return a "fake" key that
                             // sort after all keys having the token. That "fake" key cannot however be equal to any real key, so that even
                             // including keyRange.left will still exclude any key having the token of the original token range, and so we're
                             // still actually selecting what we wanted.
-                            for (SSTableReader sstable : View.sstablesInBounds(keyRange.left, keyRange.right, intervalTree))
-                            {
+                            for (SSTableReader sstable : View.sstablesInBounds(keyRange.left, keyRange.right, intervalTree)) {
                                 if (!isIncremental || !sstable.isRepaired())
                                     sstables.add(sstable);
                             }
                         }
-
                         logger.debug("ViewFilter for {}/{} sstables", sstables.size(), view.sstables.size());
                         return ImmutableList.copyOf(sstables);
                     }
                 }).refs);
             }
-
             List<SSTableStreamingSections> sections = new ArrayList<>(refs.size());
-            for (SSTableReader sstable : refs)
-            {
+            for (SSTableReader sstable : refs) {
+                if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+                    if (!isSerializeLoggingActiveStatic.get()) {
+                        isSerializeLoggingActiveStatic.set(true);
+                        serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(refs, sstable, "sstable").toJsonString());
+                        isSerializeLoggingActiveStatic.set(false);
+                    }
+                }
                 long repairedAt = overriddenRepairedAt;
                 if (overriddenRepairedAt == ActiveRepairService.UNREPAIRED_SSTABLE)
                     repairedAt = sstable.getSSTableMetadata().repairedAt;
-                sections.add(new SSTableStreamingSections(refs.get(sstable),
-                                                          sstable.getPositionsForRanges(ranges),
-                                                          sstable.estimatedKeysForRanges(ranges),
-                                                          repairedAt));
+                sections.add(new SSTableStreamingSections(refs.get(sstable), sstable.getPositionsForRanges(ranges), sstable.estimatedKeysForRanges(ranges), repairedAt));
             }
             return sections;
-        }
-        catch (Throwable t)
-        {
+        } catch (Throwable t) {
             refs.release();
             throw t;
         }
     }
 
-    public void addTransferFiles(Collection<SSTableStreamingSections> sstableDetails)
-    {
+    public void addTransferFiles(Collection<SSTableStreamingSections> sstableDetails) {
         Iterator<SSTableStreamingSections> iter = sstableDetails.iterator();
-        while (iter.hasNext())
-        {
+        while (iter.hasNext()) {
             SSTableStreamingSections details = iter.next();
-            if (details.sections.isEmpty())
-            {
+            if (details.sections.isEmpty()) {
                 // A reference was acquired on the sstable and we won't stream it
                 details.ref.release();
                 iter.remove();
                 continue;
             }
-
             UUID cfId = details.ref.get().metadata.cfId;
             StreamTransferTask task = transfers.get(cfId);
-            if (task == null)
-            {
+            if (task == null) {
                 //guarantee atomicity
                 StreamTransferTask newTask = new StreamTransferTask(this, cfId);
                 task = transfers.putIfAbsent(cfId, newTask);
@@ -395,15 +414,17 @@ public class StreamSession implements IEndpointStateChangeSubscriber
         }
     }
 
-    public static class SSTableStreamingSections
-    {
+    public static class SSTableStreamingSections {
+
         public final Ref<SSTableReader> ref;
+
         public final List<Pair<Long, Long>> sections;
+
         public final long estimatedKeys;
+
         public final long repairedAt;
 
-        public SSTableStreamingSections(Ref<SSTableReader> ref, List<Pair<Long, Long>> sections, long estimatedKeys, long repairedAt)
-        {
+        public SSTableStreamingSections(Ref<SSTableReader> ref, List<Pair<Long, Long>> sections, long estimatedKeys, long repairedAt) {
             this.ref = ref;
             this.sections = sections;
             this.estimatedKeys = estimatedKeys;
@@ -411,22 +432,15 @@ public class StreamSession implements IEndpointStateChangeSubscriber
         }
     }
 
-    private synchronized void closeSession(State finalState)
-    {
-        if (isAborted.compareAndSet(false, true))
-        {
+    private synchronized void closeSession(State finalState) {
+        if (isAborted.compareAndSet(false, true)) {
             state(finalState);
-
-            if (finalState == State.FAILED)
-            {
-                for (StreamTask task : Iterables.concat(receivers.values(), transfers.values()))
-                    task.abort();
+            if (finalState == State.FAILED) {
+                for (StreamTask task : Iterables.concat(receivers.values(), transfers.values())) task.abort();
             }
-
             // Note that we shouldn't block on this close because this method is called on the handler
             // incoming thread (so we would deadlock).
             handler.close();
-
             streamResult.handleSessionComplete(this);
         }
     }
@@ -436,16 +450,14 @@ public class StreamSession implements IEndpointStateChangeSubscriber
      *
      * @param newState new state to set
      */
-    public void state(State newState)
-    {
+    public void state(State newState) {
         state = newState;
     }
 
     /**
      * @return current state
      */
-    public State state()
-    {
+    public State state() {
         return state;
     }
 
@@ -454,33 +466,26 @@ public class StreamSession implements IEndpointStateChangeSubscriber
      *
      * @return true if session completed successfully.
      */
-    public boolean isSuccess()
-    {
+    public boolean isSuccess() {
         return state == State.COMPLETE;
     }
 
-    public void messageReceived(StreamMessage message)
-    {
-        switch (message.type)
-        {
+    public void messageReceived(StreamMessage message) {
+        switch(message.type) {
             case PREPARE:
                 PrepareMessage msg = (PrepareMessage) message;
                 prepare(msg.requests, msg.summaries);
                 break;
-
             case FILE:
                 receive((IncomingFileMessage) message);
                 break;
-
             case RECEIVED:
                 ReceivedMessage received = (ReceivedMessage) message;
                 received(received.cfId, received.sequenceNumber);
                 break;
-
             case COMPLETE:
                 complete();
                 break;
-
             case SESSION_FAILED:
                 sessionFailed();
                 break;
@@ -490,37 +495,35 @@ public class StreamSession implements IEndpointStateChangeSubscriber
     /**
      * Call back when connection initialization is complete to start the prepare phase.
      */
-    public void onInitializationComplete()
-    {
+    public void onInitializationComplete() {
         // send prepare message
         state(State.PREPARING);
         PrepareMessage prepare = new PrepareMessage();
+        if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+            if (!isSerializeLoggingActive.get()) {
+                isSerializeLoggingActive.set(true);
+                serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(this, this.requests, "this.requests").toJsonString());
+                isSerializeLoggingActive.set(false);
+            }
+        }
         prepare.requests.addAll(requests);
-        for (StreamTransferTask task : transfers.values())
-            prepare.summaries.add(task.getSummary());
+        for (StreamTransferTask task : transfers.values()) prepare.summaries.add(task.getSummary());
         handler.sendMessage(prepare);
-
         // if we don't need to prepare for receiving stream, start sending files immediately
         if (requests.isEmpty())
             startStreamingFiles();
     }
 
-    /**l
-     * Call back for handling exception during streaming.
+    /**
+     * l
+     *  Call back for handling exception during streaming.
      *
-     * @param e thrown exception
+     *  @param e thrown exception
      */
-    public void onError(Throwable e)
-    {
-        if (e instanceof SocketTimeoutException)
-        {
-            logger.error("[Stream #{}] Streaming socket timed out. This means the session peer stopped responding or " +
-                         "is still processing received data. If there is no sign of failure in the other end or a very " +
-                         "dense table is being transferred you may want to increase streaming_socket_timeout_in_ms " +
-                         "property. Current value is {}ms.", planId(), DatabaseDescriptor.getStreamingSocketTimeout(), e);
-        }
-        else
-        {
+    public void onError(Throwable e) {
+        if (e instanceof SocketTimeoutException) {
+            logger.error("[Stream #{}] Streaming socket timed out. This means the session peer stopped responding or " + "is still processing received data. If there is no sign of failure in the other end or a very " + "dense table is being transferred you may want to increase streaming_socket_timeout_in_ms " + "property. Current value is {}ms.", planId(), DatabaseDescriptor.getStreamingSocketTimeout(), e);
+        } else {
             logger.error("[Stream #{}] Streaming error occurred", planId(), e);
         }
         // send session failure message
@@ -533,24 +536,36 @@ public class StreamSession implements IEndpointStateChangeSubscriber
     /**
      * Prepare this session for sending/receiving files.
      */
-    public void prepare(Collection<StreamRequest> requests, Collection<StreamSummary> summaries)
-    {
+    public void prepare(Collection<StreamRequest> requests, Collection<StreamSummary> summaries) {
         // prepare tasks
         state(State.PREPARING);
-        for (StreamRequest request : requests)
-            addTransferRanges(request.keyspace, request.ranges, request.columnFamilies, true, request.repairedAt); // always flush on stream request
-        for (StreamSummary summary : summaries)
+        for (StreamRequest request : requests) {
+            if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+                if (!isSerializeLoggingActive.get()) {
+                    isSerializeLoggingActive.set(true);
+                    serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(requests, request, "request").toJsonString());
+                    isSerializeLoggingActive.set(false);
+                }
+            }
+            // always flush on stream request
+            addTransferRanges(request.keyspace, request.ranges, request.columnFamilies, true, request.repairedAt);
+        }
+        for (StreamSummary summary : summaries) {
+            if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+                if (!isSerializeLoggingActive.get()) {
+                    isSerializeLoggingActive.set(true);
+                    serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(summaries, summary, "summary").toJsonString());
+                    isSerializeLoggingActive.set(false);
+                }
+            }
             prepareReceiving(summary);
-
+        }
         // send back prepare message if prepare message contains stream request
-        if (!requests.isEmpty())
-        {
+        if (!requests.isEmpty()) {
             PrepareMessage prepare = new PrepareMessage();
-            for (StreamTransferTask task : transfers.values())
-                prepare.summaries.add(task.getSummary());
+            for (StreamTransferTask task : transfers.values()) prepare.summaries.add(task.getSummary());
             handler.sendMessage(prepare);
         }
-
         // if there are files to stream
         if (!maybeCompleted())
             startStreamingFiles();
@@ -561,15 +576,20 @@ public class StreamSession implements IEndpointStateChangeSubscriber
      *
      * @param header sent header
      */
-    public void fileSent(FileMessageHeader header)
-    {
+    public void fileSent(FileMessageHeader header) {
         long headerSize = header.size();
         StreamingMetrics.totalOutgoingBytes.inc(headerSize);
         metrics.outgoingBytes.inc(headerSize);
         // schedule timeout for receiving ACK
         StreamTransferTask task = transfers.get(header.cfId);
-        if (task != null)
-        {
+        if (task != null) {
+            if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+                if (!isSerializeLoggingActive.get()) {
+                    isSerializeLoggingActive.set(true);
+                    serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(header, header.sequenceNumber, "header.sequenceNumber").toJsonString());
+                    isSerializeLoggingActive.set(false);
+                }
+            }
             task.scheduleTimeout(header.sequenceNumber, 12, TimeUnit.HOURS);
         }
     }
@@ -579,43 +599,56 @@ public class StreamSession implements IEndpointStateChangeSubscriber
      *
      * @param message received file
      */
-    public void receive(IncomingFileMessage message)
-    {
+    public void receive(IncomingFileMessage message) {
         long headerSize = message.header.size();
         StreamingMetrics.totalIncomingBytes.inc(headerSize);
         metrics.incomingBytes.inc(headerSize);
+        if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+            if (!isSerializeLoggingActive.get()) {
+                isSerializeLoggingActive.set(true);
+                serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(message, message.header, "message.header").toJsonString());
+                isSerializeLoggingActive.set(false);
+            }
+        }
         // send back file received message
         handler.sendMessage(new ReceivedMessage(message.header.cfId, message.header.sequenceNumber));
+        if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+            if (!isSerializeLoggingActive.get()) {
+                isSerializeLoggingActive.set(true);
+                serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(message, message.header, "message.header").toJsonString());
+                isSerializeLoggingActive.set(false);
+            }
+        }
+        if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+            if (!isSerializeLoggingActive.get()) {
+                isSerializeLoggingActive.set(true);
+                serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(message, message.sstable, "message.sstable").toJsonString());
+                isSerializeLoggingActive.set(false);
+            }
+        }
         receivers.get(message.header.cfId).received(message.sstable);
     }
 
-    public void progress(Descriptor desc, ProgressInfo.Direction direction, long bytes, long total)
-    {
+    public void progress(Descriptor desc, ProgressInfo.Direction direction, long bytes, long total) {
         ProgressInfo progress = new ProgressInfo(peer, index, desc.filenameFor(Component.DATA), direction, bytes, total);
         streamResult.handleProgress(progress);
     }
 
-    public void received(UUID cfId, int sequenceNumber)
-    {
+    public void received(UUID cfId, int sequenceNumber) {
         transfers.get(cfId).complete(sequenceNumber);
     }
 
     /**
      * Check if session is completed on receiving {@code StreamMessage.Type.COMPLETE} message.
      */
-    public synchronized void complete()
-    {
-        if (state == State.WAIT_COMPLETE)
-        {
-            if (!completeSent)
-            {
+    public synchronized void complete() {
+        if (state == State.WAIT_COMPLETE) {
+            if (!completeSent) {
                 handler.sendMessage(new CompleteMessage());
                 completeSent = true;
             }
             closeSession(State.COMPLETE);
-        }
-        else
-        {
+        } else {
             state(State.WAIT_COMPLETE);
             handler.closeIncoming();
         }
@@ -624,8 +657,7 @@ public class StreamSession implements IEndpointStateChangeSubscriber
     /**
      * Call back on receiving {@code StreamMessage.Type.SESSION_FAILED} message.
      */
-    public synchronized void sessionFailed()
-    {
+    public synchronized void sessionFailed() {
         logger.error("[Stream #{}] Remote peer {} failed stream session.", planId(), peer.getHostAddress());
         closeSession(State.FAILED);
     }
@@ -633,63 +665,66 @@ public class StreamSession implements IEndpointStateChangeSubscriber
     /**
      * @return Current snapshot of this session info.
      */
-    public SessionInfo getSessionInfo()
-    {
+    public SessionInfo getSessionInfo() {
         List<StreamSummary> receivingSummaries = Lists.newArrayList();
-        for (StreamTask receiver : receivers.values())
-            receivingSummaries.add(receiver.getSummary());
+        for (StreamTask receiver : receivers.values()) receivingSummaries.add(receiver.getSummary());
         List<StreamSummary> transferSummaries = Lists.newArrayList();
-        for (StreamTask transfer : transfers.values())
-            transferSummaries.add(transfer.getSummary());
+        for (StreamTask transfer : transfers.values()) transferSummaries.add(transfer.getSummary());
         return new SessionInfo(peer, index, connecting, receivingSummaries, transferSummaries, state);
     }
 
-    public synchronized void taskCompleted(StreamReceiveTask completedTask)
-    {
+    public synchronized void taskCompleted(StreamReceiveTask completedTask) {
+        if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+            if (!isSerializeLoggingActive.get()) {
+                isSerializeLoggingActive.set(true);
+                serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(completedTask, completedTask.cfId, "completedTask.cfId").toJsonString());
+                isSerializeLoggingActive.set(false);
+            }
+        }
         receivers.remove(completedTask.cfId);
         maybeCompleted();
     }
 
-    public synchronized void taskCompleted(StreamTransferTask completedTask)
-    {
+    public synchronized void taskCompleted(StreamTransferTask completedTask) {
         transfers.remove(completedTask.cfId);
         maybeCompleted();
     }
 
-    public void onJoin(InetAddress endpoint, EndpointState epState) {}
-    public void beforeChange(InetAddress endpoint, EndpointState currentState, ApplicationState newStateKey, VersionedValue newValue) {}
-    public void onChange(InetAddress endpoint, ApplicationState state, VersionedValue value) {}
-    public void onAlive(InetAddress endpoint, EndpointState state) {}
-    public void onDead(InetAddress endpoint, EndpointState state) {}
+    public void onJoin(InetAddress endpoint, EndpointState epState) {
+    }
 
-    public void onRemove(InetAddress endpoint)
-    {
+    public void beforeChange(InetAddress endpoint, EndpointState currentState, ApplicationState newStateKey, VersionedValue newValue) {
+    }
+
+    public void onChange(InetAddress endpoint, ApplicationState state, VersionedValue value) {
+    }
+
+    public void onAlive(InetAddress endpoint, EndpointState state) {
+    }
+
+    public void onDead(InetAddress endpoint, EndpointState state) {
+    }
+
+    public void onRemove(InetAddress endpoint) {
         logger.error("[Stream #{}] Session failed because remote peer {} has left.", planId(), peer.getHostAddress());
         closeSession(State.FAILED);
     }
 
-    public void onRestart(InetAddress endpoint, EndpointState epState)
-    {
+    public void onRestart(InetAddress endpoint, EndpointState epState) {
         logger.error("[Stream #{}] Session failed because remote peer {} was restarted.", planId(), peer.getHostAddress());
         closeSession(State.FAILED);
     }
 
-    private boolean maybeCompleted()
-    {
+    private boolean maybeCompleted() {
         boolean completed = receivers.isEmpty() && transfers.isEmpty();
-        if (completed)
-        {
-            if (state == State.WAIT_COMPLETE)
-            {
-                if (!completeSent)
-                {
+        if (completed) {
+            if (state == State.WAIT_COMPLETE) {
+                if (!completeSent) {
                     handler.sendMessage(new CompleteMessage());
                     completeSent = true;
                 }
                 closeSession(State.COMPLETE);
-            }
-            else
-            {
+            } else {
                 // notify peer that this session is completed
                 handler.sendMessage(new CompleteMessage());
                 completeSent = true;
@@ -704,32 +739,35 @@ public class StreamSession implements IEndpointStateChangeSubscriber
      * Flushes matching column families from the given keyspace, or all columnFamilies
      * if the cf list is empty.
      */
-    private void flushSSTables(Iterable<ColumnFamilyStore> stores)
-    {
+    private void flushSSTables(Iterable<ColumnFamilyStore> stores) {
         List<Future<?>> flushes = new ArrayList<>();
-        for (ColumnFamilyStore cfs : stores)
-            flushes.add(cfs.forceFlush());
+        for (ColumnFamilyStore cfs : stores) flushes.add(cfs.forceFlush());
         FBUtilities.waitOnFutures(flushes);
     }
 
-    private void prepareReceiving(StreamSummary summary)
-    {
-        if (summary.files > 0)
+    private void prepareReceiving(StreamSummary summary) {
+        if (summary.files > 0) {
+            if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+                if (!isSerializeLoggingActive.get()) {
+                    isSerializeLoggingActive.set(true);
+                    serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(summary, summary.cfId, "summary.cfId").toJsonString());
+                    isSerializeLoggingActive.set(false);
+                }
+            }
             receivers.put(summary.cfId, new StreamReceiveTask(this, summary.cfId, summary.files, summary.totalSize));
+        }
     }
 
-    private void startStreamingFiles()
-    {
+    private void startStreamingFiles() {
         streamResult.handleSessionPrepared(this);
-
         state(State.STREAMING);
-        for (StreamTransferTask task : transfers.values())
-        {
+        for (StreamTransferTask task : transfers.values()) {
             Collection<OutgoingFileMessage> messages = task.getFileMessages();
             if (messages.size() > 0)
                 handler.sendMessages(messages);
             else
-                taskCompleted(task); // there is no file to send
+                // there is no file to send
+                taskCompleted(task);
         }
     }
 }

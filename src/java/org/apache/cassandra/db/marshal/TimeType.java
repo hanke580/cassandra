@@ -18,7 +18,6 @@
 package org.apache.cassandra.db.marshal;
 
 import java.nio.ByteBuffer;
-
 import org.apache.cassandra.cql3.Constants;
 import org.apache.cassandra.cql3.Term;
 import org.apache.cassandra.serializers.TimeSerializer;
@@ -30,60 +29,68 @@ import org.apache.cassandra.utils.ByteBufferUtil;
 /**
  * Nanosecond resolution time values
  */
-public class TimeType extends AbstractType<Long>
-{
-    public static final TimeType instance = new TimeType();
-    private TimeType() {} // singleton
+public class TimeType extends AbstractType<Long> {
 
-    public int compare(ByteBuffer o1, ByteBuffer o2)
-    {
+    private static final org.slf4j.Logger serialize_logger = org.slf4j.LoggerFactory.getLogger("serialize.logger");
+
+    private java.lang.ThreadLocal<Boolean> isSerializeLoggingActive = new ThreadLocal<Boolean>() {
+
+        @Override
+        protected Boolean initialValue() {
+            return false;
+        }
+    };
+
+    public static final TimeType instance = new TimeType();
+
+    // singleton
+    private TimeType() {
+    }
+
+    public int compare(ByteBuffer o1, ByteBuffer o2) {
         return ByteBufferUtil.compareUnsigned(o1, o2);
     }
 
-    public ByteBuffer fromString(String source) throws MarshalException
-    {
+    public ByteBuffer fromString(String source) throws MarshalException {
         return decompose(TimeSerializer.timeStringToLong(source));
     }
 
     @Override
-    public boolean isByteOrderComparable()
-    {
+    public boolean isByteOrderComparable() {
         return true;
     }
 
     @Override
-    public boolean isValueCompatibleWithInternal(AbstractType<?> otherType)
-    {
+    public boolean isValueCompatibleWithInternal(AbstractType<?> otherType) {
         return this == otherType || otherType == LongType.instance;
     }
 
-    public Term fromJSONObject(Object parsed) throws MarshalException
-    {
-        try
-        {
+    public Term fromJSONObject(Object parsed) throws MarshalException {
+        try {
             return new Constants.Value(fromString((String) parsed));
-        }
-        catch (ClassCastException exc)
-        {
-            throw new MarshalException(String.format(
-                    "Expected a string representation of a time value, but got a %s: %s", parsed.getClass().getSimpleName(), parsed));
+        } catch (ClassCastException exc) {
+            throw new MarshalException(String.format("Expected a string representation of a time value, but got a %s: %s", parsed.getClass().getSimpleName(), parsed));
         }
     }
 
     @Override
-    public String toJSONString(ByteBuffer buffer, int protocolVersion)
-    {
+    public String toJSONString(ByteBuffer buffer, int protocolVersion) {
         return '"' + TimeSerializer.instance.toString(TimeSerializer.instance.deserialize(buffer)) + '"';
     }
 
     @Override
-    public CQL3Type asCQL3Type()
-    {
+    public CQL3Type asCQL3Type() {
         return CQL3Type.Native.TIME;
     }
 
-    public TypeSerializer<Long> getSerializer()
-    {
+    public TypeSerializer<Long> getSerializer() {
+        if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+            if (!isSerializeLoggingActive.get()) {
+                isSerializeLoggingActive.set(true);
+                serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(org.apache.cassandra.serializers.TimeSerializer.class, org.apache.cassandra.serializers.TimeSerializer.instance, "org.apache.cassandra.serializers.TimeSerializer.instance").toJsonString());
+                isSerializeLoggingActive.set(false);
+            }
+        }
         return TimeSerializer.instance;
     }
 }

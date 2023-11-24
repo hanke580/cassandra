@@ -18,7 +18,6 @@
 package org.apache.cassandra.db.composites;
 
 import java.nio.ByteBuffer;
-
 import org.apache.cassandra.config.CFMetaData;
 import org.apache.cassandra.utils.ObjectSizes;
 import org.apache.cassandra.utils.memory.AbstractAllocator;
@@ -26,30 +25,53 @@ import org.apache.cassandra.utils.memory.AbstractAllocator;
 /**
  * A "truly-composite" Composite.
  */
-public class CompoundComposite extends AbstractComposite
-{
+public class CompoundComposite extends AbstractComposite {
+
+    private static final org.slf4j.Logger serialize_logger = org.slf4j.LoggerFactory.getLogger("serialize.logger");
+
+    private java.lang.ThreadLocal<Boolean> isSerializeLoggingActive = new ThreadLocal<Boolean>() {
+
+        @Override
+        protected Boolean initialValue() {
+            return false;
+        }
+    };
+
     private static final long HEAP_SIZE = ObjectSizes.measure(new CompoundComposite(null, 0, false));
 
     // We could use a List, but we'll create such object *a lot* and using a array+size is not
     // all that harder, so we save the List object allocation.
     final ByteBuffer[] elements;
+
     final int size;
+
     final boolean isStatic;
 
-    CompoundComposite(ByteBuffer[] elements, int size, boolean isStatic)
-    {
+    CompoundComposite(ByteBuffer[] elements, int size, boolean isStatic) {
         this.elements = elements;
         this.size = size;
         this.isStatic = isStatic;
     }
 
-    public int size()
-    {
+    public int size() {
+        if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+            if (!isSerializeLoggingActive.get()) {
+                isSerializeLoggingActive.set(true);
+                serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(this, this.size, "this.size").toJsonString());
+                isSerializeLoggingActive.set(false);
+            }
+        }
         return size;
     }
 
-    public ByteBuffer get(int i)
-    {
+    public ByteBuffer get(int i) {
+        if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+            if (!isSerializeLoggingActive.get()) {
+                isSerializeLoggingActive.set(true);
+                serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(this, this.elements, "this.elements").toJsonString());
+                isSerializeLoggingActive.set(false);
+            }
+        }
         // Note: most consumer should validate that i is within bounds. However, for backward compatibility
         // reasons, composite dense tables can have names that don't have all their component of the clustering
         // columns, which may end up here with i > size(). For those calls, it's actually simpler to return null
@@ -58,31 +80,25 @@ public class CompoundComposite extends AbstractComposite
     }
 
     @Override
-    public boolean isStatic()
-    {
+    public boolean isStatic() {
         return isStatic;
     }
 
-    protected ByteBuffer[] elementsCopy(AbstractAllocator allocator)
-    {
+    protected ByteBuffer[] elementsCopy(AbstractAllocator allocator) {
         ByteBuffer[] elementsCopy = new ByteBuffer[size];
-        for (int i = 0; i < size; i++)
-            elementsCopy[i] = allocator.clone(elements[i]);
+        for (int i = 0; i < size; i++) elementsCopy[i] = allocator.clone(elements[i]);
         return elementsCopy;
     }
 
-    public long unsharedHeapSize()
-    {
+    public long unsharedHeapSize() {
         return HEAP_SIZE + ObjectSizes.sizeOnHeapOf(elements);
     }
 
-    public long unsharedHeapSizeExcludingData()
-    {
+    public long unsharedHeapSizeExcludingData() {
         return HEAP_SIZE + ObjectSizes.sizeOnHeapExcludingData(elements);
     }
 
-    public Composite copy(CFMetaData cfm, AbstractAllocator allocator)
-    {
+    public Composite copy(CFMetaData cfm, AbstractAllocator allocator) {
         return new CompoundComposite(elementsCopy(allocator), size, isStatic);
     }
 }

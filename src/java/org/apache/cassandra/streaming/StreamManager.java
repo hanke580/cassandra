@@ -21,19 +21,16 @@ import java.net.InetAddress;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
-
 import javax.management.ListenerNotFoundException;
 import javax.management.MBeanNotificationInfo;
 import javax.management.NotificationFilter;
 import javax.management.NotificationListener;
 import javax.management.openmbean.CompositeData;
-
 import com.google.common.base.Function;
 import com.google.common.collect.Iterables;
 import com.google.common.collect.Sets;
 import com.google.common.util.concurrent.MoreExecutors;
 import com.google.common.util.concurrent.RateLimiter;
-
 import org.cliffc.high_scale_lib.NonBlockingHashMap;
 import org.apache.cassandra.config.DatabaseDescriptor;
 import org.apache.cassandra.streaming.management.StreamEventJMXNotifier;
@@ -44,8 +41,18 @@ import org.apache.cassandra.streaming.management.StreamStateCompositeData;
  *
  * All stream operation should be created through this class to track streaming status and progress.
  */
-public class StreamManager implements StreamManagerMBean
-{
+public class StreamManager implements StreamManagerMBean {
+
+    private static final org.slf4j.Logger serialize_logger = org.slf4j.LoggerFactory.getLogger("serialize.logger");
+
+    private java.lang.ThreadLocal<Boolean> isSerializeLoggingActive = new ThreadLocal<Boolean>() {
+
+        @Override
+        protected Boolean initialValue() {
+            return false;
+        }
+    };
+
     public static final StreamManager instance = new StreamManager();
 
     /**
@@ -56,35 +63,33 @@ public class StreamManager implements StreamManagerMBean
      *
      * @return StreamRateLimiter with rate limit set based on peer location.
      */
-    public static StreamRateLimiter getRateLimiter(InetAddress peer)
-    {
+    public static StreamRateLimiter getRateLimiter(InetAddress peer) {
         return new StreamRateLimiter(peer);
     }
 
-    public static class StreamRateLimiter
-    {
-        private static final double BYTES_PER_MEGABIT = (1024 * 1024) / 8; // from bits
+    public static class StreamRateLimiter {
+
+        // from bits
+        private static final double BYTES_PER_MEGABIT = (1024 * 1024) / 8;
+
         private static final RateLimiter limiter = RateLimiter.create(Double.MAX_VALUE);
+
         private static final RateLimiter interDCLimiter = RateLimiter.create(Double.MAX_VALUE);
+
         private final boolean isLocalDC;
 
-        public StreamRateLimiter(InetAddress peer)
-        {
+        public StreamRateLimiter(InetAddress peer) {
             double throughput = DatabaseDescriptor.getStreamThroughputOutboundMegabitsPerSec() * BYTES_PER_MEGABIT;
             mayUpdateThroughput(throughput, limiter);
-
             double interDCThroughput = DatabaseDescriptor.getInterDCStreamThroughputOutboundMegabitsPerSec() * BYTES_PER_MEGABIT;
             mayUpdateThroughput(interDCThroughput, interDCLimiter);
-
             if (DatabaseDescriptor.getLocalDataCenter() != null && DatabaseDescriptor.getEndpointSnitch() != null)
-                isLocalDC = DatabaseDescriptor.getLocalDataCenter().equals(
-                            DatabaseDescriptor.getEndpointSnitch().getDatacenter(peer));
+                isLocalDC = DatabaseDescriptor.getLocalDataCenter().equals(DatabaseDescriptor.getEndpointSnitch().getDatacenter(peer));
             else
                 isLocalDC = true;
         }
 
-        private void mayUpdateThroughput(double limit, RateLimiter rateLimiter)
-        {
+        private void mayUpdateThroughput(double limit, RateLimiter rateLimiter) {
             // if throughput is set to 0, throttling is disabled
             if (limit == 0)
                 limit = Double.MAX_VALUE;
@@ -92,8 +97,7 @@ public class StreamManager implements StreamManagerMBean
                 rateLimiter.setRate(limit);
         }
 
-        public void acquire(int toTransfer)
-        {
+        public void acquire(int toTransfer) {
             limiter.acquire(toTransfer);
             if (!isLocalDC)
                 interDCLimiter.acquire(toTransfer);
@@ -108,71 +112,73 @@ public class StreamManager implements StreamManagerMBean
      * receiving ones withing the same JVM.
      */
     private final Map<UUID, StreamResultFuture> initiatedStreams = new NonBlockingHashMap<>();
+
     private final Map<UUID, StreamResultFuture> receivingStreams = new NonBlockingHashMap<>();
 
-    public Set<CompositeData> getCurrentStreams()
-    {
-        return Sets.newHashSet(Iterables.transform(Iterables.concat(initiatedStreams.values(), receivingStreams.values()), new Function<StreamResultFuture, CompositeData>()
-        {
-            public CompositeData apply(StreamResultFuture input)
-            {
+    public Set<CompositeData> getCurrentStreams() {
+        return Sets.newHashSet(Iterables.transform(Iterables.concat(initiatedStreams.values(), receivingStreams.values()), new Function<StreamResultFuture, CompositeData>() {
+
+            public CompositeData apply(StreamResultFuture input) {
                 return StreamStateCompositeData.toCompositeData(input.getCurrentState());
             }
         }));
     }
 
-    public void register(final StreamResultFuture result)
-    {
+    public void register(final StreamResultFuture result) {
         result.addEventListener(notifier);
         // Make sure we remove the stream on completion (whether successful or not)
-        result.addListener(new Runnable()
-        {
-            public void run()
-            {
+        result.addListener(new Runnable() {
+
+            public void run() {
                 initiatedStreams.remove(result.planId);
             }
         }, MoreExecutors.sameThreadExecutor());
-
+        if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+            if (!isSerializeLoggingActive.get()) {
+                isSerializeLoggingActive.set(true);
+                serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(result, result.planId, "result.planId").toJsonString());
+                isSerializeLoggingActive.set(false);
+            }
+        }
         initiatedStreams.put(result.planId, result);
     }
 
-    public void registerReceiving(final StreamResultFuture result)
-    {
+    public void registerReceiving(final StreamResultFuture result) {
         result.addEventListener(notifier);
         // Make sure we remove the stream on completion (whether successful or not)
-        result.addListener(new Runnable()
-        {
-            public void run()
-            {
+        result.addListener(new Runnable() {
+
+            public void run() {
                 receivingStreams.remove(result.planId);
             }
         }, MoreExecutors.sameThreadExecutor());
-
+        if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+            if (!isSerializeLoggingActive.get()) {
+                isSerializeLoggingActive.set(true);
+                serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(result, result.planId, "result.planId").toJsonString());
+                isSerializeLoggingActive.set(false);
+            }
+        }
         receivingStreams.put(result.planId, result);
     }
 
-    public StreamResultFuture getReceivingStream(UUID planId)
-    {
+    public StreamResultFuture getReceivingStream(UUID planId) {
         return receivingStreams.get(planId);
     }
 
-    public void addNotificationListener(NotificationListener listener, NotificationFilter filter, Object handback)
-    {
+    public void addNotificationListener(NotificationListener listener, NotificationFilter filter, Object handback) {
         notifier.addNotificationListener(listener, filter, handback);
     }
 
-    public void removeNotificationListener(NotificationListener listener) throws ListenerNotFoundException
-    {
+    public void removeNotificationListener(NotificationListener listener) throws ListenerNotFoundException {
         notifier.removeNotificationListener(listener);
     }
 
-    public void removeNotificationListener(NotificationListener listener, NotificationFilter filter, Object handback) throws ListenerNotFoundException
-    {
+    public void removeNotificationListener(NotificationListener listener, NotificationFilter filter, Object handback) throws ListenerNotFoundException {
         notifier.removeNotificationListener(listener, filter, handback);
     }
 
-    public MBeanNotificationInfo[] getNotificationInfo()
-    {
+    public MBeanNotificationInfo[] getNotificationInfo() {
         return notifier.getNotificationInfo();
     }
 }

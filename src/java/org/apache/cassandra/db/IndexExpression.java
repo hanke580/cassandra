@@ -16,27 +16,35 @@
  * specific language governing permissions and limitations
  * under the License.
  */
-
 package org.apache.cassandra.db;
 
 import java.io.DataInput;
 import java.io.IOException;
 import java.nio.ByteBuffer;
-
 import com.google.common.base.Objects;
-
 import org.apache.cassandra.cql3.Operator;
 import org.apache.cassandra.io.util.DataOutputPlus;
 import org.apache.cassandra.utils.ByteBufferUtil;
 
-public final class IndexExpression
-{
+public final class IndexExpression {
+
+    private static final org.slf4j.Logger serialize_logger = org.slf4j.LoggerFactory.getLogger("serialize.logger");
+
+    private java.lang.ThreadLocal<Boolean> isSerializeLoggingActive = new ThreadLocal<Boolean>() {
+
+        @Override
+        protected Boolean initialValue() {
+            return false;
+        }
+    };
+
     public final ByteBuffer column;
+
     public final Operator operator;
+
     public final ByteBuffer value;
 
-    public IndexExpression(ByteBuffer column, Operator operator, ByteBuffer value)
-    {
+    public IndexExpression(ByteBuffer column, Operator operator, ByteBuffer value) {
         this.column = column;
         this.operator = operator;
         this.value = value;
@@ -48,8 +56,7 @@ public final class IndexExpression
      * @return <code>true</code> if the operator of this <code>IndexExpression</code> is a <code>CONTAINS</code>
      * operator, <code>false</code> otherwise.
      */
-    public boolean isContains()
-    {
+    public boolean isContains() {
         return Operator.CONTAINS == operator;
     }
 
@@ -59,36 +66,27 @@ public final class IndexExpression
      * @return <code>true</code> if the operator of this <code>IndexExpression</code> is a <code>CONTAINS_KEY</code>
      * operator, <code>false</code> otherwise.
      */
-    public boolean isContainsKey()
-    {
+    public boolean isContainsKey() {
         return Operator.CONTAINS_KEY == operator;
     }
 
     @Override
-    public String toString()
-    {
+    public String toString() {
         return String.format("%s %s %s", ByteBufferUtil.bytesToHex(column), operator, ByteBufferUtil.bytesToHex(value));
     }
 
     @Override
-    public boolean equals(Object o)
-    {
+    public boolean equals(Object o) {
         if (this == o)
             return true;
-
         if (!(o instanceof IndexExpression))
             return false;
-
         IndexExpression ie = (IndexExpression) o;
-
-        return Objects.equal(this.column, ie.column)
-            && Objects.equal(this.operator, ie.operator)
-            && Objects.equal(this.value, ie.value);
+        return Objects.equal(this.column, ie.column) && Objects.equal(this.operator, ie.operator) && Objects.equal(this.value, ie.value);
     }
 
     @Override
-    public int hashCode()
-    {
+    public int hashCode() {
         return Objects.hashCode(column, operator, value);
     }
 
@@ -98,24 +96,34 @@ public final class IndexExpression
      * @param output the output to write to
      * @throws IOException if an I/O problem occurs while writing to the specified output
      */
-    public void writeTo(DataOutputPlus output) throws IOException
-    {
+    public void writeTo(DataOutputPlus output) throws IOException {
+        if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+            if (!isSerializeLoggingActive.get()) {
+                isSerializeLoggingActive.set(true);
+                serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(this, this.column, "this.column").toJsonString());
+                isSerializeLoggingActive.set(false);
+            }
+        }
         ByteBufferUtil.writeWithShortLength(column, output);
         operator.writeTo(output);
+        if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+            if (!isSerializeLoggingActive.get()) {
+                isSerializeLoggingActive.set(true);
+                serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(this, this.value, "this.value").toJsonString());
+                isSerializeLoggingActive.set(false);
+            }
+        }
         ByteBufferUtil.writeWithShortLength(value, output);
     }
 
     /**
-     * Deserializes an <code>IndexExpression</code> instance from the specified input. 
+     * Deserializes an <code>IndexExpression</code> instance from the specified input.
      *
-     * @param input the input to read from 
+     * @param input the input to read from
      * @return the <code>IndexExpression</code> instance deserialized
      * @throws IOException if a problem occurs while deserializing the <code>IndexExpression</code> instance.
      */
-    public static IndexExpression readFrom(DataInput input) throws IOException
-    {
-        return new IndexExpression(ByteBufferUtil.readWithShortLength(input),
-                                   Operator.readFrom(input),
-                                   ByteBufferUtil.readWithShortLength(input));
+    public static IndexExpression readFrom(DataInput input) throws IOException {
+        return new IndexExpression(ByteBufferUtil.readWithShortLength(input), Operator.readFrom(input), ByteBufferUtil.readWithShortLength(input));
     }
 }

@@ -18,7 +18,6 @@
 package org.apache.cassandra.cql3;
 
 import java.nio.ByteBuffer;
-
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.apache.cassandra.config.ColumnDefinition;
@@ -37,147 +36,145 @@ import org.apache.cassandra.utils.ByteBufferUtil;
 /**
  * Static helper methods and classes for constants.
  */
-public abstract class Constants
-{
+public abstract class Constants {
+
+    private static final org.slf4j.Logger serialize_logger = org.slf4j.LoggerFactory.getLogger("serialize.logger");
+
     private static final Logger logger = LoggerFactory.getLogger(Constants.class);
 
-    public enum Type
-    {
-        STRING, INTEGER, UUID, FLOAT, DATE, TIME, BOOLEAN, HEX;
+    public enum Type {
+
+        STRING,
+        INTEGER,
+        UUID,
+        FLOAT,
+        DATE,
+        TIME,
+        BOOLEAN,
+        HEX
     }
 
     public static final Value UNSET_VALUE = new Value(ByteBufferUtil.UNSET_BYTE_BUFFER);
 
-    public static final Term.Raw NULL_LITERAL = new Term.Raw()
-    {
-        public Term prepare(String keyspace, ColumnSpecification receiver) throws InvalidRequestException
-        {
+    public static final Term.Raw NULL_LITERAL = new Term.Raw() {
+
+        public Term prepare(String keyspace, ColumnSpecification receiver) throws InvalidRequestException {
             if (!testAssignment(keyspace, receiver).isAssignable())
                 throw new InvalidRequestException("Invalid null value for counter increment/decrement");
-
             return NULL_VALUE;
         }
 
-        public AssignmentTestable.TestResult testAssignment(String keyspace, ColumnSpecification receiver)
-        {
-            return receiver.type instanceof CounterColumnType
-                 ? AssignmentTestable.TestResult.NOT_ASSIGNABLE
-                 : AssignmentTestable.TestResult.WEAKLY_ASSIGNABLE;
+        public AssignmentTestable.TestResult testAssignment(String keyspace, ColumnSpecification receiver) {
+            return receiver.type instanceof CounterColumnType ? AssignmentTestable.TestResult.NOT_ASSIGNABLE : AssignmentTestable.TestResult.WEAKLY_ASSIGNABLE;
         }
 
         @Override
-        public String toString()
-        {
+        public String toString() {
             return "null";
         }
     };
 
-    public static final Term.Terminal NULL_VALUE = new Value(null)
-    {
+    public static final Term.Terminal NULL_VALUE = new Value(null) {
+
         @Override
-        public Terminal bind(QueryOptions options)
-        {
+        public Terminal bind(QueryOptions options) {
             // We return null because that makes life easier for collections
             return null;
         }
 
         @Override
-        public String toString()
-        {
+        public String toString() {
             return "null";
         }
     };
 
-    public static class Literal implements Term.Raw
-    {
+    public static class Literal implements Term.Raw {
+
+        private java.lang.ThreadLocal<Boolean> isSerializeLoggingActive = new ThreadLocal<Boolean>() {
+
+            @Override
+            protected Boolean initialValue() {
+                return false;
+            }
+        };
+
         private final Type type;
+
         private final String text;
 
-        private Literal(Type type, String text)
-        {
+        private Literal(Type type, String text) {
             assert type != null && text != null;
             this.type = type;
             this.text = text;
         }
 
-        public static Literal string(String text)
-        {
+        public static Literal string(String text) {
             return new Literal(Type.STRING, text);
         }
 
-        public static Literal integer(String text)
-        {
+        public static Literal integer(String text) {
             return new Literal(Type.INTEGER, text);
         }
 
-        public static Literal floatingPoint(String text)
-        {
+        public static Literal floatingPoint(String text) {
             return new Literal(Type.FLOAT, text);
         }
 
-        public static Literal uuid(String text)
-        {
+        public static Literal uuid(String text) {
             return new Literal(Type.UUID, text);
         }
 
-        public static Literal bool(String text)
-        {
+        public static Literal bool(String text) {
             return new Literal(Type.BOOLEAN, text);
         }
 
-        public static Literal hex(String text)
-        {
+        public static Literal hex(String text) {
             return new Literal(Type.HEX, text);
         }
 
-        public Value prepare(String keyspace, ColumnSpecification receiver) throws InvalidRequestException
-        {
+        public Value prepare(String keyspace, ColumnSpecification receiver) throws InvalidRequestException {
             if (!testAssignment(keyspace, receiver).isAssignable())
                 throw new InvalidRequestException(String.format("Invalid %s constant (%s) for \"%s\" of type %s", type, text, receiver.name, receiver.type.asCQL3Type()));
-
             return new Value(parsedValue(receiver.type));
         }
 
-        private ByteBuffer parsedValue(AbstractType<?> validator) throws InvalidRequestException
-        {
+        private ByteBuffer parsedValue(AbstractType<?> validator) throws InvalidRequestException {
             if (validator instanceof ReversedType<?>)
                 validator = ((ReversedType<?>) validator).baseType;
-            try
-            {
+            try {
                 // BytesType doesn't want it's input prefixed by '0x'.
                 if (type == Type.HEX && validator instanceof BytesType)
                     return validator.fromString(text.substring(2));
                 if (validator instanceof CounterColumnType)
                     return LongType.instance.fromString(text);
                 return validator.fromString(text);
-            }
-            catch (MarshalException e)
-            {
+            } catch (MarshalException e) {
                 throw new InvalidRequestException(e.getMessage());
             }
         }
 
-        public String getRawText()
-        {
+        public String getRawText() {
+            if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+                if (!isSerializeLoggingActive.get()) {
+                    isSerializeLoggingActive.set(true);
+                    serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(this, this.text, "this.text").toJsonString());
+                    isSerializeLoggingActive.set(false);
+                }
+            }
             return text;
         }
 
-        public AssignmentTestable.TestResult testAssignment(String keyspace, ColumnSpecification receiver)
-        {
+        public AssignmentTestable.TestResult testAssignment(String keyspace, ColumnSpecification receiver) {
             CQL3Type receiverType = receiver.type.asCQL3Type();
             if (receiverType.isCollection())
                 return AssignmentTestable.TestResult.NOT_ASSIGNABLE;
-
             if (!(receiverType instanceof CQL3Type.Native))
                 // Skip type validation for custom types. May or may not be a good idea
                 return AssignmentTestable.TestResult.WEAKLY_ASSIGNABLE;
-
-            CQL3Type.Native nt = (CQL3Type.Native)receiverType;
-            switch (type)
-            {
+            CQL3Type.Native nt = (CQL3Type.Native) receiverType;
+            switch(type) {
                 case STRING:
-                    switch (nt)
-                    {
+                    switch(nt) {
                         case ASCII:
                         case TEXT:
                         case INET:
@@ -189,8 +186,7 @@ public abstract class Constants
                     }
                     break;
                 case INTEGER:
-                    switch (nt)
-                    {
+                    switch(nt) {
                         case BIGINT:
                         case COUNTER:
                         case DATE:
@@ -206,16 +202,14 @@ public abstract class Constants
                     }
                     break;
                 case UUID:
-                    switch (nt)
-                    {
+                    switch(nt) {
                         case UUID:
                         case TIMEUUID:
                             return AssignmentTestable.TestResult.WEAKLY_ASSIGNABLE;
                     }
                     break;
                 case FLOAT:
-                    switch (nt)
-                    {
+                    switch(nt) {
                         case DECIMAL:
                         case DOUBLE:
                         case FLOAT:
@@ -223,15 +217,13 @@ public abstract class Constants
                     }
                     break;
                 case BOOLEAN:
-                    switch (nt)
-                    {
+                    switch(nt) {
                         case BOOLEAN:
                             return AssignmentTestable.TestResult.WEAKLY_ASSIGNABLE;
                     }
                     break;
                 case HEX:
-                    switch (nt)
-                    {
+                    switch(nt) {
                         case BLOB:
                             return AssignmentTestable.TestResult.WEAKLY_ASSIGNABLE;
                     }
@@ -241,8 +233,7 @@ public abstract class Constants
         }
 
         @Override
-        public String toString()
-        {
+        public String toString() {
             return type == Type.STRING ? String.format("'%s'", text) : text;
         }
     }
@@ -250,126 +241,190 @@ public abstract class Constants
     /**
      * A constant value, i.e. a ByteBuffer.
      */
-    public static class Value extends Term.Terminal
-    {
+    public static class Value extends Term.Terminal {
+
+        private java.lang.ThreadLocal<Boolean> isSerializeLoggingActive = new ThreadLocal<Boolean>() {
+
+            @Override
+            protected Boolean initialValue() {
+                return false;
+            }
+        };
+
         public final ByteBuffer bytes;
 
-        public Value(ByteBuffer bytes)
-        {
+        public Value(ByteBuffer bytes) {
             this.bytes = bytes;
         }
 
-        public ByteBuffer get(int protocolVersion)
-        {
+        public ByteBuffer get(int protocolVersion) {
+            if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+                if (!isSerializeLoggingActive.get()) {
+                    isSerializeLoggingActive.set(true);
+                    serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(this, this.bytes, "this.bytes").toJsonString());
+                    isSerializeLoggingActive.set(false);
+                }
+            }
             return bytes;
         }
 
         @Override
-        public ByteBuffer bindAndGet(QueryOptions options)
-        {
+        public ByteBuffer bindAndGet(QueryOptions options) {
+            if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+                if (!isSerializeLoggingActive.get()) {
+                    isSerializeLoggingActive.set(true);
+                    serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(this, this.bytes, "this.bytes").toJsonString());
+                    isSerializeLoggingActive.set(false);
+                }
+            }
             return bytes;
         }
 
         @Override
-        public String toString()
-        {
+        public String toString() {
             return ByteBufferUtil.bytesToHex(bytes);
         }
     }
 
-    public static class Marker extends AbstractMarker
-    {
-        protected Marker(int bindIndex, ColumnSpecification receiver)
-        {
+    public static class Marker extends AbstractMarker {
+
+        private java.lang.ThreadLocal<Boolean> isSerializeLoggingActive = new ThreadLocal<Boolean>() {
+
+            @Override
+            protected Boolean initialValue() {
+                return false;
+            }
+        };
+
+        protected Marker(int bindIndex, ColumnSpecification receiver) {
             super(bindIndex, receiver);
             assert !receiver.type.isCollection();
         }
 
         @Override
-        public ByteBuffer bindAndGet(QueryOptions options) throws InvalidRequestException
-        {
-            try
-            {
+        public ByteBuffer bindAndGet(QueryOptions options) throws InvalidRequestException {
+            try {
                 ByteBuffer value = options.getValues().get(bindIndex);
                 if (value != null && value != ByteBufferUtil.UNSET_BYTE_BUFFER)
                     receiver.type.validate(value);
                 return value;
-            }
-            catch (MarshalException e)
-            {
+            } catch (MarshalException e) {
                 throw new InvalidRequestException(e.getMessage());
             }
         }
 
-        public Value bind(QueryOptions options) throws InvalidRequestException
-        {
+        public Value bind(QueryOptions options) throws InvalidRequestException {
             ByteBuffer bytes = bindAndGet(options);
             if (bytes == null)
                 return null;
-            if (bytes == ByteBufferUtil.UNSET_BYTE_BUFFER)
+            if (bytes == ByteBufferUtil.UNSET_BYTE_BUFFER) {
+                if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+                    if (!isSerializeLoggingActive.get()) {
+                        isSerializeLoggingActive.set(true);
+                        serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(org.apache.cassandra.cql3.Constants.class, org.apache.cassandra.cql3.Constants.UNSET_VALUE, "org.apache.cassandra.cql3.Constants.UNSET_VALUE").toJsonString());
+                        isSerializeLoggingActive.set(false);
+                    }
+                }
                 return Constants.UNSET_VALUE;
+            }
             return new Constants.Value(bytes);
         }
     }
 
-    public static class Setter extends Operation
-    {
-        public Setter(ColumnDefinition column, Term t)
-        {
+    public static class Setter extends Operation {
+
+        private java.lang.ThreadLocal<Boolean> isSerializeLoggingActive = new ThreadLocal<Boolean>() {
+
+            @Override
+            protected Boolean initialValue() {
+                return false;
+            }
+        };
+
+        public Setter(ColumnDefinition column, Term t) {
             super(column, t);
         }
 
-        public void execute(ByteBuffer rowKey, ColumnFamily cf, Composite prefix, UpdateParameters params) throws InvalidRequestException
-        {
+        public void execute(ByteBuffer rowKey, ColumnFamily cf, Composite prefix, UpdateParameters params) throws InvalidRequestException {
             ByteBuffer value = t.bindAndGet(params.options);
-            if (value != ByteBufferUtil.UNSET_BYTE_BUFFER) // use reference equality and not object equality
-            {
+            if (// use reference equality and not object equality
+            value != ByteBufferUtil.UNSET_BYTE_BUFFER) {
+                if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+                    if (!isSerializeLoggingActive.get()) {
+                        isSerializeLoggingActive.set(true);
+                        serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(this, this.column, "this.column").toJsonString());
+                        isSerializeLoggingActive.set(false);
+                    }
+                }
                 CellName cname = cf.getComparator().create(prefix, column);
                 cf.addColumn(value == null ? params.makeTombstone(cname) : params.makeColumn(cname, value));
             }
         }
     }
 
-    public static class Adder extends Operation
-    {
-        public Adder(ColumnDefinition column, Term t)
-        {
+    public static class Adder extends Operation {
+
+        private java.lang.ThreadLocal<Boolean> isSerializeLoggingActive = new ThreadLocal<Boolean>() {
+
+            @Override
+            protected Boolean initialValue() {
+                return false;
+            }
+        };
+
+        public Adder(ColumnDefinition column, Term t) {
             super(column, t);
         }
 
-        public void execute(ByteBuffer rowKey, ColumnFamily cf, Composite prefix, UpdateParameters params) throws InvalidRequestException
-        {
+        public void execute(ByteBuffer rowKey, ColumnFamily cf, Composite prefix, UpdateParameters params) throws InvalidRequestException {
             ByteBuffer bytes = t.bindAndGet(params.options);
             if (bytes == null)
                 throw new InvalidRequestException("Invalid null value for counter increment");
             if (bytes == ByteBufferUtil.UNSET_BYTE_BUFFER)
                 return;
-
             long increment = ByteBufferUtil.toLong(bytes);
+            if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+                if (!isSerializeLoggingActive.get()) {
+                    isSerializeLoggingActive.set(true);
+                    serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(this, this.column, "this.column").toJsonString());
+                    isSerializeLoggingActive.set(false);
+                }
+            }
             CellName cname = cf.getComparator().create(prefix, column);
             cf.addColumn(params.makeCounter(cname, increment));
         }
     }
 
-    public static class Substracter extends Operation
-    {
-        public Substracter(ColumnDefinition column, Term t)
-        {
+    public static class Substracter extends Operation {
+
+        private java.lang.ThreadLocal<Boolean> isSerializeLoggingActive = new ThreadLocal<Boolean>() {
+
+            @Override
+            protected Boolean initialValue() {
+                return false;
+            }
+        };
+
+        public Substracter(ColumnDefinition column, Term t) {
             super(column, t);
         }
 
-        public void execute(ByteBuffer rowKey, ColumnFamily cf, Composite prefix, UpdateParameters params) throws InvalidRequestException
-        {
+        public void execute(ByteBuffer rowKey, ColumnFamily cf, Composite prefix, UpdateParameters params) throws InvalidRequestException {
             ByteBuffer bytes = t.bindAndGet(params.options);
             if (bytes == null)
                 throw new InvalidRequestException("Invalid null value for counter increment");
             if (bytes == ByteBufferUtil.UNSET_BYTE_BUFFER)
                 return;
-
             long increment = ByteBufferUtil.toLong(bytes);
             if (increment == Long.MIN_VALUE)
                 throw new InvalidRequestException("The negation of " + increment + " overflows supported counter precision (signed 8 bytes integer)");
-
+            if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+                if (!isSerializeLoggingActive.get()) {
+                    isSerializeLoggingActive.set(true);
+                    serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(this, this.column, "this.column").toJsonString());
+                    isSerializeLoggingActive.set(false);
+                }
+            }
             CellName cname = cf.getComparator().create(prefix, column);
             cf.addColumn(params.makeCounter(cname, -increment));
         }
@@ -377,20 +432,33 @@ public abstract class Constants
 
     // This happens to also handle collection because it doesn't felt worth
     // duplicating this further
-    public static class Deleter extends Operation
-    {
-        public Deleter(ColumnDefinition column)
-        {
+    public static class Deleter extends Operation {
+
+        private java.lang.ThreadLocal<Boolean> isSerializeLoggingActive = new ThreadLocal<Boolean>() {
+
+            @Override
+            protected Boolean initialValue() {
+                return false;
+            }
+        };
+
+        public Deleter(ColumnDefinition column) {
             super(column, null);
         }
 
-        public void execute(ByteBuffer rowKey, ColumnFamily cf, Composite prefix, UpdateParameters params) throws InvalidRequestException
-        {
+        public void execute(ByteBuffer rowKey, ColumnFamily cf, Composite prefix, UpdateParameters params) throws InvalidRequestException {
+            if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+                if (!isSerializeLoggingActive.get()) {
+                    isSerializeLoggingActive.set(true);
+                    serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(this, this.column, "this.column").toJsonString());
+                    isSerializeLoggingActive.set(false);
+                }
+            }
             CellName cname = cf.getComparator().create(prefix, column);
             if (column.type.isMultiCell())
                 cf.addAtom(params.makeRangeTombstone(cname.slice()));
             else
                 cf.addColumn(params.makeTombstone(cname));
         }
-    };
+    }
 }

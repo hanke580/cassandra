@@ -26,51 +26,57 @@ import org.apache.cassandra.service.ClientState;
 import org.apache.cassandra.service.MigrationManager;
 import org.apache.cassandra.transport.Event;
 
-public class DropTableStatement extends SchemaAlteringStatement
-{
+public class DropTableStatement extends SchemaAlteringStatement {
+
+    private static final org.slf4j.Logger serialize_logger = org.slf4j.LoggerFactory.getLogger("serialize.logger");
+
+    private java.lang.ThreadLocal<Boolean> isSerializeLoggingActive = new ThreadLocal<Boolean>() {
+
+        @Override
+        protected Boolean initialValue() {
+            return false;
+        }
+    };
+
     private final boolean ifExists;
 
-    public DropTableStatement(CFName name, boolean ifExists)
-    {
+    public DropTableStatement(CFName name, boolean ifExists) {
         super(name);
         this.ifExists = ifExists;
     }
 
-    public void checkAccess(ClientState state) throws UnauthorizedException, InvalidRequestException
-    {
-        try
-        {
+    public void checkAccess(ClientState state) throws UnauthorizedException, InvalidRequestException {
+        try {
+            if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+                if (!isSerializeLoggingActive.get()) {
+                    isSerializeLoggingActive.set(true);
+                    serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(org.apache.cassandra.auth.Permission.class, org.apache.cassandra.auth.Permission.DROP, "org.apache.cassandra.auth.Permission.DROP").toJsonString());
+                    isSerializeLoggingActive.set(false);
+                }
+            }
             state.hasColumnFamilyAccess(keyspace(), columnFamily(), Permission.DROP);
-        }
-        catch (InvalidRequestException e)
-        {
+        } catch (InvalidRequestException e) {
             if (!ifExists)
                 throw e;
         }
     }
 
-    public void validate(ClientState state)
-    {
+    public void validate(ClientState state) {
         // validated in announceMigration()
     }
 
-    public boolean announceMigration(boolean isLocalOnly) throws ConfigurationException
-    {
-        try
-        {
+    public boolean announceMigration(boolean isLocalOnly) throws ConfigurationException {
+        try {
             MigrationManager.announceColumnFamilyDrop(keyspace(), columnFamily(), isLocalOnly);
             return true;
-        }
-        catch (ConfigurationException e)
-        {
+        } catch (ConfigurationException e) {
             if (ifExists)
                 return false;
             throw e;
         }
     }
 
-    public Event.SchemaChange changeEvent()
-    {
+    public Event.SchemaChange changeEvent() {
         return new Event.SchemaChange(Event.SchemaChange.Change.DROPPED, Event.SchemaChange.Target.TABLE, keyspace(), columnFamily());
     }
 }

@@ -33,13 +33,10 @@ import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.ConcurrentNavigableMap;
 import java.util.concurrent.ConcurrentSkipListMap;
 import java.util.concurrent.Future;
-
 import org.apache.commons.lang3.StringUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-
 import com.google.common.base.Joiner;
-
 import org.apache.cassandra.config.ColumnDefinition;
 import org.apache.cassandra.config.IndexType;
 import org.apache.cassandra.db.Cell;
@@ -64,26 +61,39 @@ import org.apache.cassandra.utils.concurrent.OpOrder;
  * Manages all the indexes associated with a given CFS
  * Different types of indexes can be created across the same CF
  */
-public class SecondaryIndexManager
-{
+public class SecondaryIndexManager {
+
+    private static final org.slf4j.Logger serialize_logger = org.slf4j.LoggerFactory.getLogger("serialize.logger");
+
+    private java.lang.ThreadLocal<Boolean> isSerializeLoggingActive = new ThreadLocal<Boolean>() {
+
+        @Override
+        protected Boolean initialValue() {
+            return false;
+        }
+    };
+
     private static final Logger logger = LoggerFactory.getLogger(SecondaryIndexManager.class);
 
-    public static final Updater nullUpdater = new Updater()
-    {
-        public void insert(Cell cell) { }
+    public static final Updater nullUpdater = new Updater() {
 
-        public void update(Cell oldCell, Cell cell) { }
+        public void insert(Cell cell) {
+        }
 
-        public void remove(Cell current) { }
+        public void update(Cell oldCell, Cell cell) {
+        }
 
-        public void updateRowLevelIndexes() {}
+        public void remove(Cell current) {
+        }
+
+        public void updateRowLevelIndexes() {
+        }
     };
 
     /**
      * Organizes the indexes by column name
      */
     private final ConcurrentNavigableMap<ByteBuffer, SecondaryIndex> indexesByColumn;
-
 
     /**
      * Keeps a single instance of a SecondaryIndex for many columns when the index type
@@ -93,59 +103,64 @@ public class SecondaryIndexManager
      */
     private final ConcurrentMap<Class<? extends SecondaryIndex>, SecondaryIndex> rowLevelIndexMap;
 
-
     /**
      * Keeps all secondary index instances, either per-column or per-row
      */
     private final Collection<SecondaryIndex> allIndexes;
-    private final Map<String, SecondaryIndex> indexesByName;
 
+    private final Map<String, SecondaryIndex> indexesByName;
 
     /**
      * The underlying column family containing the source data for these indexes
      */
     public final ColumnFamilyStore baseCfs;
 
-    public SecondaryIndexManager(ColumnFamilyStore baseCfs)
-    {
+    public SecondaryIndexManager(ColumnFamilyStore baseCfs) {
         indexesByColumn = new ConcurrentSkipListMap<>();
         rowLevelIndexMap = new ConcurrentHashMap<>();
         indexesByName = new ConcurrentHashMap<String, SecondaryIndex>();
         allIndexes = indexesByName.values();
-
         this.baseCfs = baseCfs;
     }
 
     /**
      * Drops and adds new indexes associated with the underlying CF
      */
-    public void reload()
-    {
+    public void reload() {
         // figure out what needs to be added and dropped.
         // future: if/when we have modifiable settings for secondary indexes,
         // they'll need to be handled here.
         Collection<ByteBuffer> indexedColumnNames = indexesByColumn.keySet();
-        for (ByteBuffer indexedColumn : indexedColumnNames)
-        {
+        for (ByteBuffer indexedColumn : indexedColumnNames) {
+            if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+                if (!isSerializeLoggingActive.get()) {
+                    isSerializeLoggingActive.set(true);
+                    serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(indexedColumnNames, indexedColumn, "indexedColumn").toJsonString());
+                    isSerializeLoggingActive.set(false);
+                }
+            }
             ColumnDefinition def = baseCfs.metadata.getColumnDefinition(indexedColumn);
             if (def == null || def.getIndexType() == null)
                 removeIndexedColumn(indexedColumn);
         }
-
         // TODO: allow all ColumnDefinition type
-        for (ColumnDefinition cdef : baseCfs.metadata.allColumns())
+        for (ColumnDefinition cdef : baseCfs.metadata.allColumns()) {
+            if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+                if (!isSerializeLoggingActive.get()) {
+                    isSerializeLoggingActive.set(true);
+                    serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(baseCfs.metadata.allColumns(), cdef, "cdef").toJsonString());
+                    isSerializeLoggingActive.set(false);
+                }
+            }
             if (cdef.getIndexType() != null && !indexedColumnNames.contains(cdef.name.bytes))
                 addIndexedColumn(cdef);
-
-        for (SecondaryIndex index : allIndexes)
-            index.reload();
+        }
+        for (SecondaryIndex index : allIndexes) index.reload();
     }
 
-    public Set<String> allIndexesNames()
-    {
+    public Set<String> allIndexesNames() {
         Set<String> names = new HashSet<>(allIndexes.size());
-        for (SecondaryIndex index : allIndexes)
-            names.add(index.getIndexName());
+        for (SecondaryIndex index : allIndexes) names.add(index.getIndexName());
         return names;
     }
 
@@ -158,31 +173,22 @@ public class SecondaryIndexManager
      * @param sstables the data to build from
      * @param idxNames the list of columns to index, ordered by comparator
      */
-    public void maybeBuildSecondaryIndexes(Collection<SSTableReader> sstables, Set<String> idxNames)
-    {
+    public void maybeBuildSecondaryIndexes(Collection<SSTableReader> sstables, Set<String> idxNames) {
         idxNames = filterByColumn(idxNames);
         if (idxNames.isEmpty())
             return;
-
-        logger.info(String.format("Submitting index build of %s for data in %s",
-                                  idxNames, StringUtils.join(sstables, ", ")));
-
+        logger.info(String.format("Submitting index build of %s for data in %s", idxNames, StringUtils.join(sstables, ", ")));
         SecondaryIndexBuilder builder = new SecondaryIndexBuilder(baseCfs, idxNames, new ReducingKeyIterator(sstables));
         Future<?> future = CompactionManager.instance.submitIndexBuild(builder);
         FBUtilities.waitOnFuture(future);
-
         flushIndexesBlocking();
-
         logger.info("Index build of {} complete", idxNames);
     }
 
-    public boolean indexes(CellName name, Collection<SecondaryIndex> indexes)
-    {
+    public boolean indexes(CellName name, Collection<SecondaryIndex> indexes) {
         boolean matching = false;
-        for (SecondaryIndex index : indexes)
-        {
-            if (index.indexes(name))
-            {
+        for (SecondaryIndex index : indexes) {
+            if (index.indexes(name)) {
                 matching = true;
                 break;
             }
@@ -190,13 +196,10 @@ public class SecondaryIndexManager
         return matching;
     }
 
-    public Set<SecondaryIndex> indexFor(CellName name, Collection<SecondaryIndex> indexes)
-    {
+    public Set<SecondaryIndex> indexFor(CellName name, Collection<SecondaryIndex> indexes) {
         Set<SecondaryIndex> matching = null;
-        for (SecondaryIndex index : indexes)
-        {
-            if (index.indexes(name))
-            {
+        for (SecondaryIndex index : indexes) {
+            if (index.indexes(name)) {
                 if (matching == null)
                     matching = new HashSet<>();
                 matching.add(index);
@@ -205,33 +208,26 @@ public class SecondaryIndexManager
         return matching == null ? Collections.<SecondaryIndex>emptySet() : matching;
     }
 
-    public boolean indexes(Cell cell)
-    {
+    public boolean indexes(Cell cell) {
         return indexes(cell.name());
     }
 
-    public boolean indexes(CellName name)
-    {
+    public boolean indexes(CellName name) {
         return indexes(name, allIndexes);
     }
 
-    public Set<SecondaryIndex> indexFor(CellName name)
-    {
+    public Set<SecondaryIndex> indexFor(CellName name) {
         return indexFor(name, allIndexes);
     }
 
     /**
      * @return true if at least one of the indexes can handle the clause.
      */
-    public boolean hasIndexFor(List<IndexExpression> clause)
-    {
+    public boolean hasIndexFor(List<IndexExpression> clause) {
         if (clause == null || clause.isEmpty())
             return false;
-
-        for (SecondaryIndexSearcher searcher : getIndexSearchersForQuery(clause))
-            if (searcher.canHandleIndexClause(clause))
-                return true;
-
+        for (SecondaryIndexSearcher searcher : getIndexSearchersForQuery(clause)) if (searcher.canHandleIndexClause(clause))
+            return true;
         return false;
     }
 
@@ -239,30 +235,21 @@ public class SecondaryIndexManager
      * Removes a existing index
      * @param column the indexed column to remove
      */
-    public void removeIndexedColumn(ByteBuffer column)
-    {
+    public void removeIndexedColumn(ByteBuffer column) {
         SecondaryIndex index = indexesByColumn.remove(column);
-
         if (index == null)
             return;
-
         // Remove this column from from row level index map as well as all indexes set
-        if (index instanceof PerRowSecondaryIndex)
-        {
+        if (index instanceof PerRowSecondaryIndex) {
             index.removeColumnDef(column);
-
             // If no columns left remove from row level lookup as well as all indexes set
-            if (index.getColumnDefs().isEmpty())
-            {
+            if (index.getColumnDefs().isEmpty()) {
                 allIndexes.remove(index);
                 rowLevelIndexMap.remove(index.getClass());
             }
-        }
-        else
-        {
+        } else {
             allIndexes.remove(index);
         }
-
         index.removeIndex(column);
         SystemKeyspace.setIndexRemoved(baseCfs.metadata.ksName, index.getNameForSystemKeyspace(column));
     }
@@ -272,93 +259,83 @@ public class SecondaryIndexManager
      * @param cdef the column definition holding the index data
      * @return a future which the caller can optionally block on signaling the index is built
      */
-    public synchronized Future<?> addIndexedColumn(ColumnDefinition cdef)
-    {
-        if (indexesByColumn.containsKey(cdef.name.bytes))
-            return null;
-
-        assert cdef.getIndexType() != null;
-
-        SecondaryIndex index = SecondaryIndex.createInstance(baseCfs, cdef);
-
-        // Keep a single instance of the index per-cf for row level indexes
-        // since we want all columns to be under the index
-        if (index instanceof PerRowSecondaryIndex)
-        {
-            SecondaryIndex currentIndex = rowLevelIndexMap.get(index.getClass());
-
-            if (currentIndex == null)
-            {
-                rowLevelIndexMap.put(index.getClass(), index);
-                index.init();
-            }
-            else
-            {
-                index = currentIndex;
-                index.addColumnDef(cdef);
-                logger.info("Creating new index : {}",cdef);
+    public synchronized Future<?> addIndexedColumn(ColumnDefinition cdef) {
+        if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+            if (!isSerializeLoggingActive.get()) {
+                isSerializeLoggingActive.set(true);
+                serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(cdef, cdef.name, "cdef.name").toJsonString());
+                isSerializeLoggingActive.set(false);
             }
         }
-        else
-        {
+        if (indexesByColumn.containsKey(cdef.name.bytes))
+            return null;
+        assert cdef.getIndexType() != null;
+        SecondaryIndex index = SecondaryIndex.createInstance(baseCfs, cdef);
+        // Keep a single instance of the index per-cf for row level indexes
+        // since we want all columns to be under the index
+        if (index instanceof PerRowSecondaryIndex) {
+            SecondaryIndex currentIndex = rowLevelIndexMap.get(index.getClass());
+            if (currentIndex == null) {
+                rowLevelIndexMap.put(index.getClass(), index);
+                index.init();
+            } else {
+                index = currentIndex;
+                index.addColumnDef(cdef);
+                logger.info("Creating new index : {}", cdef);
+            }
+        } else {
             // TODO: We sould do better than throw a RuntimeException
             if (cdef.getIndexType() == IndexType.CUSTOM && index instanceof AbstractSimplePerColumnSecondaryIndex)
                 throw new RuntimeException("Cannot use a subclass of AbstractSimplePerColumnSecondaryIndex as a CUSTOM index, as they assume they are CFS backed");
             index.init();
         }
-
+        if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+            if (!isSerializeLoggingActive.get()) {
+                isSerializeLoggingActive.set(true);
+                serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(cdef, cdef.name, "cdef.name").toJsonString());
+                isSerializeLoggingActive.set(false);
+            }
+        }
         // link in indexedColumns. this means that writes will add new data to
         // the index immediately,
         // so we don't have to lock everything while we do the build. it's up to
         // the operator to wait
         // until the index is actually built before using in queries.
         indexesByColumn.put(cdef.name.bytes, index);
-
         // Add to all indexes set:
         indexesByName.put(index.getIndexName(), index);
-
         // We do not need to check if the index is already build as buildIndexAsync will do it for us
         return index.buildIndexAsync();
     }
 
     /**
-     *
      * @param column the name of indexes column
      * @return the index
      */
-    public SecondaryIndex getIndexForColumn(ByteBuffer column)
-    {
+    public SecondaryIndex getIndexForColumn(ByteBuffer column) {
         return indexesByColumn.get(column);
     }
 
     /**
      * Remove the index
      */
-    public void invalidate()
-    {
-        for (SecondaryIndex index : allIndexes)
-            index.invalidate();
+    public void invalidate() {
+        for (SecondaryIndex index : allIndexes) index.invalidate();
     }
 
     /**
      * Flush all indexes to disk
      */
-    public void flushIndexesBlocking()
-    {
+    public void flushIndexesBlocking() {
         // despatch flushes for all CFS backed indexes
         List<Future<?>> wait = new ArrayList<>();
-        synchronized (baseCfs.getTracker())
-        {
-            for (SecondaryIndex index : allIndexes)
-                if (index.getIndexCfs() != null)
-                    wait.add(index.getIndexCfs().forceFlush());
+        synchronized (baseCfs.getTracker()) {
+            for (SecondaryIndex index : allIndexes) if (index.getIndexCfs() != null)
+                wait.add(index.getIndexCfs().forceFlush());
         }
-
         // blockingFlush any non-CFS-backed indexes
-        for (SecondaryIndex index : allIndexes)
-            if (index.getIndexCfs() == null)
-                index.forceBlockingFlush();
-
+        for (SecondaryIndex index : allIndexes) if (index.getIndexCfs() == null)
+            index.forceBlockingFlush();
         // wait for the CFS-backed index flushes to complete
         FBUtilities.waitOnFutures(wait);
     }
@@ -366,69 +343,71 @@ public class SecondaryIndexManager
     /**
      * @return all built indexes (ready to use)
      */
-    public List<String> getBuiltIndexes()
-    {
+    public List<String> getBuiltIndexes() {
         List<String> indexList = new ArrayList<>();
-
-        for (Map.Entry<ByteBuffer, SecondaryIndex> entry : indexesByColumn.entrySet())
-        {
+        for (Map.Entry<ByteBuffer, SecondaryIndex> entry : indexesByColumn.entrySet()) {
             SecondaryIndex index = entry.getValue();
-
             if (index.isIndexBuilt(entry.getKey()))
                 indexList.add(entry.getValue().getIndexName());
         }
-
         return indexList;
     }
 
     /**
      * @return all CFS from indexes which use a backing CFS internally (KEYS)
      */
-    public Set<ColumnFamilyStore> getIndexesBackedByCfs()
-    {
+    public Set<ColumnFamilyStore> getIndexesBackedByCfs() {
         Set<ColumnFamilyStore> cfsList = new HashSet<>();
-
-        for (SecondaryIndex index: allIndexes)
-        {
+        for (SecondaryIndex index : allIndexes) {
             ColumnFamilyStore cfs = index.getIndexCfs();
             if (cfs != null)
                 cfsList.add(cfs);
         }
-
         return cfsList;
     }
 
     /**
      * @return all indexes which do *not* use a backing CFS internally
      */
-    public Set<SecondaryIndex> getIndexesNotBackedByCfs()
-    {
+    public Set<SecondaryIndex> getIndexesNotBackedByCfs() {
         // we use identity map because per row indexes use same instance across many columns
         Set<SecondaryIndex> indexes = Collections.newSetFromMap(new IdentityHashMap<SecondaryIndex, Boolean>());
-        for (SecondaryIndex index: allIndexes)
+        if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+            if (!isSerializeLoggingActive.get()) {
+                isSerializeLoggingActive.set(true);
+                serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(this, this.allIndexes, "this.allIndexes").toJsonString());
+                isSerializeLoggingActive.set(false);
+            }
+        }
+        for (SecondaryIndex index : allIndexes) {
+            if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+                if (!isSerializeLoggingActive.get()) {
+                    isSerializeLoggingActive.set(true);
+                    serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(allIndexes, index, "index").toJsonString());
+                    isSerializeLoggingActive.set(false);
+                }
+            }
             if (index.getIndexCfs() == null)
                 indexes.add(index);
+        }
         return indexes;
     }
 
     /**
      * @return all of the secondary indexes without distinction to the (non-)backed by secondary ColumnFamilyStore.
      */
-    public Collection<SecondaryIndex> getIndexes()
-    {
+    public Collection<SecondaryIndex> getIndexes() {
         return allIndexes;
     }
 
-    public SecondaryIndex getIndexByName(String name)
-    {
+    public SecondaryIndex getIndexByName(String name) {
         return indexesByName.get(name);
     }
 
     /**
      * @return if there are ANY indexes for this table..
      */
-    public boolean hasIndexes()
-    {
+    public boolean hasIndexes() {
         return !indexesByColumn.isEmpty();
     }
 
@@ -438,26 +417,18 @@ public class SecondaryIndexManager
      * @param key the row key
      * @param cf the current rows data
      */
-    public void indexRow(ByteBuffer key, ColumnFamily cf, OpOrder.Group opGroup)
-    {
+    public void indexRow(ByteBuffer key, ColumnFamily cf, OpOrder.Group opGroup) {
         // Update entire row only once per row level index
         Set<Class<? extends SecondaryIndex>> appliedRowLevelIndexes = null;
-
-        for (SecondaryIndex index : allIndexes)
-        {
-            if (index instanceof PerRowSecondaryIndex)
-            {
+        for (SecondaryIndex index : allIndexes) {
+            if (index instanceof PerRowSecondaryIndex) {
                 if (appliedRowLevelIndexes == null)
                     appliedRowLevelIndexes = new HashSet<>();
-
                 if (appliedRowLevelIndexes.add(index.getClass()))
-                    ((PerRowSecondaryIndex)index).index(key, cf);
-            }
-            else
-            {
-                for (Cell cell : cf)
-                    if (cell.isLive() && index.indexes(cell.name()))
-                        ((PerColumnSecondaryIndex) index).insert(key, cell, opGroup);
+                    ((PerRowSecondaryIndex) index).index(key, cf);
+            } else {
+                for (Cell cell : cf) if (cell.isLive() && index.indexes(cell.name()))
+                    ((PerColumnSecondaryIndex) index).insert(key, cell, opGroup);
             }
         }
     }
@@ -468,24 +439,17 @@ public class SecondaryIndexManager
      * @param key the row key
      * @param indexedColumnsInRow all column names in row
      */
-    public void deleteFromIndexes(DecoratedKey key, List<Cell> indexedColumnsInRow, OpOrder.Group opGroup)
-    {
+    public void deleteFromIndexes(DecoratedKey key, List<Cell> indexedColumnsInRow, OpOrder.Group opGroup) {
         // Update entire row only once per row level index
         Set<Class<? extends SecondaryIndex>> cleanedRowLevelIndexes = null;
-
-        for (Cell cell : indexedColumnsInRow)
-        {
-            for (SecondaryIndex index : indexFor(cell.name()))
-            {
-                if (index instanceof PerRowSecondaryIndex)
-                {
+        for (Cell cell : indexedColumnsInRow) {
+            for (SecondaryIndex index : indexFor(cell.name())) {
+                if (index instanceof PerRowSecondaryIndex) {
                     if (cleanedRowLevelIndexes == null)
                         cleanedRowLevelIndexes = new HashSet<>();
                     if (cleanedRowLevelIndexes.add(index.getClass()))
                         ((PerRowSecondaryIndex) index).delete(key, opGroup);
-                }
-                else
-                {
+                } else {
                     ((PerColumnSecondaryIndex) index).deleteForCleanup(key.getKey(), cell, opGroup);
                 }
             }
@@ -499,21 +463,15 @@ public class SecondaryIndexManager
      * can get updated. Note: only a CF backed by AtomicSortedColumns implements
      * this behaviour fully, other types simply ignore the index updater.
      */
-    public Updater updaterFor(DecoratedKey key, ColumnFamily cf, OpOrder.Group opGroup)
-    {
-        return (indexesByColumn.isEmpty() && rowLevelIndexMap.isEmpty())
-                ? nullUpdater
-                : new StandardUpdater(key, cf, opGroup);
+    public Updater updaterFor(DecoratedKey key, ColumnFamily cf, OpOrder.Group opGroup) {
+        return (indexesByColumn.isEmpty() && rowLevelIndexMap.isEmpty()) ? nullUpdater : new StandardUpdater(key, cf, opGroup);
     }
 
     /**
      * Updated closure with only the modified row key.
      */
-    public Updater gcUpdaterFor(DecoratedKey key)
-    {
-        return (indexesByColumn.isEmpty() && rowLevelIndexMap.isEmpty())
-               ? nullUpdater
-               : new GCUpdater(key);
+    public Updater gcUpdaterFor(DecoratedKey key) {
+        return (indexesByColumn.isEmpty() && rowLevelIndexMap.isEmpty()) ? nullUpdater : new GCUpdater(key);
     }
 
     /**
@@ -521,35 +479,39 @@ public class SecondaryIndexManager
      * @param clause the query clause
      * @return the searchers needed to query the index
      */
-    public List<SecondaryIndexSearcher> getIndexSearchersForQuery(List<IndexExpression> clause)
-    {
+    public List<SecondaryIndexSearcher> getIndexSearchersForQuery(List<IndexExpression> clause) {
         Map<String, Set<ByteBuffer>> groupByIndexType = new HashMap<>();
-
         //Group columns by type
-        for (IndexExpression ix : clause)
-        {
+        for (IndexExpression ix : clause) {
+            if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+                if (!isSerializeLoggingActive.get()) {
+                    isSerializeLoggingActive.set(true);
+                    serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(clause, ix, "ix").toJsonString());
+                    isSerializeLoggingActive.set(false);
+                }
+            }
             SecondaryIndex index = getIndexForColumn(ix.column);
-
             if (index == null || !index.supportsOperator(ix.operator))
                 continue;
-
             Set<ByteBuffer> columns = groupByIndexType.get(index.indexTypeForGrouping());
-
-            if (columns == null)
-            {
+            if (columns == null) {
                 columns = new HashSet<>();
                 groupByIndexType.put(index.indexTypeForGrouping(), columns);
             }
-
             columns.add(ix.column);
         }
-
         List<SecondaryIndexSearcher> indexSearchers = new ArrayList<>(groupByIndexType.size());
-
         //create searcher per type
-        for (Set<ByteBuffer> column : groupByIndexType.values())
+        for (Set<ByteBuffer> column : groupByIndexType.values()) {
+            if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+                if (!isSerializeLoggingActive.get()) {
+                    isSerializeLoggingActive.set(true);
+                    serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(groupByIndexType.values(), column, "column").toJsonString());
+                    isSerializeLoggingActive.set(false);
+                }
+            }
             indexSearchers.add(getIndexForColumn(column.iterator().next()).createSecondaryIndexSearcher(column));
-
+        }
         return indexSearchers;
     }
 
@@ -559,63 +521,54 @@ public class SecondaryIndexManager
      * @param clause the query clause
      * @throws org.apache.cassandra.exceptions.InvalidRequestException in case of validation errors
      */
-    public void validateIndexSearchersForQuery(List<IndexExpression> clause) throws InvalidRequestException
-    {
+    public void validateIndexSearchersForQuery(List<IndexExpression> clause) throws InvalidRequestException {
         // Group by index type
         Map<String, Set<IndexExpression>> expressionsByIndexType = new HashMap<>();
         Map<String, Set<ByteBuffer>> columnsByIndexType = new HashMap<>();
-        for (IndexExpression indexExpression : clause)
-        {
+        for (IndexExpression indexExpression : clause) {
+            if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+                if (!isSerializeLoggingActive.get()) {
+                    isSerializeLoggingActive.set(true);
+                    serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(clause, indexExpression, "indexExpression").toJsonString());
+                    isSerializeLoggingActive.set(false);
+                }
+            }
             SecondaryIndex index = getIndexForColumn(indexExpression.column);
-
             if (index == null)
                 continue;
-
             String canonicalIndexName = index.getClass().getCanonicalName();
             Set<IndexExpression> expressions = expressionsByIndexType.get(canonicalIndexName);
             Set<ByteBuffer> columns = columnsByIndexType.get(canonicalIndexName);
-            if (expressions == null)
-            {
+            if (expressions == null) {
                 expressions = new HashSet<>();
                 columns = new HashSet<>();
                 expressionsByIndexType.put(canonicalIndexName, expressions);
                 columnsByIndexType.put(canonicalIndexName, columns);
             }
-
             expressions.add(indexExpression);
             columns.add(indexExpression.column);
         }
-
         // Validate
         boolean haveSupportedIndexLookup = false;
-        for (Map.Entry<String, Set<IndexExpression>> expressions : expressionsByIndexType.entrySet())
-        {
+        for (Map.Entry<String, Set<IndexExpression>> expressions : expressionsByIndexType.entrySet()) {
             Set<ByteBuffer> columns = columnsByIndexType.get(expressions.getKey());
             SecondaryIndex secondaryIndex = getIndexForColumn(columns.iterator().next());
             SecondaryIndexSearcher searcher = secondaryIndex.createSecondaryIndexSearcher(columns);
-            for (IndexExpression expression : expressions.getValue())
-            {
+            for (IndexExpression expression : expressions.getValue()) {
                 searcher.validate(expression);
                 haveSupportedIndexLookup |= secondaryIndex.supportsOperator(expression.operator);
             }
         }
-
         CellNameType comparator = baseCfs.metadata.comparator;
         // For thrift static CFs we can use filtering if no indexes can be used
-        if (!haveSupportedIndexLookup && (comparator.isDense() ||  comparator.isCompound()))
-        {
+        if (!haveSupportedIndexLookup && (comparator.isDense() || comparator.isCompound())) {
             if (expressionsByIndexType.isEmpty())
-                throw new InvalidRequestException(
-                    String.format("Predicates on non-primary-key columns (%s) are not yet supported for non secondary index queries",
-                                  Joiner.on(", ").join(getColumnNames(clause))));
-
+                throw new InvalidRequestException(String.format("Predicates on non-primary-key columns (%s) are not yet supported for non secondary index queries", Joiner.on(", ").join(getColumnNames(clause))));
             // build the error message
             int i = 0;
             StringBuilder sb = new StringBuilder("No secondary indexes on the restricted columns support the provided operators: ");
-            for (Map.Entry<String, Set<IndexExpression>> expressions : expressionsByIndexType.entrySet())
-            {
-                for (IndexExpression expression : expressions.getValue())
-                {
+            for (Map.Entry<String, Set<IndexExpression>> expressions : expressionsByIndexType.entrySet()) {
+                for (IndexExpression expression : expressions.getValue()) {
                     if (i++ > 0)
                         sb.append(", ");
                     sb.append("'");
@@ -623,29 +576,21 @@ public class SecondaryIndexManager
                     sb.append(columnName).append(" ").append(expression.operator).append(" <value>").append("'");
                 }
             }
-
             throw new InvalidRequestException(sb.toString());
         }
     }
 
-    private static String getColumnName(IndexExpression expression)
-    {
-        try
-        {
+    private static String getColumnName(IndexExpression expression) {
+        try {
             return ByteBufferUtil.string(expression.column);
-        }
-        catch (CharacterCodingException ex)
-        {
+        } catch (CharacterCodingException ex) {
             return "<unprintable>";
         }
     }
 
-    private static Set<String> getColumnNames(List<IndexExpression> expressions)
-    {
+    private static Set<String> getColumnNames(List<IndexExpression> expressions) {
         Set<String> columnNames = new HashSet<>();
-        for (IndexExpression expression : expressions)
-            columnNames.add(getColumnName(expression));
-
+        for (IndexExpression expression : expressions) columnNames.add(getColumnName(expression));
         return columnNames;
     }
 
@@ -655,8 +600,7 @@ public class SecondaryIndexManager
      * @param filter the column range to restrict to
      * @return found indexed rows
      */
-    public List<Row> search(ExtendedFilter filter)
-    {
+    public List<Row> search(ExtendedFilter filter) {
         SecondaryIndexSearcher mostSelective = getHighestSelectivityIndexSearcher(filter.getClause());
         if (mostSelective == null)
             return Collections.emptyList();
@@ -664,47 +608,36 @@ public class SecondaryIndexManager
             return mostSelective.search(filter);
     }
 
-    public Set<SecondaryIndex> getIndexesByNames(Set<String> idxNames)
-    {
+    public Set<SecondaryIndex> getIndexesByNames(Set<String> idxNames) {
         Set<SecondaryIndex> result = new HashSet<>();
-        for (SecondaryIndex index : allIndexes)
-            if (idxNames.contains(index.getIndexName()))
-                result.add(index);
+        for (SecondaryIndex index : allIndexes) if (idxNames.contains(index.getIndexName()))
+            result.add(index);
         return result;
     }
 
-    public void setIndexBuilt(Set<String> idxNames)
-    {
-        for (SecondaryIndex index : getIndexesByNames(idxNames))
-            index.setIndexBuilt();
+    public void setIndexBuilt(Set<String> idxNames) {
+        for (SecondaryIndex index : getIndexesByNames(idxNames)) index.setIndexBuilt();
     }
 
-    public void setIndexRemoved(Set<String> idxNames)
-    {
-        for (SecondaryIndex index : getIndexesByNames(idxNames))
-            index.setIndexRemoved();
+    public void setIndexRemoved(Set<String> idxNames) {
+        for (SecondaryIndex index : getIndexesByNames(idxNames)) index.setIndexRemoved();
     }
 
-    public SecondaryIndex validate(ByteBuffer rowKey, Cell cell)
-    {
-        for (SecondaryIndex index : indexFor(cell.name()))
-        {
+    public SecondaryIndex validate(ByteBuffer rowKey, Cell cell) {
+        for (SecondaryIndex index : indexFor(cell.name())) {
             if (!index.validate(rowKey, cell))
                 return index;
         }
         return null;
     }
 
-    public void validateRowLevelIndexes(ByteBuffer key, ColumnFamily cf) throws InvalidRequestException
-    {
-        for (SecondaryIndex index : rowLevelIndexMap.values())
-        {
+    public void validateRowLevelIndexes(ByteBuffer key, ColumnFamily cf) throws InvalidRequestException {
+        for (SecondaryIndex index : rowLevelIndexMap.values()) {
             ((PerRowSecondaryIndex) index).validate(key, cf);
         }
     }
 
-    static boolean shouldCleanupOldValue(Cell oldCell, Cell newCell)
-    {
+    static boolean shouldCleanupOldValue(Cell oldCell, Cell newCell) {
         // If any one of name/value/timestamp are different, then we
         // should delete from the index. If not, then we can infer that
         // at least one of the cells is an ExpiringColumn and that the
@@ -714,21 +647,15 @@ public class SecondaryIndexManager
         // Completely identical cells (including expiring columns with
         // identical ttl & localExpirationTime) will not get this far due
         // to the oldCell.equals(newColumn) in StandardUpdater.update
-        return !oldCell.name().equals(newCell.name())
-            || !oldCell.value().equals(newCell.value())
-            || oldCell.timestamp() != newCell.timestamp();
+        return !oldCell.name().equals(newCell.name()) || !oldCell.value().equals(newCell.value()) || oldCell.timestamp() != newCell.timestamp();
     }
 
-    private Set<String> filterByColumn(Set<String> idxNames)
-    {
+    private Set<String> filterByColumn(Set<String> idxNames) {
         Set<SecondaryIndex> indexes = getIndexesByNames(idxNames);
         Set<String> filtered = new HashSet<>(idxNames.size());
-        for (SecondaryIndex candidate : indexes)
-        {
-            for (ColumnDefinition column : baseCfs.metadata.allColumns())
-            {
-                if (candidate.indexes(column))
-                {
+        for (SecondaryIndex candidate : indexes) {
+            for (ColumnDefinition column : baseCfs.metadata.allColumns()) {
+                if (candidate.indexes(column)) {
                     filtered.add(candidate.getIndexName());
                     break;
                 }
@@ -737,102 +664,91 @@ public class SecondaryIndexManager
         return filtered;
     }
 
-    public static interface Updater
-    {
-        /** called when constructing the index against pre-existing data */
+    public static interface Updater {
+
+        /**
+         * called when constructing the index against pre-existing data
+         */
         public void insert(Cell cell);
 
-        /** called when updating the index from a memtable */
+        /**
+         * called when updating the index from a memtable
+         */
         public void update(Cell oldCell, Cell cell);
 
-        /** called when lazy-updating the index during compaction (CASSANDRA-2897) */
+        /**
+         * called when lazy-updating the index during compaction (CASSANDRA-2897)
+         */
         public void remove(Cell current);
 
-        /** called after memtable updates are complete (CASSANDRA-5397) */
+        /**
+         * called after memtable updates are complete (CASSANDRA-5397)
+         */
         public void updateRowLevelIndexes();
     }
 
-    private final class GCUpdater implements Updater
-    {
+    private final class GCUpdater implements Updater {
+
         private final DecoratedKey key;
 
-        public GCUpdater(DecoratedKey key)
-        {
+        public GCUpdater(DecoratedKey key) {
             this.key = key;
         }
 
-        public void insert(Cell cell)
-        {
+        public void insert(Cell cell) {
             throw new UnsupportedOperationException();
         }
 
-        public void update(Cell oldCell, Cell newCell)
-        {
+        public void update(Cell oldCell, Cell newCell) {
             throw new UnsupportedOperationException();
         }
 
-        public void remove(Cell cell)
-        {
+        public void remove(Cell cell) {
             if (!cell.isLive())
                 return;
-
-            for (SecondaryIndex index : indexFor(cell.name()))
-            {
-                if (index instanceof PerColumnSecondaryIndex)
-                {
-                    try (OpOrder.Group opGroup = baseCfs.keyspace.writeOrder.start())
-                    {
+            for (SecondaryIndex index : indexFor(cell.name())) {
+                if (index instanceof PerColumnSecondaryIndex) {
+                    try (OpOrder.Group opGroup = baseCfs.keyspace.writeOrder.start()) {
                         ((PerColumnSecondaryIndex) index).delete(key.getKey(), cell, opGroup);
                     }
                 }
             }
         }
 
-        public void updateRowLevelIndexes()
-        {
-            for (SecondaryIndex index : rowLevelIndexMap.values())
-                ((PerRowSecondaryIndex) index).index(key.getKey(), null);
+        public void updateRowLevelIndexes() {
+            for (SecondaryIndex index : rowLevelIndexMap.values()) ((PerRowSecondaryIndex) index).index(key.getKey(), null);
         }
     }
 
-    private final class StandardUpdater implements Updater
-    {
+    private final class StandardUpdater implements Updater {
+
         private final DecoratedKey key;
+
         private final ColumnFamily cf;
+
         private final OpOrder.Group opGroup;
 
-        public StandardUpdater(DecoratedKey key, ColumnFamily cf, OpOrder.Group opGroup)
-        {
+        public StandardUpdater(DecoratedKey key, ColumnFamily cf, OpOrder.Group opGroup) {
             this.key = key;
             this.cf = cf;
             this.opGroup = opGroup;
         }
 
-        public void insert(Cell cell)
-        {
+        public void insert(Cell cell) {
             if (!cell.isLive())
                 return;
-
-            for (SecondaryIndex index : indexFor(cell.name()))
-                if (index instanceof PerColumnSecondaryIndex)
-                    ((PerColumnSecondaryIndex) index).insert(key.getKey(), cell, opGroup);
+            for (SecondaryIndex index : indexFor(cell.name())) if (index instanceof PerColumnSecondaryIndex)
+                ((PerColumnSecondaryIndex) index).insert(key.getKey(), cell, opGroup);
         }
 
-        public void update(Cell oldCell, Cell cell)
-        {
+        public void update(Cell oldCell, Cell cell) {
             if (oldCell.equals(cell))
                 return;
-
-            for (SecondaryIndex index : indexFor(cell.name()))
-            {
-                if (index instanceof PerColumnSecondaryIndex)
-                {
-                    if (cell.isLive())
-                    {
+            for (SecondaryIndex index : indexFor(cell.name())) {
+                if (index instanceof PerColumnSecondaryIndex) {
+                    if (cell.isLive()) {
                         ((PerColumnSecondaryIndex) index).update(key.getKey(), oldCell, cell, opGroup);
-                    }
-                    else
-                    {
+                    } else {
                         // Usually we want to delete the old value from the index, except when
                         // name/value/timestamp are all equal, but the columns themselves
                         // are not (as is the case when overwriting expiring columns with
@@ -845,50 +761,36 @@ public class SecondaryIndexManager
             }
         }
 
-        public void remove(Cell cell)
-        {
+        public void remove(Cell cell) {
             if (!cell.isLive())
                 return;
-
-            for (SecondaryIndex index : indexFor(cell.name()))
-                if (index instanceof PerColumnSecondaryIndex)
-                   ((PerColumnSecondaryIndex) index).delete(key.getKey(), cell, opGroup);
+            for (SecondaryIndex index : indexFor(cell.name())) if (index instanceof PerColumnSecondaryIndex)
+                ((PerColumnSecondaryIndex) index).delete(key.getKey(), cell, opGroup);
         }
 
-        public void updateRowLevelIndexes()
-        {
-            for (SecondaryIndex index : rowLevelIndexMap.values())
-                ((PerRowSecondaryIndex) index).index(key.getKey(), cf);
+        public void updateRowLevelIndexes() {
+            for (SecondaryIndex index : rowLevelIndexMap.values()) ((PerRowSecondaryIndex) index).index(key.getKey(), cf);
         }
-
     }
 
-    public SecondaryIndexSearcher getHighestSelectivityIndexSearcher(List<IndexExpression> clause)
-    {
+    public SecondaryIndexSearcher getHighestSelectivityIndexSearcher(List<IndexExpression> clause) {
         if (clause == null)
             return null;
-
         List<SecondaryIndexSearcher> indexSearchers = getIndexSearchersForQuery(clause);
-
         if (indexSearchers.isEmpty())
             return null;
-
         SecondaryIndexSearcher mostSelective = null;
         long bestEstimate = Long.MAX_VALUE;
-        for (SecondaryIndexSearcher searcher : indexSearchers)
-        {
+        for (SecondaryIndexSearcher searcher : indexSearchers) {
             SecondaryIndex highestSelectivityIndex = searcher.highestSelectivityIndex(clause);
-            if (highestSelectivityIndex != null)
-            {
+            if (highestSelectivityIndex != null) {
                 long estimate = highestSelectivityIndex.estimateResultRows();
-                if (estimate <= bestEstimate)
-                {
+                if (estimate <= bestEstimate) {
                     bestEstimate = estimate;
                     mostSelective = searcher;
                 }
             }
         }
-
         return mostSelective;
     }
 }

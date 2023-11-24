@@ -18,12 +18,9 @@
 package org.apache.cassandra.db.lifecycle;
 
 import java.util.*;
-
 import com.google.common.base.Predicate;
 import com.google.common.collect.*;
-
 import org.apache.cassandra.io.sstable.format.SSTableReader;
-
 import static com.google.common.base.Predicates.*;
 import static com.google.common.collect.Iterables.any;
 import static com.google.common.collect.Iterables.concat;
@@ -31,15 +28,24 @@ import static com.google.common.collect.Iterables.filter;
 import static com.google.common.collect.Iterables.getFirst;
 import static org.apache.cassandra.utils.Throwables.merge;
 
-class Helpers
-{
+class Helpers {
+
+    private static java.lang.ThreadLocal<Boolean> isSerializeLoggingActiveStatic = new ThreadLocal<Boolean>() {
+
+        @Override
+        protected Boolean initialValue() {
+            return false;
+        }
+    };
+
+    private static final org.slf4j.Logger serialize_logger = org.slf4j.LoggerFactory.getLogger("serialize.logger");
+
     /**
      * update the contents of a set with the provided sets, ensuring that the items to remove are
      * really present, and that the items to add are not (unless we're also removing them)
      * @return a new set with the contents of the provided one modified
      */
-    static <T> Set<T> replace(Set<T> original, Set<T> remove, Iterable<T> add)
-    {
+    static <T> Set<T> replace(Set<T> original, Set<T> remove, Iterable<T> add) {
         return ImmutableSet.copyOf(replace(identityMap(original), remove, add).keySet());
     }
 
@@ -48,21 +54,22 @@ class Helpers
      * really present, and that the items to add are not (unless we're also removing them)
      * @return a new identity map with the contents of the provided one modified
      */
-    static <T> Map<T, T> replace(Map<T, T> original, Set<T> remove, Iterable<T> add)
-    {
+    static <T> Map<T, T> replace(Map<T, T> original, Set<T> remove, Iterable<T> add) {
         // ensure the ones being removed are the exact same ones present
-        for (T reader : remove)
+        for (T reader : remove) {
+            if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+                if (!isSerializeLoggingActiveStatic.get()) {
+                    isSerializeLoggingActiveStatic.set(true);
+                    serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(remove, reader, "reader").toJsonString());
+                    isSerializeLoggingActiveStatic.set(false);
+                }
+            }
             assert original.get(reader) == reader;
-
+        }
         // ensure we don't already contain any we're adding, that we aren't also removing
         assert !any(add, and(not(in(remove)), in(original.keySet()))) : String.format("original:%s remove:%s add:%s", original.keySet(), remove, add);
-
-        Map<T, T> result =
-            identityMap(concat(add, filter(original.keySet(), not(in(remove)))));
-
-        assert result.size() == original.size() - remove.size() + Iterables.size(add) :
-        String.format("Expecting new size of %d, got %d while replacing %s by %s in %s",
-                      original.size() - remove.size() + Iterables.size(add), result.size(), remove, add, original.keySet());
+        Map<T, T> result = identityMap(concat(add, filter(original.keySet(), not(in(remove)))));
+        assert result.size() == original.size() - remove.size() + Iterables.size(add) : String.format("Expecting new size of %d, got %d while replacing %s by %s in %s", original.size() - remove.size() + Iterables.size(add), result.size(), remove, add, original.keySet());
         return result;
     }
 
@@ -70,16 +77,11 @@ class Helpers
      * A convenience method for encapsulating this action over multiple SSTableReader with exception-safety
      * @return accumulate if not null (with any thrown exception attached), or any thrown exception otherwise
      */
-    static Throwable setReplaced(Iterable<SSTableReader> readers, Throwable accumulate)
-    {
-        for (SSTableReader reader : readers)
-        {
-            try
-            {
+    static Throwable setReplaced(Iterable<SSTableReader> readers, Throwable accumulate) {
+        for (SSTableReader reader : readers) {
+            try {
                 reader.setReplaced();
-            }
-            catch (Throwable t)
-            {
+            } catch (Throwable t) {
                 accumulate = merge(accumulate, t);
             }
         }
@@ -90,36 +92,27 @@ class Helpers
      * A convenience method for encapsulating this action over multiple SSTableReader with exception-safety
      * @return accumulate if not null (with any thrown exception attached), or any thrown exception otherwise
      */
-    static void setupKeycache(Iterable<SSTableReader> readers)
-    {
-        for (SSTableReader reader : readers)
-            reader.setupKeyCache();
+    static void setupKeycache(Iterable<SSTableReader> readers) {
+        for (SSTableReader reader : readers) reader.setupKeyCache();
     }
 
     /**
      * assert that none of these readers have been replaced
      */
-    static void checkNotReplaced(Iterable<SSTableReader> readers)
-    {
-        for (SSTableReader reader : readers)
-            assert !reader.isReplaced();
+    static void checkNotReplaced(Iterable<SSTableReader> readers) {
+        for (SSTableReader reader : readers) assert !reader.isReplaced();
     }
 
     /**
      * A convenience method for encapsulating this action over multiple SSTableReader with exception-safety
      * @return accumulate if not null (with any thrown exception attached), or any thrown exception otherwise
      */
-    static Throwable markObsolete(Tracker tracker, Iterable<SSTableReader> readers, Throwable accumulate)
-    {
-        for (SSTableReader reader : readers)
-        {
-            try
-            {
+    static Throwable markObsolete(Tracker tracker, Iterable<SSTableReader> readers, Throwable accumulate) {
+        for (SSTableReader reader : readers) {
+            try {
                 boolean firstToCompact = reader.markObsolete(tracker);
                 assert firstToCompact : reader + " was already marked compacted";
-            }
-            catch (Throwable t)
-            {
+            } catch (Throwable t) {
                 accumulate = merge(accumulate, t);
             }
         }
@@ -129,11 +122,9 @@ class Helpers
     /**
      * @return the identity function, as a Map, with domain of the provided values
      */
-    static <T> Map<T, T> identityMap(Iterable<T> values)
-    {
+    static <T> Map<T, T> identityMap(Iterable<T> values) {
         ImmutableMap.Builder<T, T> builder = ImmutableMap.<T, T>builder();
-        for (T t : values)
-            builder.put(t, t);
+        for (T t : values) builder.put(t, t);
         return builder.build();
     }
 
@@ -141,33 +132,27 @@ class Helpers
      * @return an Iterable of the union if the sets, with duplicates being represented by their first encountered instance
      * (as defined by the order of set provision)
      */
-    static <T> Iterable<T> concatUniq(Set<T>... sets)
-    {
+    static <T> Iterable<T> concatUniq(Set<T>... sets) {
         List<Predicate<T>> notIn = new ArrayList<>(sets.length);
-        for (Set<T> set : sets)
-            notIn.add(not(in(set)));
+        for (Set<T> set : sets) notIn.add(not(in(set)));
         List<Iterable<T>> results = new ArrayList<>(sets.length);
-        for (int i = 0 ; i < sets.length ; i++)
-            results.add(filter(sets[i], and(notIn.subList(0, i))));
+        for (int i = 0; i < sets.length; i++) results.add(filter(sets[i], and(notIn.subList(0, i))));
         return concat(results);
     }
 
     /**
      * @return a Predicate yielding true for an item present in NONE of the provided sets
      */
-    static <T> Predicate<T> notIn(Set<T>... sets)
-    {
+    static <T> Predicate<T> notIn(Set<T>... sets) {
         return not(orIn(sets));
     }
 
     /**
      * @return a Predicate yielding true for an item present in ANY of the provided sets
      */
-    static <T> Predicate<T> orIn(Collection<T>... sets)
-    {
+    static <T> Predicate<T> orIn(Collection<T>... sets) {
         Predicate<T>[] orIn = new Predicate[sets.length];
-        for (int i = 0 ; i < orIn.length ; i++)
-            orIn[i] = in(sets[i]);
+        for (int i = 0; i < orIn.length; i++) orIn[i] = in(sets[i]);
         return or(orIn);
     }
 
@@ -175,8 +160,7 @@ class Helpers
      * filter out (i.e. remove) matching elements
      * @return filter, filtered to only those elements that *are not* present in *any* of the provided sets (are present in none)
      */
-    static <T> Iterable<T> filterOut(Iterable<T> filter, Set<T>... inNone)
-    {
+    static <T> Iterable<T> filterOut(Iterable<T> filter, Set<T>... inNone) {
         return filter(filter, notIn(inNone));
     }
 
@@ -185,27 +169,22 @@ class Helpers
      *
      * @return filter, filtered to only those elements that *are* present in *any* of the provided sets
      */
-    static <T> Iterable<T> filterIn(Iterable<T> filter, Set<T>... inAny)
-    {
+    static <T> Iterable<T> filterIn(Iterable<T> filter, Set<T>... inAny) {
         return filter(filter, orIn(inAny));
     }
 
-    static Set<SSTableReader> emptySet()
-    {
+    static Set<SSTableReader> emptySet() {
         return Collections.emptySet();
     }
 
-    static <T> T select(T t, Collection<T> col)
-    {
+    static <T> T select(T t, Collection<T> col) {
         if (col instanceof Set && !col.contains(t))
             return null;
         return getFirst(filter(col, equalTo(t)), null);
     }
 
-    static <T> T selectFirst(T t, Collection<T> ... sets)
-    {
-        for (Collection<T> set : sets)
-        {
+    static <T> T selectFirst(T t, Collection<T>... sets) {
+        for (Collection<T> set : sets) {
             T select = select(t, set);
             if (select != null)
                 return select;
@@ -213,20 +192,16 @@ class Helpers
         return null;
     }
 
-    static <T> Predicate<T> idIn(Set<T> set)
-    {
+    static <T> Predicate<T> idIn(Set<T> set) {
         return idIn(identityMap(set));
     }
 
-    static <T> Predicate<T> idIn(final Map<T, T> identityMap)
-    {
-        return new Predicate<T>()
-        {
-            public boolean apply(T t)
-            {
+    static <T> Predicate<T> idIn(final Map<T, T> identityMap) {
+        return new Predicate<T>() {
+
+            public boolean apply(T t) {
                 return identityMap.get(t) == t;
             }
         };
     }
-
 }

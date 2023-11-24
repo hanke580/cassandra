@@ -21,7 +21,6 @@ import java.io.*;
 import java.nio.ByteBuffer;
 import java.util.Arrays;
 import java.util.concurrent.atomic.AtomicReferenceFieldUpdater;
-
 import org.apache.cassandra.io.IVersionedSerializer;
 import org.apache.cassandra.io.util.DataOutputPlus;
 import org.apache.cassandra.utils.ByteBufferUtil;
@@ -31,65 +30,96 @@ import org.apache.cassandra.utils.ByteBufferUtil;
  * this encapsulates the keyspacename and the row that has been read.
  * The keyspace name is needed so that we can use it to create repairs.
  */
-public class ReadResponse
-{
+public class ReadResponse {
+
+    private static final org.slf4j.Logger serialize_logger = org.slf4j.LoggerFactory.getLogger("serialize.logger");
+
+    private java.lang.ThreadLocal<Boolean> isSerializeLoggingActive = new ThreadLocal<Boolean>() {
+
+        @Override
+        protected Boolean initialValue() {
+            return false;
+        }
+    };
+
     public static final IVersionedSerializer<ReadResponse> serializer = new ReadResponseSerializer();
+
     private static final AtomicReferenceFieldUpdater<ReadResponse, ByteBuffer> digestUpdater = AtomicReferenceFieldUpdater.newUpdater(ReadResponse.class, ByteBuffer.class, "digest");
 
     private final Row row;
+
     private volatile ByteBuffer digest;
 
-    public ReadResponse(ByteBuffer digest)
-    {
+    public ReadResponse(ByteBuffer digest) {
         this(null, digest);
         assert digest != null;
     }
 
-    public ReadResponse(Row row)
-    {
+    public ReadResponse(Row row) {
         this(row, null);
         assert row != null;
     }
 
-    public ReadResponse(Row row, ByteBuffer digest)
-    {
+    public ReadResponse(Row row, ByteBuffer digest) {
         this.row = row;
         this.digest = digest;
     }
 
-    public Row row()
-    {
+    public Row row() {
+        if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+            if (!isSerializeLoggingActive.get()) {
+                isSerializeLoggingActive.set(true);
+                serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(this, this.row, "this.row").toJsonString());
+                isSerializeLoggingActive.set(false);
+            }
+        }
         return row;
     }
 
-    public ByteBuffer digest()
-    {
+    public ByteBuffer digest() {
+        if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+            if (!isSerializeLoggingActive.get()) {
+                isSerializeLoggingActive.set(true);
+                serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(this, this.digest, "this.digest").toJsonString());
+                isSerializeLoggingActive.set(false);
+            }
+        }
         return digest;
     }
 
-    public void setDigest(ByteBuffer digest)
-    {
+    public void setDigest(ByteBuffer digest) {
         ByteBuffer curr = this.digest;
-        if (!digestUpdater.compareAndSet(this, curr, digest))
-        {
-            assert digest.equals(this.digest) :
-                String.format("Digest mismatch : %s vs %s",
-                              Arrays.toString(digest.array()),
-                              Arrays.toString(this.digest.array()));
+        if (!digestUpdater.compareAndSet(this, curr, digest)) {
+            assert digest.equals(this.digest) : String.format("Digest mismatch : %s vs %s", Arrays.toString(digest.array()), Arrays.toString(this.digest.array()));
         }
     }
 
-    public boolean isDigestQuery()
-    {
+    public boolean isDigestQuery() {
         return digest != null && row == null;
     }
 }
 
-class ReadResponseSerializer implements IVersionedSerializer<ReadResponse>
-{
-    public void serialize(ReadResponse response, DataOutputPlus out, int version) throws IOException
-    {
+class ReadResponseSerializer implements IVersionedSerializer<ReadResponse> {
+
+    private static final org.slf4j.Logger serialize_logger = org.slf4j.LoggerFactory.getLogger("serialize.logger");
+
+    private java.lang.ThreadLocal<Boolean> isSerializeLoggingActive = new ThreadLocal<Boolean>() {
+
+        @Override
+        protected Boolean initialValue() {
+            return false;
+        }
+    };
+
+    public void serialize(ReadResponse response, DataOutputPlus out, int version) throws IOException {
         out.writeInt(response.isDigestQuery() ? response.digest().remaining() : 0);
+        if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+            if (!isSerializeLoggingActive.get()) {
+                isSerializeLoggingActive.set(true);
+                serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(org.apache.cassandra.utils.ByteBufferUtil.class, org.apache.cassandra.utils.ByteBufferUtil.EMPTY_BYTE_BUFFER, "org.apache.cassandra.utils.ByteBufferUtil.EMPTY_BYTE_BUFFER").toJsonString());
+                isSerializeLoggingActive.set(false);
+            }
+        }
         ByteBuffer buffer = response.isDigestQuery() ? response.digest() : ByteBufferUtil.EMPTY_BYTE_BUFFER;
         out.write(buffer);
         out.writeBoolean(response.isDigestQuery());
@@ -97,30 +127,24 @@ class ReadResponseSerializer implements IVersionedSerializer<ReadResponse>
             Row.serializer.serialize(response.row(), out, version);
     }
 
-    public ReadResponse deserialize(DataInput in, int version) throws IOException
-    {
+    public ReadResponse deserialize(DataInput in, int version) throws IOException {
         byte[] digest = null;
         int digestSize = in.readInt();
-        if (digestSize > 0)
-        {
+        if (digestSize > 0) {
             digest = new byte[digestSize];
             in.readFully(digest, 0, digestSize);
         }
         boolean isDigest = in.readBoolean();
         assert isDigest == digestSize > 0;
-
         Row row = null;
-        if (!isDigest)
-        {
+        if (!isDigest) {
             // This is coming from a remote host
             row = Row.serializer.deserialize(in, version, ColumnSerializer.Flag.FROM_REMOTE);
         }
-
         return isDigest ? new ReadResponse(ByteBuffer.wrap(digest)) : new ReadResponse(row);
     }
 
-    public long serializedSize(ReadResponse response, int version)
-    {
+    public long serializedSize(ReadResponse response, int version) {
         TypeSizes typeSizes = TypeSizes.NATIVE;
         ByteBuffer buffer = response.isDigestQuery() ? response.digest() : ByteBufferUtil.EMPTY_BYTE_BUFFER;
         int size = typeSizes.sizeof(buffer.remaining());

@@ -24,7 +24,6 @@ import java.nio.MappedByteBuffer;
 import java.nio.channels.FileChannel;
 import java.nio.channels.WritableByteChannel;
 import java.nio.file.StandardOpenOption;
-
 import org.apache.cassandra.io.FSReadError;
 import org.apache.cassandra.utils.CLibrary;
 import org.apache.cassandra.utils.concurrent.RefCounted;
@@ -39,144 +38,127 @@ import org.apache.cassandra.utils.concurrent.SharedCloseableImpl;
  *
  * Tested by RandomAccessReaderTest.
  */
-public final class ChannelProxy extends SharedCloseableImpl
-{
+public final class ChannelProxy extends SharedCloseableImpl {
+
+    private static final org.slf4j.Logger serialize_logger = org.slf4j.LoggerFactory.getLogger("serialize.logger");
+
+    private java.lang.ThreadLocal<Boolean> isSerializeLoggingActive = new ThreadLocal<Boolean>() {
+
+        @Override
+        protected Boolean initialValue() {
+            return false;
+        }
+    };
+
     private final String filePath;
+
     private final FileChannel channel;
 
-    public static FileChannel openChannel(File file)
-    {
-        try
-        {
+    public static FileChannel openChannel(File file) {
+        try {
             return FileChannel.open(file.toPath(), StandardOpenOption.READ);
-        }
-        catch (IOException e)
-        {
+        } catch (IOException e) {
             throw new RuntimeException(e);
         }
     }
 
-    public ChannelProxy(String path)
-    {
-        this (new File(path));
+    public ChannelProxy(String path) {
+        this(new File(path));
     }
 
-    public ChannelProxy(File file)
-    {
+    public ChannelProxy(File file) {
         this(file.getAbsolutePath(), openChannel(file));
     }
 
-    public ChannelProxy(String filePath, FileChannel channel)
-    {
+    public ChannelProxy(String filePath, FileChannel channel) {
         super(new Cleanup(filePath, channel));
-
         this.filePath = filePath;
         this.channel = channel;
     }
 
-    public ChannelProxy(ChannelProxy copy)
-    {
+    public ChannelProxy(ChannelProxy copy) {
         super(copy);
-
         this.filePath = copy.filePath;
         this.channel = copy.channel;
     }
 
-    private final static class Cleanup implements RefCounted.Tidy
-    {
+    private final static class Cleanup implements RefCounted.Tidy {
+
         final String filePath;
+
         final FileChannel channel;
 
-        protected Cleanup(String filePath, FileChannel channel)
-        {
+        protected Cleanup(String filePath, FileChannel channel) {
             this.filePath = filePath;
             this.channel = channel;
         }
 
-        public String name()
-        {
+        public String name() {
             return filePath;
         }
 
-        public void tidy()
-        {
-            try
-            {
+        public void tidy() {
+            try {
                 channel.close();
-            }
-            catch (IOException e)
-            {
+            } catch (IOException e) {
                 throw new FSReadError(e, filePath);
             }
         }
     }
 
-    public ChannelProxy sharedCopy()
-    {
+    public ChannelProxy sharedCopy() {
         return new ChannelProxy(this);
     }
 
-    public String filePath()
-    {
+    public String filePath() {
+        if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+            if (!isSerializeLoggingActive.get()) {
+                isSerializeLoggingActive.set(true);
+                serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(this, this.filePath, "this.filePath").toJsonString());
+                isSerializeLoggingActive.set(false);
+            }
+        }
         return filePath;
     }
 
-    public int read(ByteBuffer buffer, long position)
-    {
-        try
-        {
+    public int read(ByteBuffer buffer, long position) {
+        try {
             return channel.read(buffer, position);
-        }
-        catch (IOException e)
-        {
+        } catch (IOException e) {
             throw new FSReadError(e, filePath);
         }
     }
 
-    public long transferTo(long position, long count, WritableByteChannel target)
-    {
-        try
-        {
+    public long transferTo(long position, long count, WritableByteChannel target) {
+        try {
             return channel.transferTo(position, count, target);
-        }
-        catch (IOException e)
-        {
+        } catch (IOException e) {
             throw new FSReadError(e, filePath);
         }
     }
 
-    public MappedByteBuffer map(FileChannel.MapMode mode, long position, long size)
-    {
-        try
-        {
+    public MappedByteBuffer map(FileChannel.MapMode mode, long position, long size) {
+        try {
             return channel.map(mode, position, size);
-        }
-        catch (IOException e)
-        {
+        } catch (IOException e) {
             throw new FSReadError(e, filePath);
         }
     }
 
-    public long size()
-    {
-        try
-        {
+    public long size() {
+        try {
             return channel.size();
-        }
-        catch (IOException e)
-        {
+        } catch (IOException e) {
             throw new FSReadError(e, filePath);
         }
     }
 
-    public int getFileDescriptor()
-    {
+    public int getFileDescriptor() {
         return CLibrary.getfd(channel);
     }
 
     @Override
-    public String toString()
-    {
+    public String toString() {
         return filePath();
     }
 }

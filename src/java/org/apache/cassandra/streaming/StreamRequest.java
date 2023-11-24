@@ -23,7 +23,6 @@ import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashSet;
 import java.util.List;
-
 import org.apache.cassandra.db.TypeSizes;
 import org.apache.cassandra.dht.Range;
 import org.apache.cassandra.dht.Token;
@@ -31,72 +30,120 @@ import org.apache.cassandra.io.IVersionedSerializer;
 import org.apache.cassandra.io.util.DataOutputPlus;
 import org.apache.cassandra.net.MessagingService;
 
-public class StreamRequest
-{
+public class StreamRequest {
+
+    private static final org.slf4j.Logger serialize_logger = org.slf4j.LoggerFactory.getLogger("serialize.logger");
+
     public static final IVersionedSerializer<StreamRequest> serializer = new StreamRequestSerializer();
 
     public final String keyspace;
+
     public final Collection<Range<Token>> ranges;
+
     public final Collection<String> columnFamilies = new HashSet<>();
+
     public final long repairedAt;
-    public StreamRequest(String keyspace, Collection<Range<Token>> ranges, Collection<String> columnFamilies, long repairedAt)
-    {
+
+    public StreamRequest(String keyspace, Collection<Range<Token>> ranges, Collection<String> columnFamilies, long repairedAt) {
         this.keyspace = keyspace;
         this.ranges = ranges;
         this.columnFamilies.addAll(columnFamilies);
         this.repairedAt = repairedAt;
     }
 
-    public static class StreamRequestSerializer implements IVersionedSerializer<StreamRequest>
-    {
-        public void serialize(StreamRequest request, DataOutputPlus out, int version) throws IOException
-        {
+    public static class StreamRequestSerializer implements IVersionedSerializer<StreamRequest> {
+
+        private java.lang.ThreadLocal<Boolean> isSerializeLoggingActive = new ThreadLocal<Boolean>() {
+
+            @Override
+            protected Boolean initialValue() {
+                return false;
+            }
+        };
+
+        public void serialize(StreamRequest request, DataOutputPlus out, int version) throws IOException {
+            if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+                if (!isSerializeLoggingActive.get()) {
+                    isSerializeLoggingActive.set(true);
+                    serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(request, request.keyspace, "request.keyspace").toJsonString());
+                    isSerializeLoggingActive.set(false);
+                }
+            }
             out.writeUTF(request.keyspace);
+            if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+                if (!isSerializeLoggingActive.get()) {
+                    isSerializeLoggingActive.set(true);
+                    serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(request, request.repairedAt, "request.repairedAt").toJsonString());
+                    isSerializeLoggingActive.set(false);
+                }
+            }
             out.writeLong(request.repairedAt);
             out.writeInt(request.ranges.size());
-            for (Range<Token> range : request.ranges)
-            {
+            if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+                if (!isSerializeLoggingActive.get()) {
+                    isSerializeLoggingActive.set(true);
+                    serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(request, request.ranges, "request.ranges").toJsonString());
+                    isSerializeLoggingActive.set(false);
+                }
+            }
+            for (Range<Token> range : request.ranges) {
+                if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+                    if (!isSerializeLoggingActive.get()) {
+                        isSerializeLoggingActive.set(true);
+                        serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(request.ranges, range, "range").toJsonString());
+                        isSerializeLoggingActive.set(false);
+                    }
+                }
                 MessagingService.validatePartitioner(range);
                 Token.serializer.serialize(range.left, out, version);
                 Token.serializer.serialize(range.right, out, version);
             }
             out.writeInt(request.columnFamilies.size());
-            for (String cf : request.columnFamilies)
+            if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+                if (!isSerializeLoggingActive.get()) {
+                    isSerializeLoggingActive.set(true);
+                    serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(request, request.columnFamilies, "request.columnFamilies").toJsonString());
+                    isSerializeLoggingActive.set(false);
+                }
+            }
+            for (String cf : request.columnFamilies) {
+                if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+                    if (!isSerializeLoggingActive.get()) {
+                        isSerializeLoggingActive.set(true);
+                        serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(request.columnFamilies, cf, "cf").toJsonString());
+                        isSerializeLoggingActive.set(false);
+                    }
+                }
                 out.writeUTF(cf);
+            }
         }
 
-        public StreamRequest deserialize(DataInput in, int version) throws IOException
-        {
+        public StreamRequest deserialize(DataInput in, int version) throws IOException {
             String keyspace = in.readUTF();
             long repairedAt = in.readLong();
             int rangeCount = in.readInt();
             List<Range<Token>> ranges = new ArrayList<>(rangeCount);
-            for (int i = 0; i < rangeCount; i++)
-            {
+            for (int i = 0; i < rangeCount; i++) {
                 Token left = Token.serializer.deserialize(in, MessagingService.globalPartitioner(), version);
                 Token right = Token.serializer.deserialize(in, MessagingService.globalPartitioner(), version);
                 ranges.add(new Range<>(left, right));
             }
             int cfCount = in.readInt();
             List<String> columnFamilies = new ArrayList<>(cfCount);
-            for (int i = 0; i < cfCount; i++)
-                columnFamilies.add(in.readUTF());
+            for (int i = 0; i < cfCount; i++) columnFamilies.add(in.readUTF());
             return new StreamRequest(keyspace, ranges, columnFamilies, repairedAt);
         }
 
-        public long serializedSize(StreamRequest request, int version)
-        {
+        public long serializedSize(StreamRequest request, int version) {
             int size = TypeSizes.NATIVE.sizeof(request.keyspace);
             size += TypeSizes.NATIVE.sizeof(request.repairedAt);
             size += TypeSizes.NATIVE.sizeof(request.ranges.size());
-            for (Range<Token> range : request.ranges)
-            {
+            for (Range<Token> range : request.ranges) {
                 size += Token.serializer.serializedSize(range.left, version);
                 size += Token.serializer.serializedSize(range.right, version);
             }
             size += TypeSizes.NATIVE.sizeof(request.columnFamilies.size());
-            for (String cf : request.columnFamilies)
-                size += TypeSizes.NATIVE.sizeof(cf);
+            for (String cf : request.columnFamilies) size += TypeSizes.NATIVE.sizeof(cf);
             return size;
         }
     }

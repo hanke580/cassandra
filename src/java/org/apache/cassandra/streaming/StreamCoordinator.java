@@ -19,10 +19,8 @@ package org.apache.cassandra.streaming;
 
 import java.net.InetAddress;
 import java.util.*;
-
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-
 import org.apache.cassandra.concurrent.DebuggableThreadPoolExecutor;
 import org.apache.cassandra.utils.FBUtilities;
 
@@ -33,141 +31,140 @@ import org.apache.cassandra.utils.FBUtilities;
  * This class coordinates multiple SessionStreams per peer in both the outgoing StreamPlan context and on the
  * inbound StreamResultFuture context.
  */
-public class StreamCoordinator
-{
+public class StreamCoordinator {
+
+    private static final org.slf4j.Logger serialize_logger = org.slf4j.LoggerFactory.getLogger("serialize.logger");
+
+    private java.lang.ThreadLocal<Boolean> isSerializeLoggingActive = new ThreadLocal<Boolean>() {
+
+        @Override
+        protected Boolean initialValue() {
+            return false;
+        }
+    };
+
     private static final Logger logger = LoggerFactory.getLogger(StreamCoordinator.class);
 
     // Executor strictly for establishing the initial connections. Once we're connected to the other end the rest of the
     // streaming is handled directly by the ConnectionHandler's incoming and outgoing threads.
-    private static final DebuggableThreadPoolExecutor streamExecutor = DebuggableThreadPoolExecutor.createWithFixedPoolSize("StreamConnectionEstablisher",
-                                                                                                                            FBUtilities.getAvailableProcessors());
+    private static final DebuggableThreadPoolExecutor streamExecutor = DebuggableThreadPoolExecutor.createWithFixedPoolSize("StreamConnectionEstablisher", FBUtilities.getAvailableProcessors());
 
     private Map<InetAddress, HostStreamingData> peerSessions = new HashMap<>();
+
     private final int connectionsPerHost;
+
     private StreamConnectionFactory factory;
+
     private final boolean keepSSTableLevel;
+
     private final boolean isIncremental;
 
-    public StreamCoordinator(int connectionsPerHost, boolean keepSSTableLevel, boolean isIncremental, StreamConnectionFactory factory)
-    {
+    public StreamCoordinator(int connectionsPerHost, boolean keepSSTableLevel, boolean isIncremental, StreamConnectionFactory factory) {
         this.connectionsPerHost = connectionsPerHost;
         this.factory = factory;
         this.keepSSTableLevel = keepSSTableLevel;
         this.isIncremental = isIncremental;
     }
 
-    public void setConnectionFactory(StreamConnectionFactory factory)
-    {
+    public void setConnectionFactory(StreamConnectionFactory factory) {
         this.factory = factory;
     }
 
     /**
      * @return true if any stream session is active
      */
-    public synchronized boolean hasActiveSessions()
-    {
-        for (HostStreamingData data : peerSessions.values())
-        {
+    public synchronized boolean hasActiveSessions() {
+        for (HostStreamingData data : peerSessions.values()) {
             if (data.hasActiveSessions())
                 return true;
         }
         return false;
     }
 
-    public synchronized Collection<StreamSession> getAllStreamSessions()
-    {
+    public synchronized Collection<StreamSession> getAllStreamSessions() {
         Collection<StreamSession> results = new ArrayList<>();
-        for (HostStreamingData data : peerSessions.values())
-        {
+        for (HostStreamingData data : peerSessions.values()) {
             results.addAll(data.getAllStreamSessions());
         }
         return results;
     }
 
-    public boolean isReceiving()
-    {
+    public boolean isReceiving() {
         return connectionsPerHost == 0;
     }
 
-    public void connectAllStreamSessions()
-    {
-        for (HostStreamingData data : peerSessions.values())
-            data.connectAllStreamSessions();
+    public void connectAllStreamSessions() {
+        for (HostStreamingData data : peerSessions.values()) data.connectAllStreamSessions();
     }
 
-    public synchronized Set<InetAddress> getPeers()
-    {
+    public synchronized Set<InetAddress> getPeers() {
         return new HashSet<>(peerSessions.keySet());
     }
 
-    public synchronized StreamSession getOrCreateNextSession(InetAddress peer, InetAddress connecting)
-    {
+    public synchronized StreamSession getOrCreateNextSession(InetAddress peer, InetAddress connecting) {
         return getOrCreateHostData(peer).getOrCreateNextSession(peer, connecting);
     }
 
-    public synchronized StreamSession getOrCreateSessionById(InetAddress peer, int id, InetAddress connecting)
-    {
+    public synchronized StreamSession getOrCreateSessionById(InetAddress peer, int id, InetAddress connecting) {
         return getOrCreateHostData(peer).getOrCreateSessionById(peer, id, connecting);
     }
 
-    public synchronized void updateProgress(ProgressInfo info)
-    {
+    public synchronized void updateProgress(ProgressInfo info) {
+        if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+            if (!isSerializeLoggingActive.get()) {
+                isSerializeLoggingActive.set(true);
+                serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(info, info.peer, "info.peer").toJsonString());
+                isSerializeLoggingActive.set(false);
+            }
+        }
         getHostData(info.peer).updateProgress(info);
     }
 
-    public synchronized void addSessionInfo(SessionInfo session)
-    {
+    public synchronized void addSessionInfo(SessionInfo session) {
+        if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+            if (!isSerializeLoggingActive.get()) {
+                isSerializeLoggingActive.set(true);
+                serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(session, session.peer, "session.peer").toJsonString());
+                isSerializeLoggingActive.set(false);
+            }
+        }
         HostStreamingData data = getOrCreateHostData(session.peer);
         data.addSessionInfo(session);
     }
 
-    public synchronized Set<SessionInfo> getAllSessionInfo()
-    {
+    public synchronized Set<SessionInfo> getAllSessionInfo() {
         Set<SessionInfo> result = new HashSet<>();
-        for (HostStreamingData data : peerSessions.values())
-        {
+        for (HostStreamingData data : peerSessions.values()) {
             result.addAll(data.getAllSessionInfo());
         }
         return result;
     }
 
-    public synchronized void transferFiles(InetAddress to, Collection<StreamSession.SSTableStreamingSections> sstableDetails)
-    {
+    public synchronized void transferFiles(InetAddress to, Collection<StreamSession.SSTableStreamingSections> sstableDetails) {
         HostStreamingData sessionList = getOrCreateHostData(to);
-
-        if (connectionsPerHost > 1)
-        {
+        if (connectionsPerHost > 1) {
             List<List<StreamSession.SSTableStreamingSections>> buckets = sliceSSTableDetails(sstableDetails);
-
-            for (List<StreamSession.SSTableStreamingSections> subList : buckets)
-            {
+            for (List<StreamSession.SSTableStreamingSections> subList : buckets) {
                 StreamSession session = sessionList.getOrCreateNextSession(to, to);
                 session.addTransferFiles(subList);
             }
-        }
-        else
-        {
+        } else {
             StreamSession session = sessionList.getOrCreateNextSession(to, to);
             session.addTransferFiles(sstableDetails);
         }
     }
 
-    private List<List<StreamSession.SSTableStreamingSections>> sliceSSTableDetails(Collection<StreamSession.SSTableStreamingSections> sstableDetails)
-    {
+    private List<List<StreamSession.SSTableStreamingSections>> sliceSSTableDetails(Collection<StreamSession.SSTableStreamingSections> sstableDetails) {
         // There's no point in divvying things up into more buckets than we have sstableDetails
         int targetSlices = Math.min(sstableDetails.size(), connectionsPerHost);
         int step = Math.round((float) sstableDetails.size() / (float) targetSlices);
         int index = 0;
-
         List<List<StreamSession.SSTableStreamingSections>> result = new ArrayList<>();
         List<StreamSession.SSTableStreamingSections> slice = null;
         Iterator<StreamSession.SSTableStreamingSections> iter = sstableDetails.iterator();
-        while (iter.hasNext())
-        {
+        while (iter.hasNext()) {
             StreamSession.SSTableStreamingSections streamSession = iter.next();
-
-            if (index % step == 0)
-            {
+            if (index % step == 0) {
                 slice = new ArrayList<>();
                 result.add(slice);
             }
@@ -175,56 +172,58 @@ public class StreamCoordinator
             ++index;
             iter.remove();
         }
-
         return result;
     }
 
-    private HostStreamingData getHostData(InetAddress peer)
-    {
+    private HostStreamingData getHostData(InetAddress peer) {
         HostStreamingData data = peerSessions.get(peer);
         if (data == null)
             throw new IllegalArgumentException("Unknown peer requested: " + peer);
         return data;
     }
 
-    private HostStreamingData getOrCreateHostData(InetAddress peer)
-    {
+    private HostStreamingData getOrCreateHostData(InetAddress peer) {
         HostStreamingData data = peerSessions.get(peer);
-        if (data == null)
-        {
+        if (data == null) {
             data = new HostStreamingData();
             peerSessions.put(peer, data);
         }
         return data;
     }
 
-    private static class StreamSessionConnector implements Runnable
-    {
+    private static class StreamSessionConnector implements Runnable {
+
         private final StreamSession session;
-        public StreamSessionConnector(StreamSession session)
-        {
+
+        public StreamSessionConnector(StreamSession session) {
             this.session = session;
         }
 
         @Override
-        public void run()
-        {
+        public void run() {
             session.start();
             logger.info("[Stream #{}, ID#{}] Beginning stream session with {}", session.planId(), session.sessionIndex(), session.peer);
         }
     }
 
-    private class HostStreamingData
-    {
+    private class HostStreamingData {
+
+        private java.lang.ThreadLocal<Boolean> isSerializeLoggingActive = new ThreadLocal<Boolean>() {
+
+            @Override
+            protected Boolean initialValue() {
+                return false;
+            }
+        };
+
         private Map<Integer, StreamSession> streamSessions = new HashMap<>();
+
         private Map<Integer, SessionInfo> sessionInfos = new HashMap<>();
 
         private int lastReturned = -1;
 
-        public boolean hasActiveSessions()
-        {
-            for (StreamSession session : streamSessions.values())
-            {
+        public boolean hasActiveSessions() {
+            for (StreamSession session : streamSessions.values()) {
                 StreamSession.State state = session.state();
                 if (state != StreamSession.State.COMPLETE && state != StreamSession.State.FAILED)
                     return true;
@@ -232,61 +231,76 @@ public class StreamCoordinator
             return false;
         }
 
-        public StreamSession getOrCreateNextSession(InetAddress peer, InetAddress connecting)
-        {
+        public StreamSession getOrCreateNextSession(InetAddress peer, InetAddress connecting) {
             // create
-            if (streamSessions.size() < connectionsPerHost)
-            {
+            if (streamSessions.size() < connectionsPerHost) {
                 StreamSession session = new StreamSession(peer, connecting, factory, streamSessions.size(), keepSSTableLevel, isIncremental);
+                if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+                    if (!isSerializeLoggingActive.get()) {
+                        isSerializeLoggingActive.set(true);
+                        serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(this, this.lastReturned, "this.lastReturned").toJsonString());
+                        isSerializeLoggingActive.set(false);
+                    }
+                }
                 streamSessions.put(++lastReturned, session);
                 return session;
-            }
-            // get
-            else
+            } else // get
             {
                 if (lastReturned >= streamSessions.size() - 1)
                     lastReturned = 0;
-
+                if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+                    if (!isSerializeLoggingActive.get()) {
+                        isSerializeLoggingActive.set(true);
+                        serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(this, this.lastReturned, "this.lastReturned").toJsonString());
+                        isSerializeLoggingActive.set(false);
+                    }
+                }
                 return streamSessions.get(lastReturned++);
             }
         }
 
-        public void connectAllStreamSessions()
-        {
-            for (StreamSession session : streamSessions.values())
-            {
+        public void connectAllStreamSessions() {
+            for (StreamSession session : streamSessions.values()) {
                 streamExecutor.execute(new StreamSessionConnector(session));
             }
         }
 
-        public Collection<StreamSession> getAllStreamSessions()
-        {
+        public Collection<StreamSession> getAllStreamSessions() {
             return Collections.unmodifiableCollection(streamSessions.values());
         }
 
-        public StreamSession getOrCreateSessionById(InetAddress peer, int id, InetAddress connecting)
-        {
+        public StreamSession getOrCreateSessionById(InetAddress peer, int id, InetAddress connecting) {
             StreamSession session = streamSessions.get(id);
-            if (session == null)
-            {
+            if (session == null) {
                 session = new StreamSession(peer, connecting, factory, id, keepSSTableLevel, isIncremental);
                 streamSessions.put(id, session);
             }
             return session;
         }
 
-        public void updateProgress(ProgressInfo info)
-        {
+        public void updateProgress(ProgressInfo info) {
+            if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+                if (!isSerializeLoggingActive.get()) {
+                    isSerializeLoggingActive.set(true);
+                    serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(info, info.sessionIndex, "info.sessionIndex").toJsonString());
+                    isSerializeLoggingActive.set(false);
+                }
+            }
             sessionInfos.get(info.sessionIndex).updateProgress(info);
         }
 
-        public void addSessionInfo(SessionInfo info)
-        {
+        public void addSessionInfo(SessionInfo info) {
+            if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+                if (!isSerializeLoggingActive.get()) {
+                    isSerializeLoggingActive.set(true);
+                    serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(info, info.sessionIndex, "info.sessionIndex").toJsonString());
+                    isSerializeLoggingActive.set(false);
+                }
+            }
             sessionInfos.put(info.sessionIndex, info);
         }
 
-        public Collection<SessionInfo> getAllSessionInfo()
-        {
+        public Collection<SessionInfo> getAllSessionInfo() {
             return sessionInfos.values();
         }
     }

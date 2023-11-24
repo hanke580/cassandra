@@ -25,10 +25,8 @@ import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
-
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-
 import org.apache.cassandra.concurrent.ExecutorLocal;
 import org.apache.cassandra.config.DatabaseDescriptor;
 import org.apache.cassandra.db.marshal.TimeUUIDType;
@@ -37,42 +35,45 @@ import org.apache.cassandra.net.MessagingService;
 import org.apache.cassandra.utils.FBUtilities;
 import org.apache.cassandra.utils.UUIDGen;
 
-
 /**
  * A trace session context. Able to track and store trace sessions. A session is usually a user initiated query, and may
  * have multiple local and remote events before it is completed. All events and sessions are stored at keyspace.
  */
-public class Tracing implements ExecutorLocal<TraceState>
-{
+public class Tracing implements ExecutorLocal<TraceState> {
+
+    private static final org.slf4j.Logger serialize_logger = org.slf4j.LoggerFactory.getLogger("serialize.logger");
+
+    private java.lang.ThreadLocal<Boolean> isSerializeLoggingActive = new ThreadLocal<Boolean>() {
+
+        @Override
+        protected Boolean initialValue() {
+            return false;
+        }
+    };
+
     public static final String TRACE_HEADER = "TraceSession";
+
     public static final String TRACE_TYPE = "TraceType";
 
-    public enum TraceType
-    {
-        NONE,
-        QUERY,
-        REPAIR;
+    public enum TraceType {
+
+        NONE, QUERY, REPAIR;
 
         private static final TraceType[] ALL_VALUES = values();
 
-        public static TraceType deserialize(byte b)
-        {
+        public static TraceType deserialize(byte b) {
             if (b < 0 || ALL_VALUES.length <= b)
                 return NONE;
             return ALL_VALUES[b];
         }
 
-        public static byte serialize(TraceType value)
-        {
+        public static byte serialize(TraceType value) {
             return (byte) value.ordinal();
         }
 
-        private static final int[] TTLS = { DatabaseDescriptor.getTracetypeQueryTTL(),
-                                            DatabaseDescriptor.getTracetypeQueryTTL(),
-                                            DatabaseDescriptor.getTracetypeRepairTTL() };
+        private static final int[] TTLS = { DatabaseDescriptor.getTracetypeQueryTTL(), DatabaseDescriptor.getTracetypeQueryTTL(), DatabaseDescriptor.getTracetypeRepairTTL() };
 
-        public int getTTL()
-        {
+        public int getTTL() {
             return TTLS[ordinal()];
         }
     }
@@ -87,20 +88,17 @@ public class Tracing implements ExecutorLocal<TraceState>
 
     public static final Tracing instance = new Tracing();
 
-    public UUID getSessionId()
-    {
+    public UUID getSessionId() {
         assert isTracing();
         return state.get().sessionId;
     }
 
-    public TraceType getTraceType()
-    {
+    public TraceType getTraceType() {
         assert isTracing();
         return state.get().traceType;
     }
 
-    public int getTTL()
-    {
+    public int getTTL() {
         assert isTracing();
         return state.get().ttl;
     }
@@ -108,183 +106,163 @@ public class Tracing implements ExecutorLocal<TraceState>
     /**
      * Indicates if the current thread's execution is being traced.
      */
-    public static boolean isTracing()
-    {
+    public static boolean isTracing() {
         return instance.state.get() != null;
     }
 
-    public UUID newSession()
-    {
+    public UUID newSession() {
         return newSession(TraceType.QUERY);
     }
 
-    public UUID newSession(TraceType traceType)
-    {
+    public UUID newSession(TraceType traceType) {
         return newSession(TimeUUIDType.instance.compose(ByteBuffer.wrap(UUIDGen.getTimeUUIDBytes())), traceType);
     }
 
-    public UUID newSession(UUID sessionId)
-    {
+    public UUID newSession(UUID sessionId) {
         return newSession(sessionId, TraceType.QUERY);
     }
 
-    private UUID newSession(UUID sessionId, TraceType traceType)
-    {
+    private UUID newSession(UUID sessionId, TraceType traceType) {
         assert state.get() == null;
-
         TraceState ts = new TraceState(localAddress, sessionId, traceType);
         state.set(ts);
         sessions.put(sessionId, ts);
-
         return sessionId;
     }
 
-    public void doneWithNonLocalSession(TraceState state)
-    {
-        if (state.releaseReference() == 0)
+    public void doneWithNonLocalSession(TraceState state) {
+        if (state.releaseReference() == 0) {
+            if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+                if (!isSerializeLoggingActive.get()) {
+                    isSerializeLoggingActive.set(true);
+                    serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(state, state.sessionId, "state.sessionId").toJsonString());
+                    isSerializeLoggingActive.set(false);
+                }
+            }
             sessions.remove(state.sessionId);
+        }
     }
 
     /**
      * Stop the session and record its complete.  Called by coodinator when request is complete.
      */
-    public void stopSession()
-    {
+    public void stopSession() {
         TraceState state = this.state.get();
-        if (state == null) // inline isTracing to avoid implicit two calls to state.get()
-        {
+        if (// inline isTracing to avoid implicit two calls to state.get()
+        state == null) {
             logger.trace("request complete");
-        }
-        else
-        {
+        } else {
             final int elapsed = state.elapsed();
             final ByteBuffer sessionId = state.sessionIdBytes;
             final int ttl = state.ttl;
-
             TraceState.executeMutation(TraceKeyspace.makeStopSessionMutation(sessionId, elapsed, ttl));
-
             state.stop();
+            if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+                if (!isSerializeLoggingActive.get()) {
+                    isSerializeLoggingActive.set(true);
+                    serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(state, state.sessionId, "state.sessionId").toJsonString());
+                    isSerializeLoggingActive.set(false);
+                }
+            }
             sessions.remove(state.sessionId);
             this.state.set(null);
         }
     }
 
-    public TraceState get()
-    {
+    public TraceState get() {
         return state.get();
     }
 
-    public TraceState get(UUID sessionId)
-    {
+    public TraceState get(UUID sessionId) {
         return sessions.get(sessionId);
     }
 
-    public void set(final TraceState tls)
-    {
+    public void set(final TraceState tls) {
         state.set(tls);
     }
 
-    public TraceState begin(final String request, final Map<String, String> parameters)
-    {
+    public TraceState begin(final String request, final Map<String, String> parameters) {
         return begin(request, null, parameters);
     }
 
-    public TraceState begin(final String request, final InetAddress client, final Map<String, String> parameters)
-    {
+    public TraceState begin(final String request, final InetAddress client, final Map<String, String> parameters) {
         assert isTracing();
-
         final TraceState state = this.state.get();
         final long startedAt = System.currentTimeMillis();
         final ByteBuffer sessionId = state.sessionIdBytes;
         final String command = state.traceType.toString();
         final int ttl = state.ttl;
-
         TraceState.executeMutation(TraceKeyspace.makeStartSessionMutation(sessionId, client, parameters, request, startedAt, command, ttl));
-
         return state;
     }
 
     /**
      * Determines the tracing context from a message.  Does NOT set the threadlocal state.
-     * 
+     *
      * @param message The internode message
      */
-    public TraceState initializeFromMessage(final MessageIn<?> message)
-    {
+    public TraceState initializeFromMessage(final MessageIn<?> message) {
         final byte[] sessionBytes = message.parameters.get(TRACE_HEADER);
-
         if (sessionBytes == null)
             return null;
-
         assert sessionBytes.length == 16;
         UUID sessionId = UUIDGen.getUUID(ByteBuffer.wrap(sessionBytes));
         TraceState ts = sessions.get(sessionId);
         if (ts != null && ts.acquireReference())
             return ts;
-
         byte[] tmpBytes;
         TraceType traceType = TraceType.QUERY;
         if ((tmpBytes = message.parameters.get(TRACE_TYPE)) != null)
             traceType = TraceType.deserialize(tmpBytes[0]);
-
-        if (message.verb == MessagingService.Verb.REQUEST_RESPONSE)
-        {
+        if (message.verb == MessagingService.Verb.REQUEST_RESPONSE) {
             // received a message for a session we've already closed out.  see CASSANDRA-5668
             return new ExpiredTraceState(sessionId, traceType);
-        }
-        else
-        {
+        } else {
             ts = new TraceState(message.from, sessionId, traceType);
             sessions.put(sessionId, ts);
             return ts;
         }
     }
 
-
     // repair just gets a varargs method since it's so heavyweight anyway
-    public static void traceRepair(String format, Object... args)
-    {
+    public static void traceRepair(String format, Object... args) {
         final TraceState state = instance.get();
-        if (state == null) // inline isTracing to avoid implicit two calls to state.get()
+        if (// inline isTracing to avoid implicit two calls to state.get()
+        state == null)
             return;
-
         state.trace(format, args);
     }
 
     // normal traces get zero-, one-, and two-argument overloads so common case doesn't need to create varargs array
-    public static void trace(String message)
-    {
+    public static void trace(String message) {
         final TraceState state = instance.get();
-        if (state == null) // inline isTracing to avoid implicit two calls to state.get()
+        if (// inline isTracing to avoid implicit two calls to state.get()
+        state == null)
             return;
-
         state.trace(message);
     }
 
-    public static void trace(String format, Object arg)
-    {
+    public static void trace(String format, Object arg) {
         final TraceState state = instance.get();
-        if (state == null) // inline isTracing to avoid implicit two calls to state.get()
+        if (// inline isTracing to avoid implicit two calls to state.get()
+        state == null)
             return;
-
         state.trace(format, arg);
     }
 
-    public static void trace(String format, Object arg1, Object arg2)
-    {
+    public static void trace(String format, Object arg1, Object arg2) {
         final TraceState state = instance.get();
-        if (state == null) // inline isTracing to avoid implicit two calls to state.get()
+        if (// inline isTracing to avoid implicit two calls to state.get()
+        state == null)
             return;
-
         state.trace(format, arg1, arg2);
     }
 
-    public static void trace(String format, Object... args)
-    {
+    public static void trace(String format, Object... args) {
         final TraceState state = instance.get();
-        if (state == null) // inline isTracing to avoid implicit two calls to state.get()
+        if (// inline isTracing to avoid implicit two calls to state.get()
+        state == null)
             return;
-
         state.trace(format, args);
     }
 }

@@ -18,7 +18,6 @@
 package org.apache.cassandra.cql3.selection;
 
 import java.nio.ByteBuffer;
-
 import org.apache.cassandra.cql3.ColumnSpecification;
 import org.apache.cassandra.cql3.selection.Selection.ResultSetBuilder;
 import org.apache.cassandra.db.marshal.AbstractType;
@@ -26,57 +25,58 @@ import org.apache.cassandra.db.marshal.UTF8Type;
 import org.apache.cassandra.db.marshal.UserType;
 import org.apache.cassandra.exceptions.InvalidRequestException;
 
-final class FieldSelector extends Selector
-{
+final class FieldSelector extends Selector {
+
+    private static final org.slf4j.Logger serialize_logger = org.slf4j.LoggerFactory.getLogger("serialize.logger");
+
+    private java.lang.ThreadLocal<Boolean> isSerializeLoggingActive = new ThreadLocal<Boolean>() {
+
+        @Override
+        protected Boolean initialValue() {
+            return false;
+        }
+    };
+
     private final UserType type;
+
     private final int field;
+
     private final Selector selected;
 
-    public static Factory newFactory(final UserType type, final int field, final Selector.Factory factory)
-    {
-        return new Factory()
-        {
-            protected String getColumnName()
-            {
-                return String.format("%s.%s",
-                                     factory.getColumnName(),
-                                     UTF8Type.instance.getString(type.fieldName(field)));
+    public static Factory newFactory(final UserType type, final int field, final Selector.Factory factory) {
+        return new Factory() {
+
+            protected String getColumnName() {
+                return String.format("%s.%s", factory.getColumnName(), UTF8Type.instance.getString(type.fieldName(field)));
             }
 
-            protected AbstractType<?> getReturnType()
-            {
+            protected AbstractType<?> getReturnType() {
                 return type.fieldType(field);
             }
 
-            protected void addColumnMapping(SelectionColumnMapping mapping, ColumnSpecification resultsColumn)
-            {
+            protected void addColumnMapping(SelectionColumnMapping mapping, ColumnSpecification resultsColumn) {
                 factory.addColumnMapping(mapping, resultsColumn);
             }
 
-            public Selector newInstance() throws InvalidRequestException
-            {
+            public Selector newInstance() throws InvalidRequestException {
                 return new FieldSelector(type, field, factory.newInstance());
             }
 
-            public boolean isAggregateSelectorFactory()
-            {
+            public boolean isAggregateSelectorFactory() {
                 return factory.isAggregateSelectorFactory();
             }
         };
     }
 
-    public boolean isAggregate()
-    {
+    public boolean isAggregate() {
         return false;
     }
 
-    public void addInput(int protocolVersion, ResultSetBuilder rs) throws InvalidRequestException
-    {
+    public void addInput(int protocolVersion, ResultSetBuilder rs) throws InvalidRequestException {
         selected.addInput(protocolVersion, rs);
     }
 
-    public ByteBuffer getOutput(int protocolVersion) throws InvalidRequestException
-    {
+    public ByteBuffer getOutput(int protocolVersion) throws InvalidRequestException {
         ByteBuffer value = selected.getOutput(protocolVersion);
         if (value == null)
             return null;
@@ -84,24 +84,20 @@ final class FieldSelector extends Selector
         return field < buffers.length ? buffers[field] : null;
     }
 
-    public AbstractType<?> getType()
-    {
+    public AbstractType<?> getType() {
         return type.fieldType(field);
     }
 
-    public void reset()
-    {
+    public void reset() {
         selected.reset();
     }
 
     @Override
-    public String toString()
-    {
+    public String toString() {
         return String.format("%s.%s", selected, UTF8Type.instance.getString(type.fieldName(field)));
     }
 
-    private FieldSelector(UserType type, int field, Selector selected)
-    {
+    private FieldSelector(UserType type, int field, Selector selected) {
         this.type = type;
         this.field = field;
         this.selected = selected;

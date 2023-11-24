@@ -24,7 +24,6 @@ import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.channels.Channels;
 import java.util.zip.Adler32;
-
 import org.apache.cassandra.io.FSReadError;
 import org.apache.cassandra.io.FSWriteError;
 import org.apache.cassandra.io.sstable.CorruptSSTableException;
@@ -34,8 +33,18 @@ import org.apache.cassandra.io.util.FileMark;
 import org.apache.cassandra.io.util.SequentialWriter;
 import org.apache.cassandra.utils.FBUtilities;
 
-public class CompressedSequentialWriter extends SequentialWriter
-{
+public class CompressedSequentialWriter extends SequentialWriter {
+
+    private static final org.slf4j.Logger serialize_logger = org.slf4j.LoggerFactory.getLogger("serialize.logger");
+
+    private java.lang.ThreadLocal<Boolean> isSerializeLoggingActive = new ThreadLocal<Boolean>() {
+
+        @Override
+        protected Boolean initialValue() {
+            return false;
+        }
+    };
+
     private final DataIntegrityMetadata.ChecksumWriter crcMetadata;
 
     // holds offset in the file where current chunk should be written
@@ -44,6 +53,7 @@ public class CompressedSequentialWriter extends SequentialWriter
 
     // index file writer (random I/O)
     private final CompressionMetadata.Writer metadataWriter;
+
     private final ICompressor compressor;
 
     // used to store compressed data
@@ -58,222 +68,184 @@ public class CompressedSequentialWriter extends SequentialWriter
 
     private final ByteBuffer crcCheckBuffer = ByteBuffer.allocate(4);
 
-    public CompressedSequentialWriter(File file,
-                                      String offsetsPath,
-                                      CompressionParameters parameters,
-                                      MetadataCollector sstableMetadataCollector)
-    {
+    public CompressedSequentialWriter(File file, String offsetsPath, CompressionParameters parameters, MetadataCollector sstableMetadataCollector) {
         super(file, parameters.chunkLength(), parameters.sstableCompressor.preferredBufferType());
         this.compressor = parameters.sstableCompressor;
-
         // buffer for compression should be the same size as buffer itself
         compressed = compressor.preferredBufferType().allocate(compressor.initialCompressedBufferLength(buffer.capacity()));
-
         /* Index File (-CompressionInfo.db component) and it's header */
         metadataWriter = CompressionMetadata.Writer.open(parameters, offsetsPath);
-
         this.sstableMetadataCollector = sstableMetadataCollector;
         crcMetadata = new DataIntegrityMetadata.ChecksumWriter(new DataOutputStream(Channels.newOutputStream(channel)));
     }
 
     @Override
-    public long getOnDiskFilePointer()
-    {
-        try
-        {
+    public long getOnDiskFilePointer() {
+        try {
             return channel.position();
-        }
-        catch (IOException e)
-        {
+        } catch (IOException e) {
             throw new FSReadError(e, getPath());
         }
     }
 
     @Override
-    public void flush()
-    {
+    public void flush() {
         throw new UnsupportedOperationException();
     }
 
     @Override
-    protected void flushData()
-    {
-        seekToChunkStart(); // why is this necessary? seems like it should always be at chunk start in normal operation
-
-        try
-        {
+    protected void flushData() {
+        // why is this necessary? seems like it should always be at chunk start in normal operation
+        seekToChunkStart();
+        try {
             // compressing data with buffer re-use
             buffer.flip();
             compressed.clear();
             compressor.compress(buffer, compressed);
+        } catch (IOException e) {
+            // shouldn't happen
+            throw new RuntimeException("Compression exception", e);
         }
-        catch (IOException e)
-        {
-            throw new RuntimeException("Compression exception", e); // shouldn't happen
-        }
-
         int compressedLength = compressed.position();
         uncompressedSize += buffer.position();
         compressedSize += compressedLength;
-
-        try
-        {
+        try {
             // write an offset of the newly written chunk to the index file
             metadataWriter.addOffset(chunkOffset);
+            if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+                if (!isSerializeLoggingActive.get()) {
+                    isSerializeLoggingActive.set(true);
+                    serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(this, this.chunkCount, "this.chunkCount").toJsonString());
+                    isSerializeLoggingActive.set(false);
+                }
+            }
             chunkCount++;
-
             // write out the compressed data
             compressed.flip();
             channel.write(compressed);
-
             // write corresponding checksum
             compressed.rewind();
             crcMetadata.appendDirect(compressed, true);
             lastFlushOffset += compressedLength + 4;
-
             // adjust our bufferOffset to account for the new uncompressed data we've now written out
             resetBuffer();
-        }
-        catch (IOException e)
-        {
+        } catch (IOException e) {
             throw new FSWriteError(e, getPath());
         }
-
         // next chunk should be written right after current + length of the checksum (int)
         chunkOffset += compressedLength + 4;
         if (runPostFlush != null)
             runPostFlush.run();
     }
 
-    public CompressionMetadata open(long overrideLength)
-    {
+    public CompressionMetadata open(long overrideLength) {
         if (overrideLength <= 0)
             overrideLength = uncompressedSize;
         return metadataWriter.open(overrideLength, chunkOffset);
     }
 
     @Override
-    public FileMark mark()
-    {
+    public FileMark mark() {
+        if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+            if (!isSerializeLoggingActive.get()) {
+                isSerializeLoggingActive.set(true);
+                serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(this, this.chunkCount, "this.chunkCount").toJsonString());
+                isSerializeLoggingActive.set(false);
+            }
+        }
         return new CompressedFileWriterMark(chunkOffset, current(), buffer.position(), chunkCount + 1);
     }
 
     @Override
-    public synchronized void resetAndTruncate(FileMark mark)
-    {
+    public synchronized void resetAndTruncate(FileMark mark) {
         assert mark instanceof CompressedFileWriterMark;
-
         CompressedFileWriterMark realMark = (CompressedFileWriterMark) mark;
-
         // reset position
         long truncateTarget = realMark.uncDataOffset;
-
-        if (realMark.chunkOffset == chunkOffset)
-        {
+        if (realMark.chunkOffset == chunkOffset) {
             // simply drop bytes to the right of our mark
             buffer.position(realMark.validBufferBytes);
             return;
         }
-
         // synchronize current buffer with disk - we don't want any data loss
         syncInternal();
-
         chunkOffset = realMark.chunkOffset;
-
         // compressed chunk size (- 4 bytes reserved for checksum)
         int chunkSize = (int) (metadataWriter.chunkOffsetBy(realMark.nextChunkIndex) - chunkOffset - 4);
         if (compressed.capacity() < chunkSize)
             compressed = compressor.preferredBufferType().allocate(chunkSize);
-
-        try
-        {
+        try {
             compressed.clear();
             compressed.limit(chunkSize);
             channel.position(chunkOffset);
             channel.read(compressed);
-
-            try
-            {
+            try {
                 // Repopulate buffer from compressed data
                 buffer.clear();
                 compressed.flip();
                 compressor.uncompress(compressed, buffer);
-            }
-            catch (IOException e)
-            {
+            } catch (IOException e) {
                 throw new CorruptBlockException(getPath(), chunkOffset, chunkSize);
             }
-
             Adler32 checksum = new Adler32();
             compressed.rewind();
             FBUtilities.directCheckSum(checksum, compressed);
-
             crcCheckBuffer.clear();
             channel.read(crcCheckBuffer);
             crcCheckBuffer.flip();
             if (crcCheckBuffer.getInt() != (int) checksum.getValue())
                 throw new CorruptBlockException(getPath(), chunkOffset, chunkSize);
-        }
-        catch (CorruptBlockException e)
-        {
+        } catch (CorruptBlockException e) {
             throw new CorruptSSTableException(e, getPath());
-        }
-        catch (EOFException e)
-        {
+        } catch (EOFException e) {
             throw new CorruptSSTableException(new CorruptBlockException(getPath(), chunkOffset, chunkSize), getPath());
-        }
-        catch (IOException e)
-        {
+        } catch (IOException e) {
             throw new FSReadError(e, getPath());
         }
-
         // Mark as dirty so we can guarantee the newly buffered bytes won't be lost on a rebuffer
         buffer.position(realMark.validBufferBytes);
         isDirty = true;
-
         bufferOffset = truncateTarget - buffer.position();
         chunkCount = realMark.nextChunkIndex - 1;
-
         // truncate data and index file
         truncate(chunkOffset);
+        if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+            if (!isSerializeLoggingActive.get()) {
+                isSerializeLoggingActive.set(true);
+                serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(realMark, realMark.nextChunkIndex, "realMark.nextChunkIndex").toJsonString());
+                isSerializeLoggingActive.set(false);
+            }
+        }
         metadataWriter.resetAndTruncate(realMark.nextChunkIndex - 1);
     }
 
     /**
      * Seek to the offset where next compressed data chunk should be stored.
      */
-    private void seekToChunkStart()
-    {
-        if (getOnDiskFilePointer() != chunkOffset)
-        {
-            try
-            {
+    private void seekToChunkStart() {
+        if (getOnDiskFilePointer() != chunkOffset) {
+            try {
                 channel.position(chunkOffset);
-            }
-            catch (IOException e)
-            {
+            } catch (IOException e) {
                 throw new FSReadError(e, getPath());
             }
         }
     }
 
-    protected class TransactionalProxy extends SequentialWriter.TransactionalProxy
-    {
+    protected class TransactionalProxy extends SequentialWriter.TransactionalProxy {
+
         @Override
-        protected Throwable doCommit(Throwable accumulate)
-        {
+        protected Throwable doCommit(Throwable accumulate) {
             return metadataWriter.commit(accumulate);
         }
 
         @Override
-        protected Throwable doAbort(Throwable accumulate)
-        {
+        protected Throwable doAbort(Throwable accumulate) {
             return super.doAbort(metadataWriter.abort(accumulate));
         }
 
         @Override
-        protected void doPrepare()
-        {
+        protected void doPrepare() {
             syncInternal();
             if (descriptor != null)
                 crcMetadata.writeFullChecksum(descriptor);
@@ -284,26 +256,26 @@ public class CompressedSequentialWriter extends SequentialWriter
     }
 
     @Override
-    protected SequentialWriter.TransactionalProxy txnProxy()
-    {
+    protected SequentialWriter.TransactionalProxy txnProxy() {
         return new TransactionalProxy();
     }
 
     /**
      * Class to hold a mark to the position of the file
      */
-    protected static class CompressedFileWriterMark implements FileMark
-    {
+    protected static class CompressedFileWriterMark implements FileMark {
+
         // chunk offset in the compressed file
         final long chunkOffset;
+
         // uncompressed data offset (real data offset)
         final long uncDataOffset;
 
         final int validBufferBytes;
+
         final int nextChunkIndex;
 
-        public CompressedFileWriterMark(long chunkOffset, long uncDataOffset, int validBufferBytes, int nextChunkIndex)
-        {
+        public CompressedFileWriterMark(long chunkOffset, long uncDataOffset, int validBufferBytes, int nextChunkIndex) {
             this.chunkOffset = chunkOffset;
             this.uncDataOffset = uncDataOffset;
             this.validBufferBytes = validBufferBytes;

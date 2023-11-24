@@ -30,13 +30,23 @@ import java.io.InputStream;
  * This file remains formatted the same as the Apache Harmony original to
  * make patching easier if any bug fixes are made to the Harmony version.
  */
-
 /**
  * A specialized {@link InputStream } for reading the contents of a byte array.
  *
  * @see ByteArrayInputStream
  */
 public class FastByteArrayInputStream extends InputStream {
+
+    private static final org.slf4j.Logger serialize_logger = org.slf4j.LoggerFactory.getLogger("serialize.logger");
+
+    private java.lang.ThreadLocal<Boolean> isSerializeLoggingActive = new ThreadLocal<Boolean>() {
+
+        @Override
+        protected Boolean initialValue() {
+            return false;
+        }
+    };
+
     /**
      * The {@code byte} array containing the bytes to stream over.
      */
@@ -66,7 +76,7 @@ public class FastByteArrayInputStream extends InputStream {
      * @param buf
      *            the byte array to stream over.
      */
-    public FastByteArrayInputStream(byte buf[]) {
+    public FastByteArrayInputStream(byte[] buf) {
         this.mark = 0;
         this.buf = buf;
         this.count = buf.length;
@@ -84,7 +94,7 @@ public class FastByteArrayInputStream extends InputStream {
      * @param length
      *            the number of bytes available for streaming.
      */
-    public FastByteArrayInputStream(byte buf[], int offset, int length) {
+    public FastByteArrayInputStream(byte[] buf, int offset, int length) {
         this.buf = buf;
         pos = offset;
         mark = offset;
@@ -152,6 +162,13 @@ public class FastByteArrayInputStream extends InputStream {
      */
     @Override
     public int read() {
+        if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+            if (!isSerializeLoggingActive.get()) {
+                isSerializeLoggingActive.set(true);
+                serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(this, this.buf, "this.buf").toJsonString());
+                isSerializeLoggingActive.set(false);
+            }
+        }
         return pos < count ? buf[pos++] & 0xFF : -1;
     }
 
@@ -177,13 +194,12 @@ public class FastByteArrayInputStream extends InputStream {
      *             if {@code b} is {@code null}.
      */
     @Override
-    public int read(byte b[], int offset, int length) {
+    public int read(byte[] b, int offset, int length) {
         if (b == null) {
             throw new NullPointerException();
         }
         // avoid int overflow
-        if (offset < 0 || offset > b.length || length < 0
-                || length > b.length - offset) {
+        if (offset < 0 || offset > b.length || length < 0 || length > b.length - offset) {
             throw new IndexOutOfBoundsException();
         }
         // Are there any bytes available?
@@ -193,7 +209,6 @@ public class FastByteArrayInputStream extends InputStream {
         if (length == 0) {
             return 0;
         }
-
         int copylen = this.count - pos < length ? this.count - pos : length;
         System.arraycopy(buf, pos, b, offset, copylen);
         pos += copylen;

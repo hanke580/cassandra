@@ -19,7 +19,6 @@ package org.apache.cassandra.repair.messages;
 
 import java.io.DataInput;
 import java.io.IOException;
-
 import org.apache.cassandra.db.TypeSizes;
 import org.apache.cassandra.io.util.DataOutputPlus;
 import org.apache.cassandra.repair.RepairJobDesc;
@@ -30,56 +29,92 @@ import org.apache.cassandra.utils.MerkleTree;
  *
  * @since 2.0
  */
-public class ValidationComplete extends RepairMessage
-{
+public class ValidationComplete extends RepairMessage {
+
+    private static final org.slf4j.Logger serialize_logger = org.slf4j.LoggerFactory.getLogger("serialize.logger");
+
     public static MessageSerializer serializer = new ValidationCompleteSerializer();
 
-    /** true if validation success, false otherwise */
+    /**
+     * true if validation success, false otherwise
+     */
     public final boolean success;
-    /** Merkle hash tree response. Null if validation failed. */
+
+    /**
+     * Merkle hash tree response. Null if validation failed.
+     */
     public final MerkleTree tree;
 
-    public ValidationComplete(RepairJobDesc desc)
-    {
+    public ValidationComplete(RepairJobDesc desc) {
         super(Type.VALIDATION_COMPLETE, desc);
         this.success = false;
         this.tree = null;
     }
 
-    public ValidationComplete(RepairJobDesc desc, MerkleTree tree)
-    {
+    public ValidationComplete(RepairJobDesc desc, MerkleTree tree) {
         super(Type.VALIDATION_COMPLETE, desc);
         assert tree != null;
         this.success = true;
         this.tree = tree;
     }
 
-    private static class ValidationCompleteSerializer implements MessageSerializer<ValidationComplete>
-    {
-        public void serialize(ValidationComplete message, DataOutputPlus out, int version) throws IOException
-        {
+    private static class ValidationCompleteSerializer implements MessageSerializer<ValidationComplete> {
+
+        private java.lang.ThreadLocal<Boolean> isSerializeLoggingActive = new ThreadLocal<Boolean>() {
+
+            @Override
+            protected Boolean initialValue() {
+                return false;
+            }
+        };
+
+        public void serialize(ValidationComplete message, DataOutputPlus out, int version) throws IOException {
+            if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+                if (!isSerializeLoggingActive.get()) {
+                    isSerializeLoggingActive.set(true);
+                    serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(message, message.desc, "message.desc").toJsonString());
+                    isSerializeLoggingActive.set(false);
+                }
+            }
             RepairJobDesc.serializer.serialize(message.desc, out, version);
+            if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+                if (!isSerializeLoggingActive.get()) {
+                    isSerializeLoggingActive.set(true);
+                    serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(message, message.success, "message.success").toJsonString());
+                    isSerializeLoggingActive.set(false);
+                }
+            }
             out.writeBoolean(message.success);
-            if (message.success)
+            if (message.success) {
+                if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+                    if (!isSerializeLoggingActive.get()) {
+                        isSerializeLoggingActive.set(true);
+                        serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(message, message.tree, "message.tree").toJsonString());
+                        isSerializeLoggingActive.set(false);
+                    }
+                }
                 MerkleTree.serializer.serialize(message.tree, out, version);
+            }
         }
 
-        public ValidationComplete deserialize(DataInput in, int version) throws IOException
-        {
+        public ValidationComplete deserialize(DataInput in, int version) throws IOException {
             RepairJobDesc desc = RepairJobDesc.serializer.deserialize(in, version);
-            if (in.readBoolean())
-            {
+            if (in.readBoolean()) {
                 MerkleTree tree = MerkleTree.serializer.deserialize(in, version);
                 return new ValidationComplete(desc, tree);
-            }
-            else
-            {
+            } else {
                 return new ValidationComplete(desc);
             }
         }
 
-        public long serializedSize(ValidationComplete message, int version)
-        {
+        public long serializedSize(ValidationComplete message, int version) {
+            if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+                if (!isSerializeLoggingActive.get()) {
+                    isSerializeLoggingActive.set(true);
+                    serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(message, message.desc, "message.desc").toJsonString());
+                    isSerializeLoggingActive.set(false);
+                }
+            }
             long size = RepairJobDesc.serializer.serializedSize(message.desc, version);
             size += TypeSizes.NATIVE.sizeof(message.success);
             if (message.success)

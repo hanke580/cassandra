@@ -17,23 +17,37 @@
  */
 package org.apache.cassandra.cql3;
 
-public class CFName extends KeyspaceElementName
-{
+public class CFName extends KeyspaceElementName {
+
+    private static final org.slf4j.Logger serialize_logger = org.slf4j.LoggerFactory.getLogger("serialize.logger");
+
+    private java.lang.ThreadLocal<Boolean> isSerializeLoggingActive = new ThreadLocal<Boolean>() {
+
+        @Override
+        protected Boolean initialValue() {
+            return false;
+        }
+    };
+
     private String cfName;
 
-    public void setColumnFamily(String cf, boolean keepCase)
-    {
+    public void setColumnFamily(String cf, boolean keepCase) {
         cfName = toInternalName(cf, keepCase);
     }
 
-    public String getColumnFamily()
-    {
+    public String getColumnFamily() {
+        if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+            if (!isSerializeLoggingActive.get()) {
+                isSerializeLoggingActive.set(true);
+                serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(this, this.cfName, "this.cfName").toJsonString());
+                isSerializeLoggingActive.set(false);
+            }
+        }
         return cfName;
     }
 
     @Override
-    public String toString()
-    {
+    public String toString() {
         return super.toString() + cfName;
     }
 }

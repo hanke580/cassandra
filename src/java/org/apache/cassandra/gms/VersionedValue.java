@@ -18,15 +18,11 @@
 package org.apache.cassandra.gms;
 
 import java.io.*;
-
 import java.net.InetAddress;
 import java.util.Collection;
 import java.util.UUID;
-
 import static java.nio.charset.StandardCharsets.ISO_8859_1;
-
 import com.google.common.collect.Iterables;
-
 import org.apache.cassandra.db.TypeSizes;
 import org.apache.cassandra.dht.IPartitioner;
 import org.apache.cassandra.dht.Token;
@@ -34,9 +30,7 @@ import org.apache.cassandra.io.IVersionedSerializer;
 import org.apache.cassandra.io.util.DataOutputPlus;
 import org.apache.cassandra.net.MessagingService;
 import org.apache.cassandra.utils.FBUtilities;
-
 import org.apache.commons.lang3.StringUtils;
-
 
 /**
  * This abstraction represents the state associated with a particular node which an
@@ -53,38 +47,46 @@ import org.apache.commons.lang3.StringUtils;
  * }
  * </pre>
  */
+public class VersionedValue implements Comparable<VersionedValue> {
 
-public class VersionedValue implements Comparable<VersionedValue>
-{
+    private static final org.slf4j.Logger serialize_logger = org.slf4j.LoggerFactory.getLogger("serialize.logger");
 
     public static final IVersionedSerializer<VersionedValue> serializer = new VersionedValueSerializer();
 
     // this must be a char that cannot be present in any token
     public final static char DELIMITER = ',';
-    public final static String DELIMITER_STR = new String(new char[]{ DELIMITER });
+
+    public final static String DELIMITER_STR = new String(new char[] { DELIMITER });
 
     // values for ApplicationState.STATUS
     public final static String STATUS_BOOTSTRAPPING = "BOOT";
+
     public final static String STATUS_BOOTSTRAPPING_REPLACE = "BOOT_REPLACE";
+
     public final static String STATUS_NORMAL = "NORMAL";
+
     public final static String STATUS_LEAVING = "LEAVING";
+
     public final static String STATUS_LEFT = "LEFT";
+
     public final static String STATUS_MOVING = "MOVING";
 
     public final static String REMOVING_TOKEN = "removing";
+
     public final static String REMOVED_TOKEN = "removed";
 
     public final static String HIBERNATE = "hibernate";
+
     public final static String SHUTDOWN = "shutdown";
 
     // values for ApplicationState.REMOVAL_COORDINATOR
     public final static String REMOVAL_COORDINATOR = "REMOVER";
 
     public final int version;
+
     public final String value;
 
-    private VersionedValue(String value, int version)
-    {
+    private VersionedValue(String value, int version) {
         assert value != null;
         // blindly interning everything is somewhat suboptimal -- lots of VersionedValues are unique --
         // but harmless, and interning the non-unique ones saves significant memory.  (Unfortunately,
@@ -94,206 +96,184 @@ public class VersionedValue implements Comparable<VersionedValue>
         this.version = version;
     }
 
-    private VersionedValue(String value)
-    {
+    private VersionedValue(String value) {
         this(value, VersionGenerator.getNextVersion());
     }
 
-    public int compareTo(VersionedValue value)
-    {
+    public int compareTo(VersionedValue value) {
         return this.version - value.version;
     }
 
     @Override
-    public String toString()
-    {
+    public String toString() {
         return "Value(" + value + "," + version + ")";
     }
 
-    public byte[] toBytes()
-    {
+    public byte[] toBytes() {
         return value.getBytes(ISO_8859_1);
     }
 
-    private static String versionString(String... args)
-    {
+    private static String versionString(String... args) {
         return StringUtils.join(args, VersionedValue.DELIMITER);
     }
 
-    public static class VersionedValueFactory
-    {
+    public static class VersionedValueFactory {
+
         final IPartitioner partitioner;
 
-        public VersionedValueFactory(IPartitioner partitioner)
-        {
+        public VersionedValueFactory(IPartitioner partitioner) {
             this.partitioner = partitioner;
         }
-        
-        public VersionedValue cloneWithHigherVersion(VersionedValue value)
-        {
+
+        public VersionedValue cloneWithHigherVersion(VersionedValue value) {
             return new VersionedValue(value.value);
         }
 
-        public VersionedValue bootReplacing(InetAddress oldNode)
-        {
+        public VersionedValue bootReplacing(InetAddress oldNode) {
             return new VersionedValue(versionString(VersionedValue.STATUS_BOOTSTRAPPING_REPLACE, oldNode.getHostAddress()));
         }
 
-        public VersionedValue bootstrapping(Collection<Token> tokens)
-        {
-            return new VersionedValue(versionString(VersionedValue.STATUS_BOOTSTRAPPING,
-                                                    makeTokenString(tokens)));
+        public VersionedValue bootstrapping(Collection<Token> tokens) {
+            return new VersionedValue(versionString(VersionedValue.STATUS_BOOTSTRAPPING, makeTokenString(tokens)));
         }
 
-        public VersionedValue normal(Collection<Token> tokens)
-        {
-            return new VersionedValue(versionString(VersionedValue.STATUS_NORMAL,
-                                                    makeTokenString(tokens)));
+        public VersionedValue normal(Collection<Token> tokens) {
+            return new VersionedValue(versionString(VersionedValue.STATUS_NORMAL, makeTokenString(tokens)));
         }
 
-        private String makeTokenString(Collection<Token> tokens)
-        {
+        private String makeTokenString(Collection<Token> tokens) {
             return partitioner.getTokenFactory().toString(Iterables.get(tokens, 0));
         }
 
-        public VersionedValue load(double load)
-        {
+        public VersionedValue load(double load) {
             return new VersionedValue(String.valueOf(load));
         }
 
-        public VersionedValue schema(UUID newVersion)
-        {
+        public VersionedValue schema(UUID newVersion) {
             return new VersionedValue(newVersion.toString());
         }
 
-        public VersionedValue leaving(Collection<Token> tokens)
-        {
-            return new VersionedValue(versionString(VersionedValue.STATUS_LEAVING,
-                                                    makeTokenString(tokens)));
+        public VersionedValue leaving(Collection<Token> tokens) {
+            return new VersionedValue(versionString(VersionedValue.STATUS_LEAVING, makeTokenString(tokens)));
         }
 
-        public VersionedValue left(Collection<Token> tokens, long expireTime)
-        {
-            return new VersionedValue(versionString(VersionedValue.STATUS_LEFT,
-                                                    makeTokenString(tokens),
-                                                    Long.toString(expireTime)));
+        public VersionedValue left(Collection<Token> tokens, long expireTime) {
+            return new VersionedValue(versionString(VersionedValue.STATUS_LEFT, makeTokenString(tokens), Long.toString(expireTime)));
         }
 
-        public VersionedValue moving(Token token)
-        {
+        public VersionedValue moving(Token token) {
             return new VersionedValue(VersionedValue.STATUS_MOVING + VersionedValue.DELIMITER + partitioner.getTokenFactory().toString(token));
         }
 
-        public VersionedValue hostId(UUID hostId)
-        {
+        public VersionedValue hostId(UUID hostId) {
             return new VersionedValue(hostId.toString());
         }
 
-        public VersionedValue tokens(Collection<Token> tokens)
-        {
+        public VersionedValue tokens(Collection<Token> tokens) {
             ByteArrayOutputStream bos = new ByteArrayOutputStream();
             DataOutputStream out = new DataOutputStream(bos);
-            try
-            {
+            try {
                 TokenSerializer.serialize(partitioner, tokens, out);
-            }
-            catch (IOException e)
-            {
+            } catch (IOException e) {
                 throw new RuntimeException(e);
             }
             return new VersionedValue(new String(bos.toByteArray(), ISO_8859_1));
         }
 
-        public VersionedValue removingNonlocal(UUID hostId)
-        {
+        public VersionedValue removingNonlocal(UUID hostId) {
             return new VersionedValue(versionString(VersionedValue.REMOVING_TOKEN, hostId.toString()));
         }
 
-        public VersionedValue removedNonlocal(UUID hostId, long expireTime)
-        {
+        public VersionedValue removedNonlocal(UUID hostId, long expireTime) {
             return new VersionedValue(versionString(VersionedValue.REMOVED_TOKEN, hostId.toString(), Long.toString(expireTime)));
         }
 
-        public VersionedValue removalCoordinator(UUID hostId)
-        {
+        public VersionedValue removalCoordinator(UUID hostId) {
             return new VersionedValue(versionString(VersionedValue.REMOVAL_COORDINATOR, hostId.toString()));
         }
 
-        public VersionedValue hibernate(boolean value)
-        {
+        public VersionedValue hibernate(boolean value) {
             return new VersionedValue(VersionedValue.HIBERNATE + VersionedValue.DELIMITER + value);
         }
 
-        public VersionedValue rpcReady(boolean value)
-        {
+        public VersionedValue rpcReady(boolean value) {
             return new VersionedValue(String.valueOf(value));
         }
 
-        public VersionedValue shutdown(boolean value)
-        {
+        public VersionedValue shutdown(boolean value) {
             return new VersionedValue(VersionedValue.SHUTDOWN + VersionedValue.DELIMITER + value);
         }
 
-        public VersionedValue datacenter(String dcId)
-        {
+        public VersionedValue datacenter(String dcId) {
             return new VersionedValue(dcId);
         }
 
-        public VersionedValue rack(String rackId)
-        {
+        public VersionedValue rack(String rackId) {
             return new VersionedValue(rackId);
         }
 
-        public VersionedValue rpcaddress(InetAddress endpoint)
-        {
+        public VersionedValue rpcaddress(InetAddress endpoint) {
             return new VersionedValue(endpoint.getHostAddress());
         }
 
-        public VersionedValue releaseVersion()
-        {
+        public VersionedValue releaseVersion() {
             return new VersionedValue(FBUtilities.getReleaseVersionString());
         }
 
-        public VersionedValue networkVersion()
-        {
+        public VersionedValue networkVersion() {
             return new VersionedValue(String.valueOf(MessagingService.current_version));
         }
 
-        public VersionedValue internalIP(String private_ip)
-        {
+        public VersionedValue internalIP(String private_ip) {
             return new VersionedValue(private_ip);
         }
 
-        public VersionedValue severity(double value)
-        {
+        public VersionedValue severity(double value) {
             return new VersionedValue(String.valueOf(value));
         }
     }
 
-    private static class VersionedValueSerializer implements IVersionedSerializer<VersionedValue>
-    {
-        public void serialize(VersionedValue value, DataOutputPlus out, int version) throws IOException
-        {
+    private static class VersionedValueSerializer implements IVersionedSerializer<VersionedValue> {
+
+        private java.lang.ThreadLocal<Boolean> isSerializeLoggingActive = new ThreadLocal<Boolean>() {
+
+            @Override
+            protected Boolean initialValue() {
+                return false;
+            }
+        };
+
+        public void serialize(VersionedValue value, DataOutputPlus out, int version) throws IOException {
             out.writeUTF(outValue(value, version));
+            if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+                if (!isSerializeLoggingActive.get()) {
+                    isSerializeLoggingActive.set(true);
+                    serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(value, value.version, "value.version").toJsonString());
+                    isSerializeLoggingActive.set(false);
+                }
+            }
             out.writeInt(value.version);
         }
 
-        private String outValue(VersionedValue value, int version)
-        {
+        private String outValue(VersionedValue value, int version) {
+            if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+                if (!isSerializeLoggingActive.get()) {
+                    isSerializeLoggingActive.set(true);
+                    serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(value, value.value, "value.value").toJsonString());
+                    isSerializeLoggingActive.set(false);
+                }
+            }
             return value.value;
         }
 
-        public VersionedValue deserialize(DataInput in, int version) throws IOException
-        {
+        public VersionedValue deserialize(DataInput in, int version) throws IOException {
             String value = in.readUTF();
             int valVersion = in.readInt();
             return new VersionedValue(value, valVersion);
         }
 
-        public long serializedSize(VersionedValue value, int version)
-        {
+        public long serializedSize(VersionedValue value, int version) {
             return TypeSizes.NATIVE.sizeof(outValue(value, version)) + TypeSizes.NATIVE.sizeof(value.version);
         }
     }
 }
-

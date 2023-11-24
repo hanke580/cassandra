@@ -15,40 +15,50 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
 package org.apache.cassandra.serializers;
 
 import org.apache.cassandra.utils.ByteBufferUtil;
-
 import java.nio.ByteBuffer;
 
-public class ShortSerializer implements TypeSerializer<Short>
-{
+public class ShortSerializer implements TypeSerializer<Short> {
+
+    private static final org.slf4j.Logger serialize_logger = org.slf4j.LoggerFactory.getLogger("serialize.logger");
+
+    private java.lang.ThreadLocal<Boolean> isSerializeLoggingActive = new ThreadLocal<Boolean>() {
+
+        @Override
+        protected Boolean initialValue() {
+            return false;
+        }
+    };
+
     public static final ShortSerializer instance = new ShortSerializer();
 
-    public Short deserialize(ByteBuffer bytes)
-    {
+    public Short deserialize(ByteBuffer bytes) {
         return bytes.remaining() == 0 ? null : ByteBufferUtil.toShort(bytes);
     }
 
-    public ByteBuffer serialize(Short value)
-    {
+    public ByteBuffer serialize(Short value) {
+        if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+            if (!isSerializeLoggingActive.get()) {
+                isSerializeLoggingActive.set(true);
+                serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(org.apache.cassandra.utils.ByteBufferUtil.class, org.apache.cassandra.utils.ByteBufferUtil.EMPTY_BYTE_BUFFER, "org.apache.cassandra.utils.ByteBufferUtil.EMPTY_BYTE_BUFFER").toJsonString());
+                isSerializeLoggingActive.set(false);
+            }
+        }
         return value == null ? ByteBufferUtil.EMPTY_BYTE_BUFFER : ByteBufferUtil.bytes(value.shortValue());
     }
 
-    public void validate(ByteBuffer bytes) throws MarshalException
-    {
+    public void validate(ByteBuffer bytes) throws MarshalException {
         if (bytes.remaining() != 2)
             throw new MarshalException(String.format("Expected 2 bytes for a smallint (%d)", bytes.remaining()));
     }
 
-    public String toString(Short value)
-    {
+    public String toString(Short value) {
         return value == null ? "" : String.valueOf(value);
     }
 
-    public Class<Short> getType()
-    {
+    public Class<Short> getType() {
         return Short.class;
     }
 }

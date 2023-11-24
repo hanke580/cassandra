@@ -21,62 +21,60 @@ import java.util.HashMap;
 import java.util.Map;
 import java.util.UUID;
 import javax.management.openmbean.*;
-
 import com.google.common.base.Throwables;
-
 import org.apache.cassandra.streaming.StreamSummary;
 
 /**
  */
-public class StreamSummaryCompositeData
-{
-    private static final String[] ITEM_NAMES = new String[]{"cfId",
-                                                            "files",
-                                                            "totalSize"};
-    private static final String[] ITEM_DESCS = new String[]{"ColumnFamilu ID",
-                                                            "Number of files",
-                                                            "Total bytes of the files"};
-    private static final OpenType<?>[] ITEM_TYPES = new OpenType[]{SimpleType.STRING,
-                                                                   SimpleType.INTEGER,
-                                                                   SimpleType.LONG};
+public class StreamSummaryCompositeData {
+
+    private static java.lang.ThreadLocal<Boolean> isSerializeLoggingActiveStatic = new ThreadLocal<Boolean>() {
+
+        @Override
+        protected Boolean initialValue() {
+            return false;
+        }
+    };
+
+    private static final org.slf4j.Logger serialize_logger = org.slf4j.LoggerFactory.getLogger("serialize.logger");
+
+    private static final String[] ITEM_NAMES = new String[] { "cfId", "files", "totalSize" };
+
+    private static final String[] ITEM_DESCS = new String[] { "ColumnFamilu ID", "Number of files", "Total bytes of the files" };
+
+    private static final OpenType<?>[] ITEM_TYPES = new OpenType[] { SimpleType.STRING, SimpleType.INTEGER, SimpleType.LONG };
 
     public static final CompositeType COMPOSITE_TYPE;
-    static  {
-        try
-        {
-            COMPOSITE_TYPE = new CompositeType(StreamSummary.class.getName(),
-                                               "StreamSummary",
-                                               ITEM_NAMES,
-                                               ITEM_DESCS,
-                                               ITEM_TYPES);
-        }
-        catch (OpenDataException e)
-        {
+
+    static {
+        try {
+            COMPOSITE_TYPE = new CompositeType(StreamSummary.class.getName(), "StreamSummary", ITEM_NAMES, ITEM_DESCS, ITEM_TYPES);
+        } catch (OpenDataException e) {
             throw Throwables.propagate(e);
         }
     }
 
-    public static CompositeData toCompositeData(StreamSummary streamSummary)
-    {
+    public static CompositeData toCompositeData(StreamSummary streamSummary) {
         Map<String, Object> valueMap = new HashMap<>();
         valueMap.put(ITEM_NAMES[0], streamSummary.cfId.toString());
+        if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+            if (!isSerializeLoggingActiveStatic.get()) {
+                isSerializeLoggingActiveStatic.set(true);
+                serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(streamSummary, streamSummary.files, "streamSummary.files").toJsonString());
+                isSerializeLoggingActiveStatic.set(false);
+            }
+        }
         valueMap.put(ITEM_NAMES[1], streamSummary.files);
         valueMap.put(ITEM_NAMES[2], streamSummary.totalSize);
-        try
-        {
+        try {
             return new CompositeDataSupport(COMPOSITE_TYPE, valueMap);
-        }
-        catch (OpenDataException e)
-        {
+        } catch (OpenDataException e) {
             throw Throwables.propagate(e);
         }
     }
 
-    public static StreamSummary fromCompositeData(CompositeData cd)
-    {
+    public static StreamSummary fromCompositeData(CompositeData cd) {
         Object[] values = cd.getAll(ITEM_NAMES);
-        return new StreamSummary(UUID.fromString((String) values[0]),
-                                 (int) values[1],
-                                 (long) values[2]);
+        return new StreamSummary(UUID.fromString((String) values[0]), (int) values[1], (long) values[2]);
     }
 }

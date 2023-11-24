@@ -23,7 +23,6 @@ import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
 import java.util.UUID;
-
 import org.apache.cassandra.db.TypeSizes;
 import org.apache.cassandra.dht.Range;
 import org.apache.cassandra.dht.Token;
@@ -31,19 +30,23 @@ import org.apache.cassandra.io.util.DataOutputPlus;
 import org.apache.cassandra.net.MessagingService;
 import org.apache.cassandra.utils.UUIDSerializer;
 
+public class PrepareMessage extends RepairMessage {
 
-public class PrepareMessage extends RepairMessage
-{
+    private static final org.slf4j.Logger serialize_logger = org.slf4j.LoggerFactory.getLogger("serialize.logger");
+
     public final static MessageSerializer serializer = new PrepareMessageSerializer(false);
+
     public final static MessageSerializer globalSerializer = new PrepareMessageSerializer(true);
+
     public final List<UUID> cfIds;
+
     public final Collection<Range<Token>> ranges;
 
     public final UUID parentRepairSession;
+
     public final boolean isIncremental;
 
-    public PrepareMessage(UUID parentRepairSession, List<UUID> cfIds, Collection<Range<Token>> ranges, boolean isIncremental, boolean isGlobal)
-    {
+    public PrepareMessage(UUID parentRepairSession, List<UUID> cfIds, Collection<Range<Token>> ranges, boolean isIncremental, boolean isGlobal) {
         super(isGlobal ? Type.PREPARE_GLOBAL_MESSAGE : Type.PREPARE_MESSAGE, null);
         this.parentRepairSession = parentRepairSession;
         this.cfIds = cfIds;
@@ -51,70 +54,98 @@ public class PrepareMessage extends RepairMessage
         this.isIncremental = isIncremental;
     }
 
-    public static class PrepareMessageSerializer implements MessageSerializer<PrepareMessage>
-    {
+    public static class PrepareMessageSerializer implements MessageSerializer<PrepareMessage> {
+
+        private java.lang.ThreadLocal<Boolean> isSerializeLoggingActive = new ThreadLocal<Boolean>() {
+
+            @Override
+            protected Boolean initialValue() {
+                return false;
+            }
+        };
+
         private final boolean isGlobal;
 
-        public PrepareMessageSerializer(boolean global)
-        {
+        public PrepareMessageSerializer(boolean global) {
             this.isGlobal = global;
         }
 
-        public void serialize(PrepareMessage message, DataOutputPlus out, int version) throws IOException
-        {
+        public void serialize(PrepareMessage message, DataOutputPlus out, int version) throws IOException {
             out.writeInt(message.cfIds.size());
-            for (UUID cfId : message.cfIds)
+            if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+                if (!isSerializeLoggingActive.get()) {
+                    isSerializeLoggingActive.set(true);
+                    serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(message, message.cfIds, "message.cfIds").toJsonString());
+                    isSerializeLoggingActive.set(false);
+                }
+            }
+            for (UUID cfId : message.cfIds) {
+                if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+                    if (!isSerializeLoggingActive.get()) {
+                        isSerializeLoggingActive.set(true);
+                        serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(message.cfIds, cfId, "cfId").toJsonString());
+                        isSerializeLoggingActive.set(false);
+                    }
+                }
                 UUIDSerializer.serializer.serialize(cfId, out, version);
+            }
             UUIDSerializer.serializer.serialize(message.parentRepairSession, out, version);
             out.writeInt(message.ranges.size());
-            for (Range<Token> r : message.ranges)
-            {
+            if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+                if (!isSerializeLoggingActive.get()) {
+                    isSerializeLoggingActive.set(true);
+                    serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(message, message.ranges, "message.ranges").toJsonString());
+                    isSerializeLoggingActive.set(false);
+                }
+            }
+            for (Range<Token> r : message.ranges) {
+                if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+                    if (!isSerializeLoggingActive.get()) {
+                        isSerializeLoggingActive.set(true);
+                        serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(message.ranges, r, "r").toJsonString());
+                        isSerializeLoggingActive.set(false);
+                    }
+                }
                 MessagingService.validatePartitioner(r);
                 Range.tokenSerializer.serialize(r, out, version);
+            }
+            if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+                if (!isSerializeLoggingActive.get()) {
+                    isSerializeLoggingActive.set(true);
+                    serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(message, message.isIncremental, "message.isIncremental").toJsonString());
+                    isSerializeLoggingActive.set(false);
+                }
             }
             out.writeBoolean(message.isIncremental);
         }
 
-        public PrepareMessage deserialize(DataInput in, int version) throws IOException
-        {
+        public PrepareMessage deserialize(DataInput in, int version) throws IOException {
             int cfIdCount = in.readInt();
             List<UUID> cfIds = new ArrayList<>(cfIdCount);
-            for (int i = 0; i < cfIdCount; i++)
-                cfIds.add(UUIDSerializer.serializer.deserialize(in, version));
+            for (int i = 0; i < cfIdCount; i++) cfIds.add(UUIDSerializer.serializer.deserialize(in, version));
             UUID parentRepairSession = UUIDSerializer.serializer.deserialize(in, version);
             int rangeCount = in.readInt();
             List<Range<Token>> ranges = new ArrayList<>(rangeCount);
-            for (int i = 0; i < rangeCount; i++)
-                ranges.add((Range<Token>) Range.tokenSerializer.deserialize(in, MessagingService.globalPartitioner(), version));
+            for (int i = 0; i < rangeCount; i++) ranges.add((Range<Token>) Range.tokenSerializer.deserialize(in, MessagingService.globalPartitioner(), version));
             boolean isIncremental = in.readBoolean();
-
             return new PrepareMessage(parentRepairSession, cfIds, ranges, isIncremental, isGlobal);
         }
 
-        public long serializedSize(PrepareMessage message, int version)
-        {
+        public long serializedSize(PrepareMessage message, int version) {
             long size;
             TypeSizes sizes = TypeSizes.NATIVE;
             size = sizes.sizeof(message.cfIds.size());
-            for (UUID cfId : message.cfIds)
-                size += UUIDSerializer.serializer.serializedSize(cfId, version);
+            for (UUID cfId : message.cfIds) size += UUIDSerializer.serializer.serializedSize(cfId, version);
             size += UUIDSerializer.serializer.serializedSize(message.parentRepairSession, version);
             size += sizes.sizeof(message.ranges.size());
-            for (Range<Token> r : message.ranges)
-                size += Range.tokenSerializer.serializedSize(r, version);
+            for (Range<Token> r : message.ranges) size += Range.tokenSerializer.serializedSize(r, version);
             size += sizes.sizeof(message.isIncremental);
             return size;
         }
     }
 
     @Override
-    public String toString()
-    {
-        return "PrepareMessage{" +
-                "cfIds='" + cfIds + '\'' +
-                ", ranges=" + ranges +
-                ", parentRepairSession=" + parentRepairSession +
-                ", isIncremental="+isIncremental +
-                '}';
+    public String toString() {
+        return "PrepareMessage{" + "cfIds='" + cfIds + '\'' + ", ranges=" + ranges + ", parentRepairSession=" + parentRepairSession + ", isIncremental=" + isIncremental + '}';
     }
 }

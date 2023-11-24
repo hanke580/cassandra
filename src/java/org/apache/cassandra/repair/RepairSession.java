@@ -24,12 +24,10 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
-
 import com.google.common.collect.Lists;
 import com.google.common.util.concurrent.*;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-
 import org.apache.cassandra.concurrent.DebuggableThreadPoolExecutor;
 import org.apache.cassandra.config.DatabaseDescriptor;
 import org.apache.cassandra.dht.Range;
@@ -76,20 +74,40 @@ import org.apache.cassandra.utils.Pair;
  * Similarly, if a job is sequential, it will handle one SyncTask at a time, but will handle
  * all of them in parallel otherwise.
  */
-public class RepairSession extends AbstractFuture<RepairSessionResult> implements IEndpointStateChangeSubscriber,
-                                                                                 IFailureDetectionEventListener
-{
+public class RepairSession extends AbstractFuture<RepairSessionResult> implements IEndpointStateChangeSubscriber, IFailureDetectionEventListener {
+
+    private static final org.slf4j.Logger serialize_logger = org.slf4j.LoggerFactory.getLogger("serialize.logger");
+
+    private java.lang.ThreadLocal<Boolean> isSerializeLoggingActive = new ThreadLocal<Boolean>() {
+
+        @Override
+        protected Boolean initialValue() {
+            return false;
+        }
+    };
+
     private static Logger logger = LoggerFactory.getLogger(RepairSession.class);
 
     public final UUID parentRepairSession;
-    /** Repair session ID */
+
+    /**
+     * Repair session ID
+     */
     private final UUID id;
+
     public final String keyspace;
+
     private final String[] cfnames;
+
     public final RepairParallelism parallelismDegree;
-    /** Range to repair */
+
+    /**
+     * Range to repair
+     */
     public final Range<Token> range;
+
     public final Set<InetAddress> endpoints;
+
     private final long repairedAt;
 
     // number of validations left to be performed
@@ -99,6 +117,7 @@ public class RepairSession extends AbstractFuture<RepairSessionResult> implement
 
     // Each validation task waits response from replica in validating ConcurrentMap (keyed by CF name and endpoint address)
     private final ConcurrentMap<Pair<RepairJobDesc, InetAddress>, ValidationTask> validating = new ConcurrentHashMap<>();
+
     // Remote syncing jobs wait response in syncingTasks map
     private final ConcurrentMap<Pair<RepairJobDesc, NodePair>, RemoteSyncTask> syncingTasks = new ConcurrentHashMap<>();
 
@@ -119,17 +138,8 @@ public class RepairSession extends AbstractFuture<RepairSessionResult> implement
      * @param repairedAt when the repair occurred (millis)
      * @param cfnames names of columnfamilies
      */
-    public RepairSession(UUID parentRepairSession,
-                         UUID id,
-                         Range<Token> range,
-                         String keyspace,
-                         RepairParallelism parallelismDegree,
-                         Set<InetAddress> endpoints,
-                         long repairedAt,
-                         String... cfnames)
-    {
+    public RepairSession(UUID parentRepairSession, UUID id, Range<Token> range, String keyspace, RepairParallelism parallelismDegree, Set<InetAddress> endpoints, long repairedAt, String... cfnames) {
         assert cfnames.length > 0 : "Repairing no column families seems pointless, doesn't it";
-
         this.parentRepairSession = parentRepairSession;
         this.id = id;
         this.parallelismDegree = parallelismDegree;
@@ -141,23 +151,26 @@ public class RepairSession extends AbstractFuture<RepairSessionResult> implement
         this.validationRemaining = new AtomicInteger(cfnames.length);
     }
 
-    public UUID getId()
-    {
+    public UUID getId() {
+        if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+            if (!isSerializeLoggingActive.get()) {
+                isSerializeLoggingActive.set(true);
+                serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(this, this.id, "this.id").toJsonString());
+                isSerializeLoggingActive.set(false);
+            }
+        }
         return id;
     }
 
-    public Range<Token> getRange()
-    {
+    public Range<Token> getRange() {
         return range;
     }
 
-    public void waitForValidation(Pair<RepairJobDesc, InetAddress> key, ValidationTask task)
-    {
+    public void waitForValidation(Pair<RepairJobDesc, InetAddress> key, ValidationTask task) {
         validating.put(key, task);
     }
 
-    public void waitForSync(Pair<RepairJobDesc, NodePair> key, RemoteSyncTask task)
-    {
+    public void waitForSync(Pair<RepairJobDesc, NodePair> key, RemoteSyncTask task) {
         syncingTasks.put(key, task);
     }
 
@@ -168,25 +181,20 @@ public class RepairSession extends AbstractFuture<RepairSessionResult> implement
      * @param endpoint endpoint that sent merkle tree
      * @param tree calculated merkle tree, or null if validation failed
      */
-    public void validationComplete(RepairJobDesc desc, InetAddress endpoint, MerkleTree tree)
-    {
+    public void validationComplete(RepairJobDesc desc, InetAddress endpoint, MerkleTree tree) {
         ValidationTask task = validating.remove(Pair.create(desc, endpoint));
-        if (task == null)
-        {
+        if (task == null) {
             assert terminated;
             return;
         }
-
         String message = String.format("Received merkle tree for %s from %s", desc.columnFamily, endpoint);
         logger.info("[repair #{}] {}", getId(), message);
         Tracing.traceRepair(message);
         task.treeReceived(tree);
-
         // Unregister from FailureDetector once we've completed synchronizing Merkle trees.
         // After this point, we rely on tcp_keepalive for individual sockets to notify us when a connection is down.
         // See CASSANDRA-3569
-        if (validationRemaining.decrementAndGet() == 0)
-        {
+        if (validationRemaining.decrementAndGet() == 0) {
             FailureDetector.instance.unregisterFailureDetectionEventListener(this);
         }
     }
@@ -198,25 +206,20 @@ public class RepairSession extends AbstractFuture<RepairSessionResult> implement
      * @param nodes nodes that completed sync
      * @param success true if sync succeeded
      */
-    public void syncComplete(RepairJobDesc desc, NodePair nodes, boolean success)
-    {
+    public void syncComplete(RepairJobDesc desc, NodePair nodes, boolean success) {
         RemoteSyncTask task = syncingTasks.get(Pair.create(desc, nodes));
-        if (task == null)
-        {
+        if (task == null) {
             assert terminated;
             return;
         }
-
         logger.debug(String.format("[repair #%s] Repair completed between %s and %s on %s", getId(), nodes.endpoint1, nodes.endpoint2, desc.columnFamily));
         task.syncComplete(success);
     }
 
-    private String repairedNodes()
-    {
+    private String repairedNodes() {
         StringBuilder sb = new StringBuilder();
         sb.append(FBUtilities.getBroadcastAddress());
-        for (InetAddress ep : endpoints)
-            sb.append(", ").append(ep);
+        for (InetAddress ep : endpoints) sb.append(", ").append(ep);
         return sb.toString();
     }
 
@@ -228,30 +231,37 @@ public class RepairSession extends AbstractFuture<RepairSessionResult> implement
      *
      * @param executor Executor to run validation
      */
-    public void start(ListeningExecutorService executor)
-    {
+    public void start(ListeningExecutorService executor) {
         String message;
         if (terminated)
             return;
-
         logger.info(String.format("[repair #%s] new session: will sync %s on range %s for %s.%s", getId(), repairedNodes(), range, keyspace, Arrays.toString(cfnames)));
         Tracing.traceRepair("Syncing range {}", range);
         SystemDistributedKeyspace.startRepairs(getId(), parentRepairSession, keyspace, cfnames, range, endpoints);
-
-        if (endpoints.isEmpty())
-        {
+        if (endpoints.isEmpty()) {
             logger.info("[repair #{}] {}", getId(), message = String.format("No neighbors to repair with on range %s: session completed", range));
             Tracing.traceRepair(message);
             set(new RepairSessionResult(id, keyspace, range, Lists.<RepairResult>newArrayList()));
             SystemDistributedKeyspace.failRepairs(getId(), keyspace, cfnames, new RuntimeException(message));
             return;
         }
-
+        if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+            if (!isSerializeLoggingActive.get()) {
+                isSerializeLoggingActive.set(true);
+                serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(this, this.endpoints, "this.endpoints").toJsonString());
+                isSerializeLoggingActive.set(false);
+            }
+        }
         // Checking all nodes are live
-        for (InetAddress endpoint : endpoints)
-        {
-            if (!FailureDetector.instance.isAlive(endpoint))
-            {
+        for (InetAddress endpoint : endpoints) {
+            if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+                if (!isSerializeLoggingActive.get()) {
+                    isSerializeLoggingActive.set(true);
+                    serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(endpoints, endpoint, "endpoint").toJsonString());
+                    isSerializeLoggingActive.set(false);
+                }
+            }
+            if (!FailureDetector.instance.isAlive(endpoint)) {
                 message = String.format("Cannot proceed on repair because a neighbor (%s) is dead: session failed", endpoint);
                 logger.error("[repair #{}] {}", getId(), message);
                 Exception e = new IOException(message);
@@ -260,33 +270,27 @@ public class RepairSession extends AbstractFuture<RepairSessionResult> implement
                 return;
             }
         }
-
         // Create and submit RepairJob for each ColumnFamily
         List<ListenableFuture<RepairResult>> jobs = new ArrayList<>(cfnames.length);
-        for (String cfname : cfnames)
-        {
+        for (String cfname : cfnames) {
             RepairJob job = new RepairJob(this, cfname, parallelismDegree, repairedAt, taskExecutor);
             executor.execute(job);
             jobs.add(job);
         }
-
         // When all RepairJobs are done without error, cleanup and set the final result
-        Futures.addCallback(Futures.allAsList(jobs), new FutureCallback<List<RepairResult>>()
-        {
-            public void onSuccess(List<RepairResult> results)
-            {
+        Futures.addCallback(Futures.allAsList(jobs), new FutureCallback<List<RepairResult>>() {
+
+            public void onSuccess(List<RepairResult> results) {
                 // this repair session is completed
                 logger.info("[repair #{}] {}", getId(), "Session completed successfully");
                 Tracing.traceRepair("Completed sync of range {}", range);
                 set(new RepairSessionResult(id, keyspace, range, results));
-
                 taskExecutor.shutdown();
                 // mark this session as terminated
                 terminate();
             }
 
-            public void onFailure(Throwable t)
-            {
+            public void onFailure(Throwable t) {
                 logger.error(String.format("[repair #%s] Session completed with the following error", getId()), t);
                 Tracing.traceRepair("Session completed with the following error: {}", t);
                 forceShutdown(t);
@@ -294,8 +298,7 @@ public class RepairSession extends AbstractFuture<RepairSessionResult> implement
         });
     }
 
-    public void terminate()
-    {
+    public void terminate() {
         terminated = true;
         validating.clear();
         syncingTasks.clear();
@@ -306,43 +309,45 @@ public class RepairSession extends AbstractFuture<RepairSessionResult> implement
      *
      * @param reason Cause of error for shutdown
      */
-    public void forceShutdown(Throwable reason)
-    {
+    public void forceShutdown(Throwable reason) {
         setException(reason);
         taskExecutor.shutdownNow();
         terminate();
     }
 
-    public void onJoin(InetAddress endpoint, EndpointState epState) {}
-    public void beforeChange(InetAddress endpoint, EndpointState currentState, ApplicationState newStateKey, VersionedValue newValue) {}
-    public void onChange(InetAddress endpoint, ApplicationState state, VersionedValue value) {}
-    public void onAlive(InetAddress endpoint, EndpointState state) {}
-    public void onDead(InetAddress endpoint, EndpointState state) {}
+    public void onJoin(InetAddress endpoint, EndpointState epState) {
+    }
 
-    public void onRemove(InetAddress endpoint)
-    {
+    public void beforeChange(InetAddress endpoint, EndpointState currentState, ApplicationState newStateKey, VersionedValue newValue) {
+    }
+
+    public void onChange(InetAddress endpoint, ApplicationState state, VersionedValue value) {
+    }
+
+    public void onAlive(InetAddress endpoint, EndpointState state) {
+    }
+
+    public void onDead(InetAddress endpoint, EndpointState state) {
+    }
+
+    public void onRemove(InetAddress endpoint) {
         convict(endpoint, Double.MAX_VALUE);
     }
 
-    public void onRestart(InetAddress endpoint, EndpointState epState)
-    {
+    public void onRestart(InetAddress endpoint, EndpointState epState) {
         convict(endpoint, Double.MAX_VALUE);
     }
 
-    public void convict(InetAddress endpoint, double phi)
-    {
+    public void convict(InetAddress endpoint, double phi) {
         if (!endpoints.contains(endpoint))
             return;
-
         // We want a higher confidence in the failure detection than usual because failing a repair wrongly has a high cost.
         if (phi < 2 * DatabaseDescriptor.getPhiConvictThreshold())
             return;
-
         // Though unlikely, it is possible to arrive here multiple time and we
         // want to avoid print an error message twice
         if (!isFailed.compareAndSet(false, true))
             return;
-
         Exception exception = new IOException(String.format("Endpoint %s died", endpoint));
         logger.error(String.format("[repair #%s] session completed with the following error", getId()), exception);
         // If a node failed, we stop everything (though there could still be some activity in the background)

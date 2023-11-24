@@ -19,9 +19,7 @@ package org.apache.cassandra.io.sstable;
 
 import java.io.*;
 import java.util.Iterator;
-
 import com.google.common.collect.AbstractIterator;
-
 import org.apache.cassandra.config.CFMetaData;
 import org.apache.cassandra.config.DatabaseDescriptor;
 import org.apache.cassandra.db.*;
@@ -33,15 +31,30 @@ import org.apache.cassandra.io.util.FileDataInput;
 import org.apache.cassandra.io.util.RandomAccessReader;
 import org.apache.cassandra.serializers.MarshalException;
 
-    public class SSTableIdentityIterator implements Comparable<SSTableIdentityIterator>, OnDiskAtomIterator
-{
+public class SSTableIdentityIterator implements Comparable<SSTableIdentityIterator>, OnDiskAtomIterator {
+
+    private static final org.slf4j.Logger serialize_logger = org.slf4j.LoggerFactory.getLogger("serialize.logger");
+
+    private java.lang.ThreadLocal<Boolean> isSerializeLoggingActive = new ThreadLocal<Boolean>() {
+
+        @Override
+        protected Boolean initialValue() {
+            return false;
+        }
+    };
+
     private final DecoratedKey key;
+
     private final DataInput in;
+
     public final ColumnSerializer.Flag flag;
 
     private final ColumnFamily columnFamily;
+
     private final Iterator<OnDiskAtom> atomIterator;
+
     private final boolean validateColumns;
+
     private final String filename;
 
     // Not every SSTableIdentifyIterator is attached to a sstable, so this can be null.
@@ -53,8 +66,7 @@ import org.apache.cassandra.serializers.MarshalException;
      * @param file Reading using this file.
      * @param key Key of this row.
      */
-    public SSTableIdentityIterator(SSTableReader sstable, RandomAccessReader file, DecoratedKey key)
-    {
+    public SSTableIdentityIterator(SSTableReader sstable, RandomAccessReader file, DecoratedKey key) {
         this(sstable, file, key, false);
     }
 
@@ -65,63 +77,43 @@ import org.apache.cassandra.serializers.MarshalException;
      * @param key Key of this row.
      * @param checkData if true, do its best to deserialize and check the coherence of row data
      */
-    public SSTableIdentityIterator(SSTableReader sstable, RandomAccessReader file, DecoratedKey key, boolean checkData)
-    {
+    public SSTableIdentityIterator(SSTableReader sstable, RandomAccessReader file, DecoratedKey key, boolean checkData) {
         this(sstable.metadata, file, file.getPath(), key, checkData, sstable, ColumnSerializer.Flag.LOCAL);
     }
 
     /**
      * Used only by scrubber to solve problems with data written after the END_OF_ROW marker. Iterates atoms for the given dataSize only and does not accept an END_OF_ROW marker.
      */
-    public static SSTableIdentityIterator createFragmentIterator(SSTableReader sstable, final RandomAccessReader file, DecoratedKey key, long dataSize, boolean checkData)
-    {
+    public static SSTableIdentityIterator createFragmentIterator(SSTableReader sstable, final RandomAccessReader file, DecoratedKey key, long dataSize, boolean checkData) {
         final ColumnSerializer.Flag flag = ColumnSerializer.Flag.LOCAL;
         final CellNameType type = sstable.metadata.comparator;
         final int expireBefore = (int) (System.currentTimeMillis() / 1000);
         final Version version = sstable.descriptor.version;
         final long dataEnd = file.getFilePointer() + dataSize;
-        return new SSTableIdentityIterator(sstable.metadata, file, file.getPath(), key, checkData, sstable, flag, DeletionTime.LIVE,
-                                           new AbstractIterator<OnDiskAtom>()
-                                                   {
-                                                       protected OnDiskAtom computeNext()
-                                                       {
-                                                           if (file.getFilePointer() >= dataEnd)
-                                                               return endOfData();
-                                                           try
-                                                           {
-                                                               return type.onDiskAtomSerializer().deserializeFromSSTable(file, flag, expireBefore, version);
-                                                           }
-                                                           catch (IOException e)
-                                                           {
-                                                               throw new IOError(e);
-                                                           }
-                                                       }
-                                                   });
+        return new SSTableIdentityIterator(sstable.metadata, file, file.getPath(), key, checkData, sstable, flag, DeletionTime.LIVE, new AbstractIterator<OnDiskAtom>() {
+
+            protected OnDiskAtom computeNext() {
+                if (file.getFilePointer() >= dataEnd)
+                    return endOfData();
+                try {
+                    return type.onDiskAtomSerializer().deserializeFromSSTable(file, flag, expireBefore, version);
+                } catch (IOException e) {
+                    throw new IOError(e);
+                }
+            }
+        });
     }
 
     // sstable may be null *if* checkData is false
     // If it is null, we assume the data is in the current file format
-    private SSTableIdentityIterator(CFMetaData metadata,
-                                    FileDataInput in,
-                                    String filename,
-                                    DecoratedKey key,
-                                    boolean checkData,
-                                    SSTableReader sstable,
-                                    ColumnSerializer.Flag flag)
-    {
-        this(metadata, in, filename, key, checkData, sstable, flag, readDeletionTime(in, sstable, filename),
-             metadata.getOnDiskIterator(in, flag, (int) (System.currentTimeMillis() / 1000),
-                                        sstable == null ? DatabaseDescriptor.getSSTableFormat().info.getLatestVersion() : sstable.descriptor.version));
+    private SSTableIdentityIterator(CFMetaData metadata, FileDataInput in, String filename, DecoratedKey key, boolean checkData, SSTableReader sstable, ColumnSerializer.Flag flag) {
+        this(metadata, in, filename, key, checkData, sstable, flag, readDeletionTime(in, sstable, filename), metadata.getOnDiskIterator(in, flag, (int) (System.currentTimeMillis() / 1000), sstable == null ? DatabaseDescriptor.getSSTableFormat().info.getLatestVersion() : sstable.descriptor.version));
     }
 
-    private static DeletionTime readDeletionTime(DataInput in, SSTableReader sstable, String filename)
-    {
-        try
-        {
+    private static DeletionTime readDeletionTime(DataInput in, SSTableReader sstable, String filename) {
+        try {
             return DeletionTime.serializer.deserialize(in);
-        }
-        catch (IOException e)
-        {
+        } catch (IOException e) {
             if (sstable != null)
                 sstable.markSuspect();
             throw new CorruptSSTableException(e, filename);
@@ -130,16 +122,7 @@ import org.apache.cassandra.serializers.MarshalException;
 
     // sstable may be null *if* checkData is false
     // If it is null, we assume the data is in the current file format
-    private SSTableIdentityIterator(CFMetaData metadata,
-                                    DataInput in,
-                                    String filename,
-                                    DecoratedKey key,
-                                    boolean checkData,
-                                    SSTableReader sstable,
-                                    ColumnSerializer.Flag flag,
-                                    DeletionTime deletion,
-                                    Iterator<OnDiskAtom> atomIterator)
-    {
+    private SSTableIdentityIterator(CFMetaData metadata, DataInput in, String filename, DecoratedKey key, boolean checkData, SSTableReader sstable, ColumnSerializer.Flag flag, DeletionTime deletion, Iterator<OnDiskAtom> atomIterator) {
         assert !checkData || (sstable != null);
         this.in = in;
         this.filename = filename;
@@ -152,79 +135,73 @@ import org.apache.cassandra.serializers.MarshalException;
         this.atomIterator = atomIterator;
     }
 
-    public DecoratedKey getKey()
-    {
+    public DecoratedKey getKey() {
+        if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+            if (!isSerializeLoggingActive.get()) {
+                isSerializeLoggingActive.set(true);
+                serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(this, this.key, "this.key").toJsonString());
+                isSerializeLoggingActive.set(false);
+            }
+        }
         return key;
     }
 
-    public ColumnFamily getColumnFamily()
-    {
+    public ColumnFamily getColumnFamily() {
         return columnFamily;
     }
 
-    public boolean hasNext()
-    {
-        try
-        {
+    public boolean hasNext() {
+        try {
             return atomIterator.hasNext();
-        }
-        catch (IOError e)
-        {
+        } catch (IOError e) {
             // catch here b/c atomIterator is an AbstractIterator; hasNext reads the value
-            if (e.getCause() instanceof IOException)
-            {
+            if (e.getCause() instanceof IOException) {
                 if (sstable != null)
                     sstable.markSuspect();
-                throw new CorruptSSTableException((IOException)e.getCause(), filename);
-            }
-            else
-            {
+                throw new CorruptSSTableException((IOException) e.getCause(), filename);
+            } else {
                 throw e;
             }
         }
     }
 
-    public OnDiskAtom next()
-    {
-        try
-        {
+    public OnDiskAtom next() {
+        try {
+            if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+                if (!isSerializeLoggingActive.get()) {
+                    isSerializeLoggingActive.set(true);
+                    serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(this, this.atomIterator, "this.atomIterator").toJsonString());
+                    isSerializeLoggingActive.set(false);
+                }
+            }
             OnDiskAtom atom = atomIterator.next();
             if (validateColumns)
                 atom.validateFields(columnFamily.metadata());
             return atom;
-        }
-        catch (MarshalException me)
-        {
+        } catch (MarshalException me) {
             throw new CorruptSSTableException(me, filename);
         }
     }
 
-    public void remove()
-    {
+    public void remove() {
         throw new UnsupportedOperationException();
     }
 
-    public void close()
-    {
+    public void close() {
         // creator is responsible for closing file when finished
     }
 
-    public String getPath()
-    {
+    public String getPath() {
         // if input is from file, then return that path, otherwise it's from streaming
-        if (in instanceof RandomAccessReader)
-        {
+        if (in instanceof RandomAccessReader) {
             RandomAccessReader file = (RandomAccessReader) in;
             return file.getPath();
-        }
-        else
-        {
+        } else {
             throw new UnsupportedOperationException();
         }
     }
 
-    public int compareTo(SSTableIdentityIterator o)
-    {
+    public int compareTo(SSTableIdentityIterator o) {
         return key.compareTo(o.key);
     }
 }

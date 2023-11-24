@@ -24,7 +24,6 @@ import java.net.Socket;
 import java.nio.channels.SocketChannel;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
-
 import org.apache.cassandra.concurrent.Stage;
 import org.apache.cassandra.config.Config;
 import org.apache.cassandra.config.DatabaseDescriptor;
@@ -34,28 +33,40 @@ import org.apache.cassandra.metrics.ConnectionMetrics;
 import org.apache.cassandra.security.SSLFactory;
 import org.apache.cassandra.utils.FBUtilities;
 
-public class OutboundTcpConnectionPool
-{
-    public static final long LARGE_MESSAGE_THRESHOLD =
-            Long.getLong(Config.PROPERTY_PREFIX + "otcp_large_message_threshold", 1024 * 64);
+public class OutboundTcpConnectionPool {
+
+    private static final org.slf4j.Logger serialize_logger = org.slf4j.LoggerFactory.getLogger("serialize.logger");
+
+    private java.lang.ThreadLocal<Boolean> isSerializeLoggingActive = new ThreadLocal<Boolean>() {
+
+        @Override
+        protected Boolean initialValue() {
+            return false;
+        }
+    };
+
+    public static final long LARGE_MESSAGE_THRESHOLD = Long.getLong(Config.PROPERTY_PREFIX + "otcp_large_message_threshold", 1024 * 64);
 
     // pointer for the real Address.
     private final InetAddress id;
+
     private final CountDownLatch started;
+
     public final OutboundTcpConnection smallMessages;
+
     public final OutboundTcpConnection largeMessages;
+
     public final OutboundTcpConnection gossipMessages;
 
     // pointer to the reset Address.
     private InetAddress resetEndpoint;
+
     private ConnectionMetrics metrics;
 
-    OutboundTcpConnectionPool(InetAddress remoteEp)
-    {
+    OutboundTcpConnectionPool(InetAddress remoteEp) {
         id = remoteEp;
         resetEndpoint = SystemKeyspace.getPreferredIP(remoteEp);
         started = new CountDownLatch(1);
-
         smallMessages = new OutboundTcpConnection(this);
         largeMessages = new OutboundTcpConnection(this);
         gossipMessages = new OutboundTcpConnection(this);
@@ -65,25 +76,18 @@ public class OutboundTcpConnectionPool
      * returns the appropriate connection based on message type.
      * returns null if a connection could not be established.
      */
-    OutboundTcpConnection getConnection(MessageOut msg)
-    {
+    OutboundTcpConnection getConnection(MessageOut msg) {
         if (Stage.GOSSIP == msg.getStage())
             return gossipMessages;
-        return msg.payloadSize(smallMessages.getTargetVersion()) > LARGE_MESSAGE_THRESHOLD
-               ? largeMessages
-               : smallMessages;
+        return msg.payloadSize(smallMessages.getTargetVersion()) > LARGE_MESSAGE_THRESHOLD ? largeMessages : smallMessages;
     }
 
-    void reset()
-    {
-        for (OutboundTcpConnection conn : new OutboundTcpConnection[] { smallMessages, largeMessages, gossipMessages })
-            conn.closeSocket(false);
+    void reset() {
+        for (OutboundTcpConnection conn : new OutboundTcpConnection[] { smallMessages, largeMessages, gossipMessages }) conn.closeSocket(false);
     }
 
-    public void resetToNewerVersion(int version)
-    {
-        for (OutboundTcpConnection conn : new OutboundTcpConnection[] { smallMessages, largeMessages, gossipMessages })
-        {
+    public void resetToNewerVersion(int version) {
+        for (OutboundTcpConnection conn : new OutboundTcpConnection[] { smallMessages, largeMessages, gossipMessages }) {
             if (version > conn.getTargetVersion())
                 conn.softCloseSocket();
         }
@@ -94,48 +98,37 @@ public class OutboundTcpConnectionPool
      * Used by Ec2MultiRegionSnitch to force nodes in the same region to communicate over their private IPs.
      * @param remoteEP
      */
-    public void reset(InetAddress remoteEP)
-    {
+    public void reset(InetAddress remoteEP) {
         SystemKeyspace.updatePreferredIP(id, remoteEP);
         resetEndpoint = remoteEP;
-        for (OutboundTcpConnection conn : new OutboundTcpConnection[] { smallMessages, largeMessages, gossipMessages })
-            conn.softCloseSocket();
-
+        for (OutboundTcpConnection conn : new OutboundTcpConnection[] { smallMessages, largeMessages, gossipMessages }) conn.softCloseSocket();
         // release previous metrics and create new one with reset address
         metrics.release();
         metrics = new ConnectionMetrics(resetEndpoint, this);
     }
 
-    public long getTimeouts()
-    {
-       return metrics.timeouts.getCount();
+    public long getTimeouts() {
+        return metrics.timeouts.getCount();
     }
 
-
-    public void incrementTimeout()
-    {
+    public void incrementTimeout() {
         metrics.timeouts.mark();
     }
 
-    public Socket newSocket() throws IOException
-    {
+    public Socket newSocket() throws IOException {
         return newSocket(endPoint());
     }
 
     // Closing the socket will close the underlying channel.
     @SuppressWarnings("resource")
-    public static Socket newSocket(InetAddress endpoint) throws IOException
-    {
+    public static Socket newSocket(InetAddress endpoint) throws IOException {
         // zero means 'bind on any available port.'
-        if (isEncryptedChannel(endpoint))
-        {
+        if (isEncryptedChannel(endpoint)) {
             if (Config.getOutboundBindAny())
                 return SSLFactory.getSocket(DatabaseDescriptor.getServerEncryptionOptions(), endpoint, DatabaseDescriptor.getSSLStoragePort());
             else
                 return SSLFactory.getSocket(DatabaseDescriptor.getServerEncryptionOptions(), endpoint, DatabaseDescriptor.getSSLStoragePort(), FBUtilities.getLocalAddress(), 0);
-        }
-        else
-        {
+        } else {
             SocketChannel channel = SocketChannel.open();
             if (!Config.getOutboundBindAny())
                 channel.bind(new InetSocketAddress(FBUtilities.getLocalAddress(), 0));
@@ -144,20 +137,25 @@ public class OutboundTcpConnectionPool
         }
     }
 
-    public InetAddress endPoint()
-    {
+    public InetAddress endPoint() {
         if (id.equals(FBUtilities.getBroadcastAddress()))
             return FBUtilities.getLocalAddress();
+        if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+            if (!isSerializeLoggingActive.get()) {
+                isSerializeLoggingActive.set(true);
+                serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(this, this.resetEndpoint, "this.resetEndpoint").toJsonString());
+                isSerializeLoggingActive.set(false);
+            }
+        }
         return resetEndpoint;
     }
 
-    public static boolean isEncryptedChannel(InetAddress address)
-    {
+    public static boolean isEncryptedChannel(InetAddress address) {
         IEndpointSnitch snitch = DatabaseDescriptor.getEndpointSnitch();
-        switch (DatabaseDescriptor.getServerEncryptionOptions().internode_encryption)
-        {
+        switch(DatabaseDescriptor.getServerEncryptionOptions().internode_encryption) {
             case none:
-                return false; // if nothing needs to be encrypted then return immediately.
+                // if nothing needs to be encrypted then return immediately.
+                return false;
             case all:
                 break;
             case dc:
@@ -166,38 +164,29 @@ public class OutboundTcpConnectionPool
                 break;
             case rack:
                 // for rack then check if the DC's are the same.
-                if (snitch.getRack(address).equals(snitch.getRack(FBUtilities.getBroadcastAddress()))
-                        && snitch.getDatacenter(address).equals(snitch.getDatacenter(FBUtilities.getBroadcastAddress())))
+                if (snitch.getRack(address).equals(snitch.getRack(FBUtilities.getBroadcastAddress())) && snitch.getDatacenter(address).equals(snitch.getDatacenter(FBUtilities.getBroadcastAddress())))
                     return false;
                 break;
         }
         return true;
     }
 
-    public void start()
-    {
+    public void start() {
         smallMessages.start();
         largeMessages.start();
         gossipMessages.start();
-
         metrics = new ConnectionMetrics(id, this);
-
         started.countDown();
     }
 
-    public void waitForStarted()
-    {
+    public void waitForStarted() {
         if (started.getCount() == 0)
             return;
-
         boolean error = false;
-        try
-        {
+        try {
             if (!started.await(1, TimeUnit.MINUTES))
                 error = true;
-        }
-        catch (InterruptedException e)
-        {
+        } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             error = true;
         }
@@ -205,8 +194,7 @@ public class OutboundTcpConnectionPool
             throw new IllegalStateException(String.format("Connections to %s are not started!", id.getHostAddress()));
     }
 
-    public void close()
-    {
+    public void close() {
         // these null guards are simply for tests
         if (largeMessages != null)
             largeMessages.closeSocket(true);
@@ -214,7 +202,6 @@ public class OutboundTcpConnectionPool
             smallMessages.closeSocket(true);
         if (gossipMessages != null)
             gossipMessages.closeSocket(true);
-
         metrics.release();
     }
 }

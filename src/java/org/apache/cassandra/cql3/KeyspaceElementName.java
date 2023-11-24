@@ -22,8 +22,18 @@ import java.util.Locale;
 /**
  * Base class for the names of the keyspace elements (e.g. table, index ...)
  */
-abstract class KeyspaceElementName
-{
+abstract class KeyspaceElementName {
+
+    private static final org.slf4j.Logger serialize_logger = org.slf4j.LoggerFactory.getLogger("serialize.logger");
+
+    private java.lang.ThreadLocal<Boolean> isSerializeLoggingActive = new ThreadLocal<Boolean>() {
+
+        @Override
+        protected Boolean initialValue() {
+            return false;
+        }
+    };
+
     /**
      * The keyspace name as stored internally.
      */
@@ -35,8 +45,7 @@ abstract class KeyspaceElementName
      * @param ks the keyspace name
      * @param keepCase <code>true</code> if the case must be kept, <code>false</code> otherwise.
      */
-    public final void setKeyspace(String ks, boolean keepCase)
-    {
+    public final void setKeyspace(String ks, boolean keepCase) {
         ksName = toInternalName(ks, keepCase);
     }
 
@@ -44,13 +53,18 @@ abstract class KeyspaceElementName
      * Checks if the keyspace is specified.
      * @return <code>true</code> if the keyspace is specified, <code>false</code> otherwise.
      */
-    public final boolean hasKeyspace()
-    {
+    public final boolean hasKeyspace() {
         return ksName != null;
     }
 
-    public final String getKeyspace()
-    {
+    public final String getKeyspace() {
+        if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+            if (!isSerializeLoggingActive.get()) {
+                isSerializeLoggingActive.set(true);
+                serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(this, this.ksName, "this.ksName").toJsonString());
+                isSerializeLoggingActive.set(false);
+            }
+        }
         return ksName;
     }
 
@@ -61,14 +75,12 @@ abstract class KeyspaceElementName
      * @param keepCase <code>true</code> if the case must be kept, <code>false</code> otherwise.
      * @return the name used internally.
      */
-    protected static String toInternalName(String name, boolean keepCase)
-    {
+    protected static String toInternalName(String name, boolean keepCase) {
         return keepCase ? name : name.toLowerCase(Locale.US);
     }
 
     @Override
-    public String toString()
-    {
+    public String toString() {
         return hasKeyspace() ? (getKeyspace() + ".") : "";
     }
 }

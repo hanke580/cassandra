@@ -19,7 +19,6 @@ package org.apache.cassandra.utils;
 
 import java.io.DataInput;
 import java.io.IOException;
-
 import org.apache.cassandra.db.TypeSizes;
 import org.apache.cassandra.io.ISerializer;
 import org.apache.cassandra.io.util.DataOutputPlus;
@@ -27,29 +26,42 @@ import org.apache.cassandra.utils.obs.IBitSet;
 import org.apache.cassandra.utils.obs.OffHeapBitSet;
 import org.apache.cassandra.utils.obs.OpenBitSet;
 
-class BloomFilterSerializer implements ISerializer<BloomFilter>
-{
-    public void serialize(BloomFilter bf, DataOutputPlus out) throws IOException
-    {
+class BloomFilterSerializer implements ISerializer<BloomFilter> {
+
+    private static final org.slf4j.Logger serialize_logger = org.slf4j.LoggerFactory.getLogger("serialize.logger");
+
+    private java.lang.ThreadLocal<Boolean> isSerializeLoggingActive = new ThreadLocal<Boolean>() {
+
+        @Override
+        protected Boolean initialValue() {
+            return false;
+        }
+    };
+
+    public void serialize(BloomFilter bf, DataOutputPlus out) throws IOException {
+        if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+            if (!isSerializeLoggingActive.get()) {
+                isSerializeLoggingActive.set(true);
+                serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(bf, bf.hashCount, "bf.hashCount").toJsonString());
+                isSerializeLoggingActive.set(false);
+            }
+        }
         out.writeInt(bf.hashCount);
         bf.bitset.serialize(out);
     }
 
-    public BloomFilter deserialize(DataInput in) throws IOException
-    {
+    public BloomFilter deserialize(DataInput in) throws IOException {
         return deserialize(in, false);
     }
 
     @SuppressWarnings("resource")
-    public BloomFilter deserialize(DataInput in, boolean offheap) throws IOException
-    {
+    public BloomFilter deserialize(DataInput in, boolean offheap) throws IOException {
         int hashes = in.readInt();
         IBitSet bs = offheap ? OffHeapBitSet.deserialize(in) : OpenBitSet.deserialize(in);
         return createFilter(hashes, bs);
     }
 
-    BloomFilter createFilter(int hashes, IBitSet bs)
-    {
+    BloomFilter createFilter(int hashes, IBitSet bs) {
         return new BloomFilter(hashes, bs);
     }
 
@@ -61,9 +73,9 @@ class BloomFilterSerializer implements ISerializer<BloomFilter>
      *
      * @return serialized size of the given bloom filter
      */
-    public long serializedSize(BloomFilter bf, TypeSizes typeSizes)
-    {
-        int size = typeSizes.sizeof(bf.hashCount); // hash count
+    public long serializedSize(BloomFilter bf, TypeSizes typeSizes) {
+        // hash count
+        int size = typeSizes.sizeof(bf.hashCount);
         size += bf.bitset.serializedSize(typeSizes);
         return size;
     }

@@ -21,10 +21,8 @@ import java.io.DataInput;
 import java.io.IOException;
 import java.util.HashSet;
 import java.util.Set;
-
 import com.clearspring.analytics.stream.cardinality.HyperLogLogPlus;
 import com.clearspring.analytics.stream.cardinality.ICardinality;
-
 import org.apache.cassandra.db.TypeSizes;
 import org.apache.cassandra.io.sstable.format.Version;
 import org.apache.cassandra.io.util.DataOutputPlus;
@@ -35,68 +33,107 @@ import org.apache.cassandra.utils.ByteBufferUtil;
  *
  * Only loaded for <b>compacting</b> SSTables at the time of compaction.
  */
-public class CompactionMetadata extends MetadataComponent
-{
+public class CompactionMetadata extends MetadataComponent {
+
+    private static final org.slf4j.Logger serialize_logger = org.slf4j.LoggerFactory.getLogger("serialize.logger");
+
+    private java.lang.ThreadLocal<Boolean> isSerializeLoggingActive = new ThreadLocal<Boolean>() {
+
+        @Override
+        protected Boolean initialValue() {
+            return false;
+        }
+    };
+
     public static final IMetadataComponentSerializer serializer = new CompactionMetadataSerializer();
 
     public final Set<Integer> ancestors;
 
     public final ICardinality cardinalityEstimator;
 
-    public CompactionMetadata(Set<Integer> ancestors, ICardinality cardinalityEstimator)
-    {
+    public CompactionMetadata(Set<Integer> ancestors, ICardinality cardinalityEstimator) {
         this.ancestors = ancestors;
         this.cardinalityEstimator = cardinalityEstimator;
     }
 
-    public MetadataType getType()
-    {
+    public MetadataType getType() {
+        if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+            if (!isSerializeLoggingActive.get()) {
+                isSerializeLoggingActive.set(true);
+                serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(org.apache.cassandra.io.sstable.metadata.MetadataType.class, org.apache.cassandra.io.sstable.metadata.MetadataType.COMPACTION, "org.apache.cassandra.io.sstable.metadata.MetadataType.COMPACTION").toJsonString());
+                isSerializeLoggingActive.set(false);
+            }
+        }
         return MetadataType.COMPACTION;
     }
 
     @Override
-    public boolean equals(Object o)
-    {
-        if (this == o) return true;
-        if (o == null || getClass() != o.getClass()) return false;
-
+    public boolean equals(Object o) {
+        if (this == o)
+            return true;
+        if (o == null || getClass() != o.getClass())
+            return false;
         CompactionMetadata that = (CompactionMetadata) o;
+        if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+            if (!isSerializeLoggingActive.get()) {
+                isSerializeLoggingActive.set(true);
+                serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(that, that.ancestors, "that.ancestors").toJsonString());
+                isSerializeLoggingActive.set(false);
+            }
+        }
         return ancestors == null ? that.ancestors == null : ancestors.equals(that.ancestors);
     }
 
     @Override
-    public int hashCode()
-    {
+    public int hashCode() {
         return ancestors != null ? ancestors.hashCode() : 0;
     }
 
-    public static class CompactionMetadataSerializer implements IMetadataComponentSerializer<CompactionMetadata>
-    {
-        public int serializedSize(CompactionMetadata component, Version version) throws IOException
-        {
+    public static class CompactionMetadataSerializer implements IMetadataComponentSerializer<CompactionMetadata> {
+
+        private java.lang.ThreadLocal<Boolean> isSerializeLoggingActive = new ThreadLocal<Boolean>() {
+
+            @Override
+            protected Boolean initialValue() {
+                return false;
+            }
+        };
+
+        public int serializedSize(CompactionMetadata component, Version version) throws IOException {
             int size = 0;
             size += TypeSizes.NATIVE.sizeof(component.ancestors.size());
-            for (int g : component.ancestors)
-                size += TypeSizes.NATIVE.sizeof(g);
+            for (int g : component.ancestors) size += TypeSizes.NATIVE.sizeof(g);
             byte[] serializedCardinality = component.cardinalityEstimator.getBytes();
             size += TypeSizes.NATIVE.sizeof(serializedCardinality.length) + serializedCardinality.length;
             return size;
         }
 
-        public void serialize(CompactionMetadata component, Version version, DataOutputPlus out) throws IOException
-        {
+        public void serialize(CompactionMetadata component, Version version, DataOutputPlus out) throws IOException {
             out.writeInt(component.ancestors.size());
-            for (int g : component.ancestors)
+            if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+                if (!isSerializeLoggingActive.get()) {
+                    isSerializeLoggingActive.set(true);
+                    serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(component, component.ancestors, "component.ancestors").toJsonString());
+                    isSerializeLoggingActive.set(false);
+                }
+            }
+            for (int g : component.ancestors) {
+                if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+                    if (!isSerializeLoggingActive.get()) {
+                        isSerializeLoggingActive.set(true);
+                        serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(component.ancestors, g, "g").toJsonString());
+                        isSerializeLoggingActive.set(false);
+                    }
+                }
                 out.writeInt(g);
+            }
             ByteBufferUtil.writeWithLength(component.cardinalityEstimator.getBytes(), out);
         }
 
-        public CompactionMetadata deserialize(Version version, DataInput in) throws IOException
-        {
+        public CompactionMetadata deserialize(Version version, DataInput in) throws IOException {
             int nbAncestors = in.readInt();
             Set<Integer> ancestors = new HashSet<>(nbAncestors);
-            for (int i = 0; i < nbAncestors; i++)
-                ancestors.add(in.readInt());
+            for (int i = 0; i < nbAncestors; i++) ancestors.add(in.readInt());
             ICardinality cardinality = HyperLogLogPlus.Builder.build(ByteBufferUtil.readBytes(in, in.readInt()));
             return new CompactionMetadata(ancestors, cardinality);
         }

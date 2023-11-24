@@ -23,7 +23,6 @@ import java.net.InetAddress;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
-
 import org.apache.cassandra.db.TypeSizes;
 import org.apache.cassandra.dht.AbstractBounds;
 import org.apache.cassandra.dht.Range;
@@ -39,17 +38,21 @@ import org.apache.cassandra.repair.RepairJobDesc;
  *
  * @since 2.0
  */
-public class SyncRequest extends RepairMessage
-{
+public class SyncRequest extends RepairMessage {
+
+    private static final org.slf4j.Logger serialize_logger = org.slf4j.LoggerFactory.getLogger("serialize.logger");
+
     public static MessageSerializer serializer = new SyncRequestSerializer();
 
     public final InetAddress initiator;
+
     public final InetAddress src;
+
     public final InetAddress dst;
+
     public final Collection<Range<Token>> ranges;
 
-    public SyncRequest(RepairJobDesc desc, InetAddress initiator, InetAddress src, InetAddress dst, Collection<Range<Token>> ranges)
-    {
+    public SyncRequest(RepairJobDesc desc, InetAddress initiator, InetAddress src, InetAddress dst, Collection<Range<Token>> ranges) {
         super(Type.SYNC_REQUEST, desc);
         this.initiator = initiator;
         this.src = src;
@@ -57,54 +60,78 @@ public class SyncRequest extends RepairMessage
         this.ranges = ranges;
     }
 
-    public static class SyncRequestSerializer implements MessageSerializer<SyncRequest>
-    {
-        public void serialize(SyncRequest message, DataOutputPlus out, int version) throws IOException
-        {
+    public static class SyncRequestSerializer implements MessageSerializer<SyncRequest> {
+
+        private java.lang.ThreadLocal<Boolean> isSerializeLoggingActive = new ThreadLocal<Boolean>() {
+
+            @Override
+            protected Boolean initialValue() {
+                return false;
+            }
+        };
+
+        public void serialize(SyncRequest message, DataOutputPlus out, int version) throws IOException {
+            if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+                if (!isSerializeLoggingActive.get()) {
+                    isSerializeLoggingActive.set(true);
+                    serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(message, message.desc, "message.desc").toJsonString());
+                    isSerializeLoggingActive.set(false);
+                }
+            }
             RepairJobDesc.serializer.serialize(message.desc, out, version);
             CompactEndpointSerializationHelper.serialize(message.initiator, out);
             CompactEndpointSerializationHelper.serialize(message.src, out);
             CompactEndpointSerializationHelper.serialize(message.dst, out);
             out.writeInt(message.ranges.size());
-            for (Range<Token> range : message.ranges)
-            {
+            if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+                if (!isSerializeLoggingActive.get()) {
+                    isSerializeLoggingActive.set(true);
+                    serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(message, message.ranges, "message.ranges").toJsonString());
+                    isSerializeLoggingActive.set(false);
+                }
+            }
+            for (Range<Token> range : message.ranges) {
+                if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+                    if (!isSerializeLoggingActive.get()) {
+                        isSerializeLoggingActive.set(true);
+                        serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(message.ranges, range, "range").toJsonString());
+                        isSerializeLoggingActive.set(false);
+                    }
+                }
                 MessagingService.validatePartitioner(range);
                 AbstractBounds.tokenSerializer.serialize(range, out, version);
             }
         }
 
-        public SyncRequest deserialize(DataInput in, int version) throws IOException
-        {
+        public SyncRequest deserialize(DataInput in, int version) throws IOException {
             RepairJobDesc desc = RepairJobDesc.serializer.deserialize(in, version);
             InetAddress owner = CompactEndpointSerializationHelper.deserialize(in);
             InetAddress src = CompactEndpointSerializationHelper.deserialize(in);
             InetAddress dst = CompactEndpointSerializationHelper.deserialize(in);
             int rangesCount = in.readInt();
             List<Range<Token>> ranges = new ArrayList<>(rangesCount);
-            for (int i = 0; i < rangesCount; ++i)
-                ranges.add((Range<Token>) AbstractBounds.tokenSerializer.deserialize(in, MessagingService.globalPartitioner(), version));
+            for (int i = 0; i < rangesCount; ++i) ranges.add((Range<Token>) AbstractBounds.tokenSerializer.deserialize(in, MessagingService.globalPartitioner(), version));
             return new SyncRequest(desc, owner, src, dst, ranges);
         }
 
-        public long serializedSize(SyncRequest message, int version)
-        {
+        public long serializedSize(SyncRequest message, int version) {
+            if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+                if (!isSerializeLoggingActive.get()) {
+                    isSerializeLoggingActive.set(true);
+                    serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(message, message.desc, "message.desc").toJsonString());
+                    isSerializeLoggingActive.set(false);
+                }
+            }
             long size = RepairJobDesc.serializer.serializedSize(message.desc, version);
             size += 3 * CompactEndpointSerializationHelper.serializedSize(message.initiator);
             size += TypeSizes.NATIVE.sizeof(message.ranges.size());
-            for (Range<Token> range : message.ranges)
-                size += AbstractBounds.tokenSerializer.serializedSize(range, version);
+            for (Range<Token> range : message.ranges) size += AbstractBounds.tokenSerializer.serializedSize(range, version);
             return size;
         }
     }
 
     @Override
-    public String toString()
-    {
-        return "SyncRequest{" +
-                "initiator=" + initiator +
-                ", src=" + src +
-                ", dst=" + dst +
-                ", ranges=" + ranges +
-                "} " + super.toString();
+    public String toString() {
+        return "SyncRequest{" + "initiator=" + initiator + ", src=" + src + ", dst=" + dst + ", ranges=" + ranges + "} " + super.toString();
     }
 }

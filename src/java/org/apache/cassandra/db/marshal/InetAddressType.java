@@ -19,7 +19,6 @@ package org.apache.cassandra.db.marshal;
 
 import java.net.InetAddress;
 import java.nio.ByteBuffer;
-
 import org.apache.cassandra.cql3.CQL3Type;
 import org.apache.cassandra.cql3.Constants;
 import org.apache.cassandra.cql3.Term;
@@ -28,74 +27,75 @@ import org.apache.cassandra.serializers.InetAddressSerializer;
 import org.apache.cassandra.serializers.MarshalException;
 import org.apache.cassandra.utils.ByteBufferUtil;
 
-public class InetAddressType extends AbstractType<InetAddress>
-{
+public class InetAddressType extends AbstractType<InetAddress> {
+
+    private static final org.slf4j.Logger serialize_logger = org.slf4j.LoggerFactory.getLogger("serialize.logger");
+
+    private java.lang.ThreadLocal<Boolean> isSerializeLoggingActive = new ThreadLocal<Boolean>() {
+
+        @Override
+        protected Boolean initialValue() {
+            return false;
+        }
+    };
+
     public static final InetAddressType instance = new InetAddressType();
 
-    InetAddressType() {} // singleton
+    // singleton
+    InetAddressType() {
+    }
 
-    public boolean isEmptyValueMeaningless()
-    {
+    public boolean isEmptyValueMeaningless() {
         return true;
     }
 
-    public int compare(ByteBuffer o1, ByteBuffer o2)
-    {
+    public int compare(ByteBuffer o1, ByteBuffer o2) {
         return ByteBufferUtil.compareUnsigned(o1, o2);
     }
 
-    public ByteBuffer fromString(String source) throws MarshalException
-    {
+    public ByteBuffer fromString(String source) throws MarshalException {
         // Return an empty ByteBuffer for an empty string.
         if (source.isEmpty())
             return ByteBufferUtil.EMPTY_BYTE_BUFFER;
-
         InetAddress address;
-
-        try
-        {
+        try {
             address = InetAddress.getByName(source);
-        }
-        catch (Exception e)
-        {
+        } catch (Exception e) {
             throw new MarshalException(String.format("Unable to make inet address from '%s'", source), e);
         }
-
         return decompose(address);
     }
 
     @Override
-    public Term fromJSONObject(Object parsed) throws MarshalException
-    {
-        try
-        {
+    public Term fromJSONObject(Object parsed) throws MarshalException {
+        try {
             return new Constants.Value(InetAddressType.instance.fromString((String) parsed));
-        }
-        catch (ClassCastException exc)
-        {
-            throw new MarshalException(String.format(
-                    "Expected a string representation of an inet value, but got a %s: %s", parsed.getClass().getSimpleName(), parsed));
+        } catch (ClassCastException exc) {
+            throw new MarshalException(String.format("Expected a string representation of an inet value, but got a %s: %s", parsed.getClass().getSimpleName(), parsed));
         }
     }
 
     @Override
-    public String toJSONString(ByteBuffer buffer, int protocolVersion)
-    {
+    public String toJSONString(ByteBuffer buffer, int protocolVersion) {
         return '"' + getSerializer().deserialize(buffer).getHostAddress() + '"';
     }
 
-    public CQL3Type asCQL3Type()
-    {
+    public CQL3Type asCQL3Type() {
         return CQL3Type.Native.INET;
     }
 
-    public TypeSerializer<InetAddress> getSerializer()
-    {
+    public TypeSerializer<InetAddress> getSerializer() {
+        if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+            if (!isSerializeLoggingActive.get()) {
+                isSerializeLoggingActive.set(true);
+                serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(org.apache.cassandra.serializers.InetAddressSerializer.class, org.apache.cassandra.serializers.InetAddressSerializer.instance, "org.apache.cassandra.serializers.InetAddressSerializer.instance").toJsonString());
+                isSerializeLoggingActive.set(false);
+            }
+        }
         return InetAddressSerializer.instance;
     }
 
-    public boolean isByteOrderComparable()
-    {
+    public boolean isByteOrderComparable() {
         return true;
     }
 }

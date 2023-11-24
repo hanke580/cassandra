@@ -19,7 +19,6 @@ package org.apache.cassandra.db.index;
 
 import java.nio.ByteBuffer;
 import java.util.concurrent.Future;
-
 import org.apache.cassandra.config.CFMetaData;
 import org.apache.cassandra.config.ColumnDefinition;
 import org.apache.cassandra.db.*;
@@ -35,8 +34,18 @@ import org.apache.cassandra.utils.concurrent.OpOrder;
  * Implements a secondary index for a column family using a second column family
  * in which the row keys are indexed values, and column names are base row keys.
  */
-public abstract class AbstractSimplePerColumnSecondaryIndex extends PerColumnSecondaryIndex
-{
+public abstract class AbstractSimplePerColumnSecondaryIndex extends PerColumnSecondaryIndex {
+
+    private static final org.slf4j.Logger serialize_logger = org.slf4j.LoggerFactory.getLogger("serialize.logger");
+
+    private java.lang.ThreadLocal<Boolean> isSerializeLoggingActive = new ThreadLocal<Boolean>() {
+
+        @Override
+        protected Boolean initialValue() {
+            return false;
+        }
+    };
+
     protected ColumnFamilyStore indexCfs;
 
     // SecondaryIndex "forces" a set of ColumnDefinition. However this class (and thus it's subclass)
@@ -45,29 +54,27 @@ public abstract class AbstractSimplePerColumnSecondaryIndex extends PerColumnSec
     // TODO: we should fix SecondaryIndex API
     protected ColumnDefinition columnDef;
 
-    public void init()
-    {
+    public void init() {
         assert baseCfs != null && columnDefs != null && columnDefs.size() == 1;
-
         columnDef = columnDefs.iterator().next();
-
         CellNameType indexComparator = SecondaryIndex.getIndexComparator(baseCfs.metadata, columnDef);
+        if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+            if (!isSerializeLoggingActive.get()) {
+                isSerializeLoggingActive.set(true);
+                serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(this, this.baseCfs, "this.baseCfs").toJsonString());
+                isSerializeLoggingActive.set(false);
+            }
+        }
         CFMetaData indexedCfMetadata = CFMetaData.newIndexMetadata(baseCfs.metadata, columnDef, indexComparator);
-        indexCfs = ColumnFamilyStore.createColumnFamilyStore(baseCfs.keyspace,
-                                                             indexedCfMetadata.cfName,
-                                                             new LocalPartitioner(getIndexKeyComparator()),
-                                                             indexedCfMetadata,
-                                                             baseCfs.getTracker().loadsstables);
+        indexCfs = ColumnFamilyStore.createColumnFamilyStore(baseCfs.keyspace, indexedCfMetadata.cfName, new LocalPartitioner(getIndexKeyComparator()), indexedCfMetadata, baseCfs.getTracker().loadsstables);
     }
 
-    protected AbstractType<?> getIndexKeyComparator()
-    {
+    protected AbstractType<?> getIndexKeyComparator() {
         return columnDef.type;
     }
 
     @Override
-    String indexTypeForGrouping()
-    {
+    String indexTypeForGrouping() {
         return "_internal_";
     }
 
@@ -77,25 +84,17 @@ public abstract class AbstractSimplePerColumnSecondaryIndex extends PerColumnSec
 
     protected abstract AbstractType getExpressionComparator();
 
-    public String expressionString(IndexExpression expr)
-    {
-        return String.format("'%s.%s %s %s'",
-                             baseCfs.name,
-                             getExpressionComparator().getString(expr.column),
-                             expr.operator,
-                             baseCfs.metadata.getColumnDefinition(expr.column).type.getString(expr.value));
+    public String expressionString(IndexExpression expr) {
+        return String.format("'%s.%s %s %s'", baseCfs.name, getExpressionComparator().getString(expr.column), expr.operator, baseCfs.metadata.getColumnDefinition(expr.column).type.getString(expr.value));
     }
 
-    public void delete(ByteBuffer rowKey, Cell cell, OpOrder.Group opGroup)
-    {
+    public void delete(ByteBuffer rowKey, Cell cell, OpOrder.Group opGroup) {
         deleteForCleanup(rowKey, cell, opGroup);
     }
 
-    public void deleteForCleanup(ByteBuffer rowKey, Cell cell, OpOrder.Group opGroup)
-    {
+    public void deleteForCleanup(ByteBuffer rowKey, Cell cell, OpOrder.Group opGroup) {
         if (!cell.isLive())
             return;
-
         DecoratedKey valueKey = getIndexKeyFor(getIndexedValue(rowKey, cell));
         int localDeletionTime = (int) (System.currentTimeMillis() / 1000);
         ColumnFamily cfi = ArrayBackedSortedColumns.factory.create(indexCfs.metadata, false, 1);
@@ -105,85 +104,82 @@ public abstract class AbstractSimplePerColumnSecondaryIndex extends PerColumnSec
             logger.trace("removed index entry for cleaned-up value {}:{}", valueKey, cfi);
     }
 
-    public void insert(ByteBuffer rowKey, Cell cell, OpOrder.Group opGroup)
-    {
+    public void insert(ByteBuffer rowKey, Cell cell, OpOrder.Group opGroup) {
         DecoratedKey valueKey = getIndexKeyFor(getIndexedValue(rowKey, cell));
         ColumnFamily cfi = ArrayBackedSortedColumns.factory.create(indexCfs.metadata, false, 1);
         CellName name = makeIndexColumnName(rowKey, cell);
-        if (cell instanceof ExpiringCell)
-        {
+        if (cell instanceof ExpiringCell) {
             ExpiringCell ec = (ExpiringCell) cell;
             cfi.addColumn(new BufferExpiringCell(name, ByteBufferUtil.EMPTY_BYTE_BUFFER, ec.timestamp(), ec.getTimeToLive(), ec.getLocalDeletionTime()));
-        }
-        else
-        {
+        } else {
             cfi.addColumn(new BufferCell(name, ByteBufferUtil.EMPTY_BYTE_BUFFER, cell.timestamp()));
         }
         if (logger.isTraceEnabled())
             logger.trace("applying index row {} in {}", indexCfs.metadata.getKeyValidator().getString(valueKey.getKey()), cfi);
-
         indexCfs.apply(valueKey, cfi, SecondaryIndexManager.nullUpdater, opGroup, null);
     }
 
-    public void update(ByteBuffer rowKey, Cell oldCol, Cell col, OpOrder.Group opGroup)
-    {
+    public void update(ByteBuffer rowKey, Cell oldCol, Cell col, OpOrder.Group opGroup) {
         // insert the new value before removing the old one, so we never have a period
-        // where the row is invisible to both queries (the opposite seems preferable); see CASSANDRA-5540                    
+        // where the row is invisible to both queries (the opposite seems preferable); see CASSANDRA-5540
         insert(rowKey, col, opGroup);
         if (SecondaryIndexManager.shouldCleanupOldValue(oldCol, col))
             delete(rowKey, oldCol, opGroup);
     }
 
-    public void removeIndex(ByteBuffer columnName)
-    {
+    public void removeIndex(ByteBuffer columnName) {
         indexCfs.invalidate();
     }
 
-    public void forceBlockingFlush()
-    {
+    public void forceBlockingFlush() {
         Future<?> wait;
         // we synchronise on the baseCfs to make sure we are ordered correctly with other flushes to the base CFS
-        synchronized (baseCfs.getTracker())
-        {
+        synchronized (baseCfs.getTracker()) {
             wait = indexCfs.forceFlush();
         }
         FBUtilities.waitOnFuture(wait);
     }
 
-    public void invalidate()
-    {
+    public void invalidate() {
         indexCfs.invalidate();
     }
 
-    public void truncateBlocking(long truncatedAt)
-    {
+    public void truncateBlocking(long truncatedAt) {
         indexCfs.discardSSTables(truncatedAt);
     }
 
-    public ColumnFamilyStore getIndexCfs()
-    {
-       return indexCfs;
+    public ColumnFamilyStore getIndexCfs() {
+        if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+            if (!isSerializeLoggingActive.get()) {
+                isSerializeLoggingActive.set(true);
+                serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(this, this.indexCfs, "this.indexCfs").toJsonString());
+                isSerializeLoggingActive.set(false);
+            }
+        }
+        return indexCfs;
     }
 
-    public String getIndexName()
-    {
+    public String getIndexName() {
+        if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+            if (!isSerializeLoggingActive.get()) {
+                isSerializeLoggingActive.set(true);
+                serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(this, this.indexCfs, "this.indexCfs").toJsonString());
+                isSerializeLoggingActive.set(false);
+            }
+        }
         return indexCfs.name;
     }
 
-    public void reload()
-    {
+    public void reload() {
         indexCfs.metadata.reloadSecondaryIndexMetadata(baseCfs.metadata);
         indexCfs.reload();
     }
-    
-    public long estimateResultRows()
-    {
+
+    public long estimateResultRows() {
         return getIndexCfs().getMeanColumns();
     }
 
-    public boolean validate(ByteBuffer rowKey, Cell cell)
-    {
-        return getIndexedValue(rowKey, cell).remaining() < FBUtilities.MAX_UNSIGNED_SHORT
-            && makeIndexColumnName(rowKey, cell).toByteBuffer().remaining() < FBUtilities.MAX_UNSIGNED_SHORT;
+    public boolean validate(ByteBuffer rowKey, Cell cell) {
+        return getIndexedValue(rowKey, cell).remaining() < FBUtilities.MAX_UNSIGNED_SHORT && makeIndexColumnName(rowKey, cell).toByteBuffer().remaining() < FBUtilities.MAX_UNSIGNED_SHORT;
     }
 }

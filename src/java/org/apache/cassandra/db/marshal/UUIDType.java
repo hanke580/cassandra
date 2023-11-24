@@ -20,9 +20,7 @@ package org.apache.cassandra.db.marshal;
 import java.nio.ByteBuffer;
 import java.util.UUID;
 import java.util.regex.Pattern;
-
 import com.google.common.primitives.UnsignedLongs;
-
 import org.apache.cassandra.cql3.CQL3Type;
 import org.apache.cassandra.cql3.Constants;
 import org.apache.cassandra.cql3.Term;
@@ -42,130 +40,117 @@ import org.apache.cassandra.utils.UUIDGen;
  *
  * @see "com.fasterxml.uuid.UUIDComparator"
  */
-public class UUIDType extends AbstractType<UUID>
-{
+public class UUIDType extends AbstractType<UUID> {
+
+    private static final org.slf4j.Logger serialize_logger = org.slf4j.LoggerFactory.getLogger("serialize.logger");
+
+    private java.lang.ThreadLocal<Boolean> isSerializeLoggingActive = new ThreadLocal<Boolean>() {
+
+        @Override
+        protected Boolean initialValue() {
+            return false;
+        }
+    };
+
     public static final UUIDType instance = new UUIDType();
 
-    UUIDType()
-    {
+    UUIDType() {
     }
 
-    public boolean isEmptyValueMeaningless()
-    {
+    public boolean isEmptyValueMeaningless() {
         return true;
     }
 
-    public int compare(ByteBuffer b1, ByteBuffer b2)
-    {
+    public int compare(ByteBuffer b1, ByteBuffer b2) {
         // Compare for length
         int s1 = b1.position(), s2 = b2.position();
         int l1 = b1.limit(), l2 = b2.limit();
-
         // should we assert exactly 16 bytes (or 0)? seems prudent
         boolean p1 = l1 - s1 == 16, p2 = l2 - s2 == 16;
-        if (!(p1 & p2))
-        {
+        if (!(p1 & p2)) {
             assert p1 | (l1 == s1);
             assert p2 | (l2 == s2);
             return p1 ? 1 : p2 ? -1 : 0;
         }
-
         // Compare versions
         long msb1 = b1.getLong(s1);
         long msb2 = b2.getLong(s2);
-
         int version1 = (int) ((msb1 >>> 12) & 0xf);
         int version2 = (int) ((msb2 >>> 12) & 0xf);
         if (version1 != version2)
             return version1 - version2;
-
         // bytes: version is top 4 bits of byte 6
         // then: [6.5-8), [4-6), [0-4)
-        if (version1 == 1)
-        {
+        if (version1 == 1) {
             long reorder1 = TimeUUIDType.reorderTimestampBytes(msb1);
             long reorder2 = TimeUUIDType.reorderTimestampBytes(msb2);
             // we know this is >= 0, since the top 3 bits will be 0
             int c = Long.compare(reorder1, reorder2);
             if (c != 0)
                 return c;
-        }
-        else
-        {
+        } else {
             int c = UnsignedLongs.compare(msb1, msb2);
             if (c != 0)
                 return c;
         }
-
         return UnsignedLongs.compare(b1.getLong(s1 + 8), b2.getLong(s2 + 8));
     }
 
     @Override
-    public boolean isValueCompatibleWithInternal(AbstractType<?> otherType)
-    {
+    public boolean isValueCompatibleWithInternal(AbstractType<?> otherType) {
         return otherType instanceof UUIDType || otherType instanceof TimeUUIDType;
     }
 
     @Override
-    public ByteBuffer fromString(String source) throws MarshalException
-    {
+    public ByteBuffer fromString(String source) throws MarshalException {
         // Return an empty ByteBuffer for an empty string.
         ByteBuffer parsed = parse(source);
         if (parsed != null)
             return parsed;
-
         throw new MarshalException(String.format("Unable to make UUID from '%s'", source));
     }
 
     @Override
-    public CQL3Type asCQL3Type()
-    {
+    public CQL3Type asCQL3Type() {
         return CQL3Type.Native.UUID;
     }
 
-    public TypeSerializer<UUID> getSerializer()
-    {
+    public TypeSerializer<UUID> getSerializer() {
+        if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+            if (!isSerializeLoggingActive.get()) {
+                isSerializeLoggingActive.set(true);
+                serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(org.apache.cassandra.serializers.UUIDSerializer.class, org.apache.cassandra.serializers.UUIDSerializer.instance, "org.apache.cassandra.serializers.UUIDSerializer.instance").toJsonString());
+                isSerializeLoggingActive.set(false);
+            }
+        }
         return UUIDSerializer.instance;
     }
 
     static final Pattern regexPattern = Pattern.compile("[A-Fa-f0-9]{8}\\-[A-Fa-f0-9]{4}\\-[A-Fa-f0-9]{4}\\-[A-Fa-f0-9]{4}\\-[A-Fa-f0-9]{12}");
 
-    static ByteBuffer parse(String source)
-    {
+    static ByteBuffer parse(String source) {
         if (source.isEmpty())
             return ByteBufferUtil.EMPTY_BYTE_BUFFER;
-
-        if (regexPattern.matcher(source).matches())
-        {
-            try
-            {
+        if (regexPattern.matcher(source).matches()) {
+            try {
                 return ByteBuffer.wrap(UUIDGen.decompose(UUID.fromString(source)));
-            }
-            catch (IllegalArgumentException e)
-            {
+            } catch (IllegalArgumentException e) {
                 throw new MarshalException(String.format("Unable to make UUID from '%s'", source), e);
             }
         }
-
         return null;
     }
 
     @Override
-    public Term fromJSONObject(Object parsed) throws MarshalException
-    {
-        try
-        {
+    public Term fromJSONObject(Object parsed) throws MarshalException {
+        try {
             return new Constants.Value(fromString((String) parsed));
-        }
-        catch (ClassCastException exc)
-        {
-            throw new MarshalException(String.format(
-                    "Expected a string representation of a uuid, but got a %s: %s", parsed.getClass().getSimpleName(), parsed));
+        } catch (ClassCastException exc) {
+            throw new MarshalException(String.format("Expected a string representation of a uuid, but got a %s: %s", parsed.getClass().getSimpleName(), parsed));
         }
     }
 
-    static int version(ByteBuffer uuid)
-    {
+    static int version(ByteBuffer uuid) {
         return (uuid.get(6) & 0xf0) >> 4;
     }
 }

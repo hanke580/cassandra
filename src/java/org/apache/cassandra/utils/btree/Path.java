@@ -19,7 +19,6 @@
 package org.apache.cassandra.utils.btree;
 
 import java.util.Comparator;
-
 import static org.apache.cassandra.utils.btree.BTree.NEGATIVE_INFINITY;
 import static org.apache.cassandra.utils.btree.BTree.POSITIVE_INFINITY;
 import static org.apache.cassandra.utils.btree.BTree.getBranchKeyEnd;
@@ -36,52 +35,65 @@ import static org.apache.cassandra.utils.btree.BTree.isLeaf;
  *
  * Path is only intended to be used via Cursor.
  */
-public class Path<V>
-{
+public class Path<V> {
+
+    private static final org.slf4j.Logger serialize_logger = org.slf4j.LoggerFactory.getLogger("serialize.logger");
+
+    private java.lang.ThreadLocal<Boolean> isSerializeLoggingActive = new ThreadLocal<Boolean>() {
+
+        @Override
+        protected Boolean initialValue() {
+            return false;
+        }
+    };
+
     // operations corresponding to the ones in NavigableSet
-    static enum Op
-    {
-        CEIL,   // the least element greater than or equal to the given element
-        FLOOR,  // the greatest element less than or equal to the given element
-        HIGHER, // the least element strictly greater than the given element
-        LOWER   // the greatest element strictly less than the given element
+    static enum Op {
+
+        // the least element greater than or equal to the given element
+        CEIL,
+        // the greatest element less than or equal to the given element
+        FLOOR,
+        // the least element strictly greater than the given element
+        HIGHER,
+        // the greatest element strictly less than the given element
+        LOWER
     }
 
     // the path to the searched-for key
     Object[][] path;
+
     // the index within the node of our path at a given depth
     byte[] indexes;
+
     // current depth.  nothing in path[i] for i > depth is valid.
     byte depth;
 
-    Path() { }
-    Path(int depth, Object[] btree)
-    {
+    Path() {
+    }
+
+    Path(int depth, Object[] btree) {
         this.path = new Object[depth][];
         this.indexes = new byte[depth];
         this.path[0] = btree;
     }
 
-    void init(Object[] btree)
-    {
+    void init(Object[] btree) {
         int depth = BTree.depth(btree);
-        if (path == null || path.length < depth)
-        {
+        if (path == null || path.length < depth) {
             path = new Object[depth][];
             indexes = new byte[depth];
         }
         path[0] = btree;
     }
 
-    void moveEnd(Object[] node, boolean forwards)
-    {
+    void moveEnd(Object[] node, boolean forwards) {
         push(node, getKeyEnd(node));
         if (!forwards)
             predecessor();
     }
 
-    void moveStart(Object[] node, boolean forwards)
-    {
+    void moveStart(Object[] node, boolean forwards) {
         push(node, -1);
         if (forwards)
             successor();
@@ -96,20 +108,23 @@ public class Path<V>
      * @param forwards   if the path should be setup for forward or backward iteration
      * @param <K>
      */
-    <K> boolean find(Comparator<K> comparator, Object target, Op mode, boolean forwards)
-    {
+    <K> boolean find(Comparator<K> comparator, Object target, Op mode, boolean forwards) {
+        if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+            if (!isSerializeLoggingActive.get()) {
+                isSerializeLoggingActive.set(true);
+                serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(this, this.path, "this.path").toJsonString());
+                isSerializeLoggingActive.set(false);
+            }
+        }
         // TODO : should not require parameter 'forwards' - consider modifying index to represent both
         // child and key position, as opposed to just key position (which necessitates a different value depending
         // on which direction you're moving in. Prerequisite for making Path public and using to implement general
         // search
-
         Object[] node = path[depth];
         int lb = indexes[depth];
         assert lb == 0 || forwards;
         pop();
-
-        if (target instanceof BTree.Special)
-        {
+        if (target instanceof BTree.Special) {
             if (target == POSITIVE_INFINITY)
                 moveEnd(node, forwards);
             else if (target == NEGATIVE_INFINITY)
@@ -118,20 +133,15 @@ public class Path<V>
                 throw new AssertionError();
             return false;
         }
-
-        while (true)
-        {
+        while (true) {
             int keyEnd = getKeyEnd(node);
-
             // search for the target in the current node
             int i = BTree.find(comparator, target, node, lb, keyEnd);
             lb = 0;
-            if (i >= 0)
-            {
+            if (i >= 0) {
                 // exact match. transform exclusive bounds into the correct index by moving back or forwards one
                 push(node, i);
-                switch (mode)
-                {
+                switch(mode) {
                     case HIGHER:
                         successor();
                         break;
@@ -141,79 +151,74 @@ public class Path<V>
                 return true;
             }
             i = -i - 1;
-
             // traverse into the appropriate child
-            if (!isLeaf(node))
-            {
+            if (!isLeaf(node)) {
                 push(node, forwards ? i - 1 : i);
                 node = (Object[]) node[keyEnd + i];
                 continue;
             }
-
             // bottom of the tree and still not found.  pick the right index to satisfy Op
-            switch (mode)
-            {
+            switch(mode) {
                 case FLOOR:
                 case LOWER:
                     i--;
             }
-
-            if (i < 0)
-            {
+            if (i < 0) {
                 push(node, 0);
                 predecessor();
-            }
-            else if (i >= keyEnd)
-            {
+            } else if (i >= keyEnd) {
                 push(node, keyEnd - 1);
                 successor();
-            }
-            else
-            {
+            } else {
                 push(node, i);
             }
-
             return false;
         }
     }
 
-    boolean isRoot()
-    {
+    boolean isRoot() {
         return depth == 0;
     }
 
-    void pop()
-    {
+    void pop() {
         depth--;
     }
 
-    Object[] currentNode()
-    {
+    Object[] currentNode() {
+        if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+            if (!isSerializeLoggingActive.get()) {
+                isSerializeLoggingActive.set(true);
+                serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(this, this.path, "this.path").toJsonString());
+                isSerializeLoggingActive.set(false);
+            }
+        }
         return path[depth];
     }
 
-    byte currentIndex()
-    {
+    byte currentIndex() {
+        if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+            if (!isSerializeLoggingActive.get()) {
+                isSerializeLoggingActive.set(true);
+                serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(this, this.indexes, "this.indexes").toJsonString());
+                isSerializeLoggingActive.set(false);
+            }
+        }
         return indexes[depth];
     }
 
-    void push(Object[] node, int index)
-    {
+    void push(Object[] node, int index) {
         path[++depth] = node;
         indexes[depth] = (byte) index;
     }
 
-    void setIndex(int index)
-    {
+    void setIndex(int index) {
         indexes[depth] = (byte) index;
     }
 
-    byte findSuccessorParentDepth()
-    {
+    byte findSuccessorParentDepth() {
         byte depth = this.depth;
         depth--;
-        while (depth >= 0)
-        {
+        while (depth >= 0) {
             int ub = indexes[depth] + 1;
             Object[] node = path[depth];
             if (ub < getBranchKeyEnd(node))
@@ -224,65 +229,51 @@ public class Path<V>
     }
 
     // move to the next key in the tree
-    void successor()
-    {
+    void successor() {
         Object[] node = currentNode();
         int i = currentIndex();
-
-        if (!isLeaf(node))
-        {
+        if (!isLeaf(node)) {
             // if we're on a key in a branch, we MUST have a descendant either side of us,
             // so we always go down the left-most child until we hit a leaf
             node = (Object[]) node[getBranchKeyEnd(node) + i + 1];
-            while (!isLeaf(node))
-            {
+            while (!isLeaf(node)) {
                 push(node, -1);
                 node = (Object[]) node[getBranchKeyEnd(node)];
             }
             push(node, 0);
             return;
         }
-
         // if we haven't reached the end of this leaf, just increment our index and return
         i += 1;
-        if (i < getLeafKeyEnd(node))
-        {
+        if (i < getLeafKeyEnd(node)) {
             // moved to the next key in the same leaf
             setIndex(i);
             return;
         }
-
         // we've reached the end of this leaf,
         // so go up until we reach something we've not finished visiting
-        while (!isRoot())
-        {
+        while (!isRoot()) {
             pop();
             i = currentIndex() + 1;
             node = currentNode();
-            if (i < getKeyEnd(node))
-            {
+            if (i < getKeyEnd(node)) {
                 setIndex(i);
                 return;
             }
         }
-
         // we've visited the last key in the root node, so we're done
         setIndex(getKeyEnd(node));
     }
 
     // move to the previous key in the tree
-    void predecessor()
-    {
+    void predecessor() {
         Object[] node = currentNode();
         int i = currentIndex();
-
-        if (!isLeaf(node))
-        {
+        if (!isLeaf(node)) {
             // if we're on a key in a branch, we MUST have a descendant either side of us
             // so we always go down the right-most child until we hit a leaf
             node = (Object[]) node[getBranchKeyEnd(node) + i];
-            while (!isLeaf(node))
-            {
+            while (!isLeaf(node)) {
                 i = getBranchKeyEnd(node);
                 push(node, i);
                 node = (Object[]) node[i * 2];
@@ -290,42 +281,33 @@ public class Path<V>
             push(node, getLeafKeyEnd(node) - 1);
             return;
         }
-
         // if we haven't reached the beginning of this leaf, just decrement our index and return
         i -= 1;
-        if (i >= 0)
-        {
+        if (i >= 0) {
             setIndex(i);
             return;
         }
-
         // we've reached the beginning of this leaf,
         // so go up until we reach something we've not finished visiting
-        while (!isRoot())
-        {
+        while (!isRoot()) {
             pop();
             i = currentIndex() - 1;
-            if (i >= 0)
-            {
+            if (i >= 0) {
                 setIndex(i);
                 return;
             }
         }
-
         // we've visited the last key in the root node, so we're done
         setIndex(-1);
     }
 
-    Object currentKey()
-    {
+    Object currentKey() {
         return currentNode()[currentIndex()];
     }
 
-    int compareTo(Path<V> that, boolean forwards)
-    {
+    int compareTo(Path<V> that, boolean forwards) {
         int d = Math.min(this.depth, that.depth);
-        for (int i = 0; i <= d; i++)
-        {
+        for (int i = 0; i <= d; i++) {
             int c = this.indexes[i] - that.indexes[i];
             if (c != 0)
                 return c;
@@ -338,4 +320,3 @@ public class Path<V>
         return forwards ? d : -d;
     }
 }
-

@@ -19,9 +19,7 @@ package org.apache.cassandra.cql3.statements;
 
 import java.nio.ByteBuffer;
 import java.util.*;
-
 import com.google.common.collect.Iterators;
-
 import org.apache.cassandra.cql3.*;
 import org.apache.cassandra.cql3.restrictions.Restriction;
 import org.apache.cassandra.config.CFMetaData;
@@ -34,125 +32,101 @@ import org.apache.cassandra.utils.Pair;
 /**
  * A <code>DELETE</code> parsed from a CQL query statement.
  */
-public class DeleteStatement extends ModificationStatement
-{
-    private DeleteStatement(StatementType type, int boundTerms, CFMetaData cfm, Attributes attrs)
-    {
+public class DeleteStatement extends ModificationStatement {
+
+    private static final org.slf4j.Logger serialize_logger = org.slf4j.LoggerFactory.getLogger("serialize.logger");
+
+    private java.lang.ThreadLocal<Boolean> isSerializeLoggingActive = new ThreadLocal<Boolean>() {
+
+        @Override
+        protected Boolean initialValue() {
+            return false;
+        }
+    };
+
+    private DeleteStatement(StatementType type, int boundTerms, CFMetaData cfm, Attributes attrs) {
         super(type, boundTerms, cfm, attrs);
     }
 
-    public boolean requireFullClusteringKey()
-    {
+    public boolean requireFullClusteringKey() {
         return false;
     }
 
-    public void addUpdateForKey(ColumnFamily cf, ByteBuffer key, Composite prefix, UpdateParameters params)
-    throws InvalidRequestException
-    {
+    public void addUpdateForKey(ColumnFamily cf, ByteBuffer key, Composite prefix, UpdateParameters params) throws InvalidRequestException {
         List<Operation> deletions = getOperations();
-
-        if (deletions.isEmpty())
-        {
+        if (deletions.isEmpty()) {
             // We delete the slice selected by the prefix.
             // However, for performance reasons, we distinguish 2 cases:
             //   - It's a full internal row delete
             //   - It's a full cell name (i.e it's a dense layout and the prefix is full)
-            if (prefix.isEmpty())
-            {
+            if (prefix.isEmpty()) {
                 // No columns specified, delete the row
                 cf.delete(new DeletionInfo(params.timestamp, params.localDeletionTime));
-            }
-            else if (cfm.comparator.isDense() && prefix.size() == cfm.clusteringColumns().size())
-            {
+            } else if (cfm.comparator.isDense() && prefix.size() == cfm.clusteringColumns().size()) {
                 cf.addAtom(params.makeTombstone(cfm.comparator.create(prefix, null)));
-            }
-            else
-            {
+            } else {
                 cf.addAtom(params.makeRangeTombstone(prefix.slice()));
             }
-        }
-        else
-        {
-            for (Operation op : deletions)
-                op.execute(key, cf, prefix, params);
+        } else {
+            for (Operation op : deletions) op.execute(key, cf, prefix, params);
         }
     }
 
-    protected void validateWhereClauseForConditions() throws InvalidRequestException
-    {
+    protected void validateWhereClauseForConditions() throws InvalidRequestException {
         boolean onlyHasConditionsOnStaticColumns = hasStaticConditions() && !hasRegularConditions();
-
         // In general, we can't delete specific columns if not all clustering columns have been specified.
         // However, if we delete only static colums, it's fine since we won't really use the prefix anyway.
-        Iterator<ColumnDefinition> iterator = appliesOnlyToStaticColumns()
-                                              ? cfm.partitionKeyColumns().iterator()
-                                              : Iterators.concat(cfm.partitionKeyColumns().iterator(), cfm.clusteringColumns().iterator());
-        while (iterator.hasNext())
-        {
+        Iterator<ColumnDefinition> iterator = appliesOnlyToStaticColumns() ? cfm.partitionKeyColumns().iterator() : Iterators.concat(cfm.partitionKeyColumns().iterator(), cfm.clusteringColumns().iterator());
+        while (iterator.hasNext()) {
             ColumnDefinition def = iterator.next();
+            if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+                if (!isSerializeLoggingActive.get()) {
+                    isSerializeLoggingActive.set(true);
+                    serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(def, def.name, "def.name").toJsonString());
+                    isSerializeLoggingActive.set(false);
+                }
+            }
             Restriction restriction = processedKeys.get(def.name);
-            if (restriction == null || !(restriction.isEQ() || restriction.isIN()))
-            {
-                if (onlyHasConditionsOnStaticColumns)
-                {
-                    for (Operation oper : getOperations())
-                    {
-                        if (!oper.column.isStatic())
-                        {
-                            throw new InvalidRequestException(String.format("Primary key column '%s' must be specified in order to delete column '%s'",
-                                                                            def.name,
-                                                                            oper.column.name));
+            if (restriction == null || !(restriction.isEQ() || restriction.isIN())) {
+                if (onlyHasConditionsOnStaticColumns) {
+                    for (Operation oper : getOperations()) {
+                        if (!oper.column.isStatic()) {
+                            throw new InvalidRequestException(String.format("Primary key column '%s' must be specified in order to delete column '%s'", def.name, oper.column.name));
                         }
                     }
                 }
-
-                throw new InvalidRequestException(
-                        String.format("DELETE statements must restrict all %s KEY columns with equality relations in order " +
-                                      "to use IF conditions%s, but column '%s' is not restricted",
-                                      onlyHasConditionsOnStaticColumns ? "PARTITION" : "PRIMARY",
-                                      onlyHasConditionsOnStaticColumns ? " on static columns" : "", def.name));
+                throw new InvalidRequestException(String.format("DELETE statements must restrict all %s KEY columns with equality relations in order " + "to use IF conditions%s, but column '%s' is not restricted", onlyHasConditionsOnStaticColumns ? "PARTITION" : "PRIMARY", onlyHasConditionsOnStaticColumns ? " on static columns" : "", def.name));
             }
         }
     }
 
-    public static class Parsed extends ModificationStatement.Parsed
-    {
+    public static class Parsed extends ModificationStatement.Parsed {
+
         private final List<Operation.RawDeletion> deletions;
+
         private final List<Relation> whereClause;
 
-        public Parsed(CFName name,
-                      Attributes.Raw attrs,
-                      List<Operation.RawDeletion> deletions,
-                      List<Relation> whereClause,
-                      List<Pair<ColumnIdentifier.Raw, ColumnCondition.Raw>> conditions,
-                      boolean ifExists)
-        {
+        public Parsed(CFName name, Attributes.Raw attrs, List<Operation.RawDeletion> deletions, List<Relation> whereClause, List<Pair<ColumnIdentifier.Raw, ColumnCondition.Raw>> conditions, boolean ifExists) {
             super(name, attrs, conditions, false, ifExists);
             this.deletions = deletions;
             this.whereClause = whereClause;
         }
 
-        protected ModificationStatement prepareInternal(CFMetaData cfm, VariableSpecifications boundNames, Attributes attrs) throws InvalidRequestException
-        {
+        protected ModificationStatement prepareInternal(CFMetaData cfm, VariableSpecifications boundNames, Attributes attrs) throws InvalidRequestException {
             DeleteStatement stmt = new DeleteStatement(ModificationStatement.StatementType.DELETE, boundNames.size(), cfm, attrs);
-
-            for (Operation.RawDeletion deletion : deletions)
-            {
+            for (Operation.RawDeletion deletion : deletions) {
                 ColumnIdentifier id = deletion.affectedColumn().prepare(cfm);
                 ColumnDefinition def = cfm.getColumnDefinition(id);
                 if (def == null)
                     throw new InvalidRequestException(String.format("Unknown identifier %s", id));
-
                 // For compact, we only have one value except the key, so the only form of DELETE that make sense is without a column
                 // list. However, we support having the value name for coherence with the static/sparse case
                 if (def.isPrimaryKeyColumn())
                     throw new InvalidRequestException(String.format("Invalid identifier %s for deletion (should not be a PRIMARY KEY part)", def.name));
-
                 Operation op = deletion.prepare(cfm.ksName, def);
                 op.collectMarkerSpecification(boundNames);
                 stmt.addOperation(op);
             }
-
             stmt.processWhereClause(whereClause, boundNames);
             return stmt;
         }

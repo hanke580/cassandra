@@ -15,40 +15,50 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
 package org.apache.cassandra.serializers;
 
 import org.apache.cassandra.utils.ByteBufferUtil;
-
 import java.nio.ByteBuffer;
 
-public class Int32Serializer implements TypeSerializer<Integer>
-{
+public class Int32Serializer implements TypeSerializer<Integer> {
+
+    private static final org.slf4j.Logger serialize_logger = org.slf4j.LoggerFactory.getLogger("serialize.logger");
+
+    private java.lang.ThreadLocal<Boolean> isSerializeLoggingActive = new ThreadLocal<Boolean>() {
+
+        @Override
+        protected Boolean initialValue() {
+            return false;
+        }
+    };
+
     public static final Int32Serializer instance = new Int32Serializer();
 
-    public Integer deserialize(ByteBuffer bytes)
-    {
+    public Integer deserialize(ByteBuffer bytes) {
         return bytes.remaining() == 0 ? null : ByteBufferUtil.toInt(bytes);
     }
 
-    public ByteBuffer serialize(Integer value)
-    {
+    public ByteBuffer serialize(Integer value) {
+        if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+            if (!isSerializeLoggingActive.get()) {
+                isSerializeLoggingActive.set(true);
+                serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(org.apache.cassandra.utils.ByteBufferUtil.class, org.apache.cassandra.utils.ByteBufferUtil.EMPTY_BYTE_BUFFER, "org.apache.cassandra.utils.ByteBufferUtil.EMPTY_BYTE_BUFFER").toJsonString());
+                isSerializeLoggingActive.set(false);
+            }
+        }
         return value == null ? ByteBufferUtil.EMPTY_BYTE_BUFFER : ByteBufferUtil.bytes(value);
     }
 
-    public void validate(ByteBuffer bytes) throws MarshalException
-    {
+    public void validate(ByteBuffer bytes) throws MarshalException {
         if (bytes.remaining() != 4 && bytes.remaining() != 0)
             throw new MarshalException(String.format("Expected 4 or 0 byte int (%d)", bytes.remaining()));
     }
 
-    public String toString(Integer value)
-    {
+    public String toString(Integer value) {
         return value == null ? "" : String.valueOf(value);
     }
 
-    public Class<Integer> getType()
-    {
+    public Class<Integer> getType() {
         return Integer.class;
     }
 }

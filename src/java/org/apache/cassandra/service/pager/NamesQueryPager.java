@@ -20,7 +20,6 @@ package org.apache.cassandra.service.pager;
 import java.nio.ByteBuffer;
 import java.util.Collections;
 import java.util.List;
-
 import org.apache.cassandra.db.*;
 import org.apache.cassandra.db.filter.ColumnCounter;
 import org.apache.cassandra.exceptions.RequestValidationException;
@@ -31,11 +30,24 @@ import org.apache.cassandra.service.StorageProxy;
 /**
  * Pager over a SliceByNamesReadCommand.
  */
-public class NamesQueryPager implements SinglePartitionPager
-{
+public class NamesQueryPager implements SinglePartitionPager {
+
+    private static final org.slf4j.Logger serialize_logger = org.slf4j.LoggerFactory.getLogger("serialize.logger");
+
+    private java.lang.ThreadLocal<Boolean> isSerializeLoggingActive = new ThreadLocal<Boolean>() {
+
+        @Override
+        protected Boolean initialValue() {
+            return false;
+        }
+    };
+
     private final SliceByNamesReadCommand command;
+
     private final ConsistencyLevel consistencyLevel;
+
     private final ClientState state;
+
     private final boolean localQuery;
 
     private volatile boolean queried;
@@ -51,58 +63,59 @@ public class NamesQueryPager implements SinglePartitionPager
      * count every cell individually) and the names filter asks for more than pageSize columns.
      */
     // Don't use directly, use QueryPagers method instead
-    NamesQueryPager(SliceByNamesReadCommand command, ConsistencyLevel consistencyLevel, ClientState state, boolean localQuery)
-    {
+    NamesQueryPager(SliceByNamesReadCommand command, ConsistencyLevel consistencyLevel, ClientState state, boolean localQuery) {
         this.command = command;
         this.consistencyLevel = consistencyLevel;
         this.state = state;
         this.localQuery = localQuery;
     }
 
-    public ByteBuffer key()
-    {
+    public ByteBuffer key() {
+        if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+            if (!isSerializeLoggingActive.get()) {
+                isSerializeLoggingActive.set(true);
+                serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(this, this.command, "this.command").toJsonString());
+                isSerializeLoggingActive.set(false);
+            }
+        }
         return command.key;
     }
 
-    public ColumnCounter columnCounter()
-    {
+    public ColumnCounter columnCounter() {
         // We know NamesQueryFilter.columnCounter don't care about his argument
         return command.filter.columnCounter(null, command.timestamp);
     }
 
-    public PagingState state()
-    {
+    public PagingState state() {
         return null;
     }
 
-    public boolean isExhausted()
-    {
+    public boolean isExhausted() {
         return queried;
     }
 
-    public List<Row> fetchPage(int pageSize) throws RequestValidationException, RequestExecutionException
-    {
+    public List<Row> fetchPage(int pageSize) throws RequestValidationException, RequestExecutionException {
         assert command.filter.countCQL3Rows() || command.filter.columns.size() <= pageSize;
-
         if (isExhausted())
             return Collections.<Row>emptyList();
-
         queried = true;
-        return localQuery
-             ? Collections.singletonList(command.getRow(Keyspace.open(command.ksName)))
-             : StorageProxy.read(Collections.<ReadCommand>singletonList(command), consistencyLevel, state);
+        if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+            if (!isSerializeLoggingActive.get()) {
+                isSerializeLoggingActive.set(true);
+                serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(this, this.command, "this.command").toJsonString());
+                isSerializeLoggingActive.set(false);
+            }
+        }
+        return localQuery ? Collections.singletonList(command.getRow(Keyspace.open(command.ksName))) : StorageProxy.read(Collections.<ReadCommand>singletonList(command), consistencyLevel, state);
     }
 
-    public int maxRemaining()
-    {
+    public int maxRemaining() {
         if (queried)
             return 0;
-
         return command.filter.countCQL3Rows() ? 1 : command.filter.columns.size();
     }
 
-    public long timestamp()
-    {
+    public long timestamp() {
         return command.timestamp;
     }
 }

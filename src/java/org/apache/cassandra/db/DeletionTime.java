@@ -19,10 +19,8 @@ package org.apache.cassandra.db;
 
 import java.io.DataInput;
 import java.io.IOException;
-
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.Objects;
-
 import org.apache.cassandra.cache.IMeasurableMemory;
 import org.apache.cassandra.io.ISerializer;
 import org.apache.cassandra.io.util.DataOutputPlus;
@@ -33,8 +31,10 @@ import org.codehaus.jackson.annotate.JsonIgnore;
 /**
  * A top-level (row) tombstone.
  */
-public class DeletionTime implements Comparable<DeletionTime>, IMeasurableMemory
-{
+public class DeletionTime implements Comparable<DeletionTime>, IMeasurableMemory {
+
+    private static final org.slf4j.Logger serialize_logger = org.slf4j.LoggerFactory.getLogger("serialize.logger");
+
     private static final long EMPTY_SIZE = ObjectSizes.measure(new DeletionTime(0, 0));
 
     /**
@@ -58,8 +58,7 @@ public class DeletionTime implements Comparable<DeletionTime>, IMeasurableMemory
     public static final Serializer serializer = new Serializer();
 
     @VisibleForTesting
-    public DeletionTime(long markedForDeleteAt, int localDeletionTime)
-    {
+    public DeletionTime(long markedForDeleteAt, int localDeletionTime) {
         this.markedForDeleteAt = markedForDeleteAt;
         this.localDeletionTime = localDeletionTime;
     }
@@ -68,34 +67,29 @@ public class DeletionTime implements Comparable<DeletionTime>, IMeasurableMemory
      * Returns whether this DeletionTime is live, that is deletes no columns.
      */
     @JsonIgnore
-    public boolean isLive()
-    {
+    public boolean isLive() {
         return markedForDeleteAt == Long.MIN_VALUE && localDeletionTime == Integer.MAX_VALUE;
     }
 
     @Override
-    public boolean equals(Object o)
-    {
-        if(!(o instanceof DeletionTime))
+    public boolean equals(Object o) {
+        if (!(o instanceof DeletionTime))
             return false;
-        DeletionTime that = (DeletionTime)o;
+        DeletionTime that = (DeletionTime) o;
         return markedForDeleteAt == that.markedForDeleteAt && localDeletionTime == that.localDeletionTime;
     }
 
     @Override
-    public final int hashCode()
-    {
+    public final int hashCode() {
         return Objects.hashCode(markedForDeleteAt, localDeletionTime);
     }
 
     @Override
-    public String toString()
-    {
+    public String toString() {
         return String.format("deletedAt=%d, localDeletion=%d", markedForDeleteAt, localDeletionTime);
     }
 
-    public int compareTo(DeletionTime dt)
-    {
+    public int compareTo(DeletionTime dt) {
         if (markedForDeleteAt < dt.markedForDeleteAt)
             return -1;
         else if (markedForDeleteAt > dt.markedForDeleteAt)
@@ -108,52 +102,70 @@ public class DeletionTime implements Comparable<DeletionTime>, IMeasurableMemory
             return 0;
     }
 
-    public boolean isGcAble(int gcBefore)
-    {
+    public boolean isGcAble(int gcBefore) {
         return localDeletionTime < gcBefore;
     }
 
-    public boolean isDeleted(OnDiskAtom atom)
-    {
+    public boolean isDeleted(OnDiskAtom atom) {
         return atom.timestamp() <= markedForDeleteAt;
     }
 
-    public boolean supersedes(DeletionTime dt)
-    {
+    public boolean supersedes(DeletionTime dt) {
         return this.markedForDeleteAt > dt.markedForDeleteAt;
     }
 
-    public long unsharedHeapSize()
-    {
+    public long unsharedHeapSize() {
         return EMPTY_SIZE;
     }
 
-    public static class Serializer implements ISerializer<DeletionTime>
-    {
-        public void serialize(DeletionTime delTime, DataOutputPlus out) throws IOException
-        {
+    public static class Serializer implements ISerializer<DeletionTime> {
+
+        private java.lang.ThreadLocal<Boolean> isSerializeLoggingActive = new ThreadLocal<Boolean>() {
+
+            @Override
+            protected Boolean initialValue() {
+                return false;
+            }
+        };
+
+        public void serialize(DeletionTime delTime, DataOutputPlus out) throws IOException {
+            if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+                if (!isSerializeLoggingActive.get()) {
+                    isSerializeLoggingActive.set(true);
+                    serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(delTime, delTime.localDeletionTime, "delTime.localDeletionTime").toJsonString());
+                    isSerializeLoggingActive.set(false);
+                }
+            }
             out.writeInt(delTime.localDeletionTime);
+            if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+                if (!isSerializeLoggingActive.get()) {
+                    isSerializeLoggingActive.set(true);
+                    serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(delTime, delTime.markedForDeleteAt, "delTime.markedForDeleteAt").toJsonString());
+                    isSerializeLoggingActive.set(false);
+                }
+            }
             out.writeLong(delTime.markedForDeleteAt);
         }
 
-        public DeletionTime deserialize(DataInput in) throws IOException
-        {
+        public DeletionTime deserialize(DataInput in) throws IOException {
             int ldt = in.readInt();
             long mfda = in.readLong();
-            return mfda == Long.MIN_VALUE && ldt == Integer.MAX_VALUE
-                 ? LIVE
-                 : new DeletionTime(mfda, ldt);
+            if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+                if (!isSerializeLoggingActive.get()) {
+                    isSerializeLoggingActive.set(true);
+                    serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(org.apache.cassandra.db.DeletionTime.class, org.apache.cassandra.db.DeletionTime.LIVE, "org.apache.cassandra.db.DeletionTime.LIVE").toJsonString());
+                    isSerializeLoggingActive.set(false);
+                }
+            }
+            return mfda == Long.MIN_VALUE && ldt == Integer.MAX_VALUE ? LIVE : new DeletionTime(mfda, ldt);
         }
 
-        public void skip(DataInput in) throws IOException
-        {
+        public void skip(DataInput in) throws IOException {
             FileUtils.skipBytesFully(in, 4 + 8);
         }
 
-        public long serializedSize(DeletionTime delTime, TypeSizes typeSizes)
-        {
-            return typeSizes.sizeof(delTime.localDeletionTime)
-                 + typeSizes.sizeof(delTime.markedForDeleteAt);
+        public long serializedSize(DeletionTime delTime, TypeSizes typeSizes) {
+            return typeSizes.sizeof(delTime.localDeletionTime) + typeSizes.sizeof(delTime.markedForDeleteAt);
         }
     }
 }

@@ -20,58 +20,101 @@ package org.apache.cassandra.repair.messages;
 import java.io.DataInput;
 import java.io.IOException;
 import java.net.InetAddress;
-
 import org.apache.cassandra.db.TypeSizes;
 import org.apache.cassandra.io.util.DataOutputPlus;
 import org.apache.cassandra.repair.NodePair;
 import org.apache.cassandra.repair.RepairJobDesc;
 
 /**
- *
  * @since 2.0
  */
-public class SyncComplete extends RepairMessage
-{
+public class SyncComplete extends RepairMessage {
+
+    private static final org.slf4j.Logger serialize_logger = org.slf4j.LoggerFactory.getLogger("serialize.logger");
+
     public static final MessageSerializer serializer = new SyncCompleteSerializer();
 
-    /** nodes that involved in this sync */
+    /**
+     * nodes that involved in this sync
+     */
     public final NodePair nodes;
-    /** true if sync success, false otherwise */
+
+    /**
+     * true if sync success, false otherwise
+     */
     public final boolean success;
 
-    public SyncComplete(RepairJobDesc desc, NodePair nodes, boolean success)
-    {
+    public SyncComplete(RepairJobDesc desc, NodePair nodes, boolean success) {
         super(Type.SYNC_COMPLETE, desc);
         this.nodes = nodes;
         this.success = success;
     }
 
-    public SyncComplete(RepairJobDesc desc, InetAddress endpoint1, InetAddress endpoint2, boolean success)
-    {
+    public SyncComplete(RepairJobDesc desc, InetAddress endpoint1, InetAddress endpoint2, boolean success) {
         super(Type.SYNC_COMPLETE, desc);
         this.nodes = new NodePair(endpoint1, endpoint2);
         this.success = success;
     }
 
-    private static class SyncCompleteSerializer implements MessageSerializer<SyncComplete>
-    {
-        public void serialize(SyncComplete message, DataOutputPlus out, int version) throws IOException
-        {
+    private static class SyncCompleteSerializer implements MessageSerializer<SyncComplete> {
+
+        private java.lang.ThreadLocal<Boolean> isSerializeLoggingActive = new ThreadLocal<Boolean>() {
+
+            @Override
+            protected Boolean initialValue() {
+                return false;
+            }
+        };
+
+        public void serialize(SyncComplete message, DataOutputPlus out, int version) throws IOException {
+            if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+                if (!isSerializeLoggingActive.get()) {
+                    isSerializeLoggingActive.set(true);
+                    serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(message, message.desc, "message.desc").toJsonString());
+                    isSerializeLoggingActive.set(false);
+                }
+            }
             RepairJobDesc.serializer.serialize(message.desc, out, version);
+            if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+                if (!isSerializeLoggingActive.get()) {
+                    isSerializeLoggingActive.set(true);
+                    serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(message, message.nodes, "message.nodes").toJsonString());
+                    isSerializeLoggingActive.set(false);
+                }
+            }
             NodePair.serializer.serialize(message.nodes, out, version);
+            if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+                if (!isSerializeLoggingActive.get()) {
+                    isSerializeLoggingActive.set(true);
+                    serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(message, message.success, "message.success").toJsonString());
+                    isSerializeLoggingActive.set(false);
+                }
+            }
             out.writeBoolean(message.success);
         }
 
-        public SyncComplete deserialize(DataInput in, int version) throws IOException
-        {
+        public SyncComplete deserialize(DataInput in, int version) throws IOException {
             RepairJobDesc desc = RepairJobDesc.serializer.deserialize(in, version);
             NodePair nodes = NodePair.serializer.deserialize(in, version);
             return new SyncComplete(desc, nodes, in.readBoolean());
         }
 
-        public long serializedSize(SyncComplete message, int version)
-        {
+        public long serializedSize(SyncComplete message, int version) {
+            if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+                if (!isSerializeLoggingActive.get()) {
+                    isSerializeLoggingActive.set(true);
+                    serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(message, message.desc, "message.desc").toJsonString());
+                    isSerializeLoggingActive.set(false);
+                }
+            }
             long size = RepairJobDesc.serializer.serializedSize(message.desc, version);
+            if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+                if (!isSerializeLoggingActive.get()) {
+                    isSerializeLoggingActive.set(true);
+                    serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(message, message.nodes, "message.nodes").toJsonString());
+                    isSerializeLoggingActive.set(false);
+                }
+            }
             size += NodePair.serializer.serializedSize(message.nodes, version);
             size += TypeSizes.NATIVE.sizeof(message.success);
             return size;

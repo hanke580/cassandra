@@ -19,38 +19,49 @@ package org.apache.cassandra.serializers;
 
 import java.nio.ByteBuffer;
 import java.util.UUID;
-
 import org.apache.cassandra.utils.ByteBufferUtil;
 import org.apache.cassandra.utils.UUIDGen;
 
-public class UUIDSerializer implements TypeSerializer<UUID>
-{
+public class UUIDSerializer implements TypeSerializer<UUID> {
+
+    private static final org.slf4j.Logger serialize_logger = org.slf4j.LoggerFactory.getLogger("serialize.logger");
+
+    private java.lang.ThreadLocal<Boolean> isSerializeLoggingActive = new ThreadLocal<Boolean>() {
+
+        @Override
+        protected Boolean initialValue() {
+            return false;
+        }
+    };
+
     public static final UUIDSerializer instance = new UUIDSerializer();
 
-    public UUID deserialize(ByteBuffer bytes)
-    {
+    public UUID deserialize(ByteBuffer bytes) {
         return bytes.remaining() == 0 ? null : UUIDGen.getUUID(bytes);
     }
 
-    public ByteBuffer serialize(UUID value)
-    {
+    public ByteBuffer serialize(UUID value) {
+        if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+            if (!isSerializeLoggingActive.get()) {
+                isSerializeLoggingActive.set(true);
+                serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(org.apache.cassandra.utils.ByteBufferUtil.class, org.apache.cassandra.utils.ByteBufferUtil.EMPTY_BYTE_BUFFER, "org.apache.cassandra.utils.ByteBufferUtil.EMPTY_BYTE_BUFFER").toJsonString());
+                isSerializeLoggingActive.set(false);
+            }
+        }
         return value == null ? ByteBufferUtil.EMPTY_BYTE_BUFFER : ByteBuffer.wrap(UUIDGen.decompose(value));
     }
 
-    public void validate(ByteBuffer bytes) throws MarshalException
-    {
+    public void validate(ByteBuffer bytes) throws MarshalException {
         if (bytes.remaining() != 16 && bytes.remaining() != 0)
             throw new MarshalException(String.format("UUID should be 16 or 0 bytes (%d)", bytes.remaining()));
         // not sure what the version should be for this.
     }
 
-    public String toString(UUID value)
-    {
+    public String toString(UUID value) {
         return value == null ? "" : value.toString();
     }
 
-    public Class<UUID> getType()
-    {
+    public Class<UUID> getType() {
         return UUID.class;
     }
 }

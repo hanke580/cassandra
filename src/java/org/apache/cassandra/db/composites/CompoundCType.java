@@ -21,61 +21,74 @@ import java.nio.ByteBuffer;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
-
 import org.apache.cassandra.db.marshal.AbstractType;
 import org.apache.cassandra.db.marshal.CompositeType;
 
 /**
  * A truly-composite CType.
  */
-public class CompoundCType extends AbstractCType
-{
+public class CompoundCType extends AbstractCType {
+
+    private static final org.slf4j.Logger serialize_logger = org.slf4j.LoggerFactory.getLogger("serialize.logger");
+
+    private java.lang.ThreadLocal<Boolean> isSerializeLoggingActive = new ThreadLocal<Boolean>() {
+
+        @Override
+        protected Boolean initialValue() {
+            return false;
+        }
+    };
+
     final List<AbstractType<?>> types;
 
     // It's up to the caller to pass a list that is effectively immutable
-    public CompoundCType(List<AbstractType<?>> types)
-    {
+    public CompoundCType(List<AbstractType<?>> types) {
         super(isByteOrderComparable(types));
         this.types = types;
     }
 
-    public boolean isCompound()
-    {
+    public boolean isCompound() {
         return true;
     }
 
-    public int size()
-    {
+    public int size() {
         return types.size();
     }
 
-    public AbstractType<?> subtype(int i)
-    {
+    public AbstractType<?> subtype(int i) {
+        if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+            if (!isSerializeLoggingActive.get()) {
+                isSerializeLoggingActive.set(true);
+                serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(this, this.types, "this.types").toJsonString());
+                isSerializeLoggingActive.set(false);
+            }
+        }
         return types.get(i);
     }
 
-    public Composite fromByteBuffer(ByteBuffer bytes)
-    {
-        if (!bytes.hasRemaining())
+    public Composite fromByteBuffer(ByteBuffer bytes) {
+        if (!bytes.hasRemaining()) {
+            if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+                if (!isSerializeLoggingActive.get()) {
+                    isSerializeLoggingActive.set(true);
+                    serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(org.apache.cassandra.db.composites.Composites.class, org.apache.cassandra.db.composites.Composites.EMPTY, "org.apache.cassandra.db.composites.Composites.EMPTY").toJsonString());
+                    isSerializeLoggingActive.set(false);
+                }
+            }
             return Composites.EMPTY;
-
+        }
         ByteBuffer[] elements = new ByteBuffer[size()];
         int idx = bytes.position(), i = 0;
         byte eoc = 0;
-
         boolean isStatic = false;
-        if (CompositeType.isStaticName(bytes))
-        {
+        if (CompositeType.isStaticName(bytes)) {
             isStatic = true;
             idx += 2;
         }
-
-        while (idx < bytes.limit())
-        {
+        while (idx < bytes.limit()) {
             checkRemaining(bytes, idx, 2);
             int length = bytes.getShort(idx) & 0xFFFF;
             idx += 2;
-
             checkRemaining(bytes, idx, length + 1);
             elements[i++] = sliceBytes(bytes, idx, length);
             idx += length;
@@ -84,96 +97,82 @@ public class CompoundCType extends AbstractCType
         return new CompoundComposite(elements, i, isStatic).withEOC(Composite.EOC.from(eoc));
     }
 
-    public CBuilder builder()
-    {
+    public CBuilder builder() {
         return new CompoundCBuilder(this);
     }
 
-    public CompoundCType setSubtype(int position, AbstractType<?> newType)
-    {
+    public CompoundCType setSubtype(int position, AbstractType<?> newType) {
         List<AbstractType<?>> newTypes = new ArrayList<AbstractType<?>>(types);
         newTypes.set(position, newType);
         return new CompoundCType(newTypes);
     }
 
-    public AbstractType<?> asAbstractType()
-    {
+    public AbstractType<?> asAbstractType() {
         return CompositeType.getInstance(types);
     }
 
-    public static class CompoundCBuilder implements CBuilder
-    {
+    public static class CompoundCBuilder implements CBuilder {
+
         private final CType type;
+
         private final ByteBuffer[] values;
+
         private int size;
+
         private boolean built;
 
-        public CompoundCBuilder(CType type)
-        {
+        public CompoundCBuilder(CType type) {
             this.type = type;
             this.values = new ByteBuffer[type.size()];
         }
 
-        public int remainingCount()
-        {
+        public int remainingCount() {
             return values.length - size;
         }
 
-        public CBuilder add(ByteBuffer value)
-        {
+        public CBuilder add(ByteBuffer value) {
             if (isDone())
                 throw new IllegalStateException();
             values[size++] = value;
             return this;
         }
 
-        public CBuilder add(Object value)
-        {
-            return add(((AbstractType)type.subtype(size)).decompose(value));
+        public CBuilder add(Object value) {
+            return add(((AbstractType) type.subtype(size)).decompose(value));
         }
 
-        private boolean isDone()
-        {
+        private boolean isDone() {
             return remainingCount() == 0 || built;
         }
 
-        public Composite build()
-        {
+        public Composite build() {
             if (size == 0)
                 return Composites.EMPTY;
-
             // We don't allow to add more element to a builder that has been built so
             // that we don't have to copy values.
             built = true;
-
             // If the builder is full and we're building a dense cell name, then we can
             // directly allocate the CellName object as it's complete.
-            if (size == values.length && type instanceof CellNameType && ((CellNameType)type).isDense())
+            if (size == values.length && type instanceof CellNameType && ((CellNameType) type).isDense())
                 return new CompoundDenseCellName(values);
             return new CompoundComposite(values, size, false);
         }
 
-        public Composite buildWith(ByteBuffer value)
-        {
+        public Composite buildWith(ByteBuffer value) {
             ByteBuffer[] newValues = Arrays.copyOf(values, values.length);
             newValues[size] = value;
             // Same as above
-            if (size+1 == newValues.length && type instanceof CellNameType && ((CellNameType)type).isDense())
+            if (size + 1 == newValues.length && type instanceof CellNameType && ((CellNameType) type).isDense())
                 return new CompoundDenseCellName(newValues);
-
-            return new CompoundComposite(newValues, size+1, false);
+            return new CompoundComposite(newValues, size + 1, false);
         }
 
-        public Composite buildWith(List<ByteBuffer> newValues)
-        {
+        public Composite buildWith(List<ByteBuffer> newValues) {
             ByteBuffer[] buffers = Arrays.copyOf(values, values.length);
             int newSize = size;
-            for (ByteBuffer value : newValues)
-                buffers[newSize++] = value;
-
-            if (newSize == buffers.length && type instanceof CellNameType && ((CellNameType)type).isDense())
+            for (ByteBuffer value : newValues) buffers[newSize++] = value;
+            if (newSize == buffers.length && type instanceof CellNameType && ((CellNameType) type).isDense())
                 return new CompoundDenseCellName(buffers);
-
             return new CompoundComposite(buffers, newSize, false);
         }
     }

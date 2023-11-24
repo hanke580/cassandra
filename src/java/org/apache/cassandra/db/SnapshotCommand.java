@@ -19,56 +19,90 @@ package org.apache.cassandra.db;
 
 import java.io.DataInput;
 import java.io.IOException;
-
 import org.apache.cassandra.io.IVersionedSerializer;
 import org.apache.cassandra.io.util.DataOutputPlus;
 import org.apache.cassandra.net.MessageOut;
 import org.apache.cassandra.net.MessagingService;
 
-public class SnapshotCommand
-{
+public class SnapshotCommand {
+
+    private static final org.slf4j.Logger serialize_logger = org.slf4j.LoggerFactory.getLogger("serialize.logger");
+
     public static final SnapshotCommandSerializer serializer = new SnapshotCommandSerializer();
 
     public final String keyspace;
+
     public final String column_family;
+
     public final String snapshot_name;
+
     public final boolean clear_snapshot;
 
-    public SnapshotCommand(String keyspace, String columnFamily, String snapshotName, boolean clearSnapshot)
-    {
+    public SnapshotCommand(String keyspace, String columnFamily, String snapshotName, boolean clearSnapshot) {
         this.keyspace = keyspace;
         this.column_family = columnFamily;
         this.snapshot_name = snapshotName;
         this.clear_snapshot = clearSnapshot;
     }
 
-    public MessageOut createMessage()
-    {
+    public MessageOut createMessage() {
         return new MessageOut<SnapshotCommand>(MessagingService.Verb.SNAPSHOT, this, serializer);
     }
 
     @Override
-    public String toString()
-    {
-        return "SnapshotCommand{" + "keyspace='" + keyspace + '\'' +
-                                  ", column_family='" + column_family + '\'' +
-                                  ", snapshot_name=" + snapshot_name +
-                                  ", clear_snapshot=" + clear_snapshot + '}';
+    public String toString() {
+        return "SnapshotCommand{" + "keyspace='" + keyspace + '\'' + ", column_family='" + column_family + '\'' + ", snapshot_name=" + snapshot_name + ", clear_snapshot=" + clear_snapshot + '}';
     }
 }
 
-class SnapshotCommandSerializer implements IVersionedSerializer<SnapshotCommand>
-{
-    public void serialize(SnapshotCommand snapshot_command, DataOutputPlus out, int version) throws IOException
-    {
+class SnapshotCommandSerializer implements IVersionedSerializer<SnapshotCommand> {
+
+    private static final org.slf4j.Logger serialize_logger = org.slf4j.LoggerFactory.getLogger("serialize.logger");
+
+    private java.lang.ThreadLocal<Boolean> isSerializeLoggingActive = new ThreadLocal<Boolean>() {
+
+        @Override
+        protected Boolean initialValue() {
+            return false;
+        }
+    };
+
+    public void serialize(SnapshotCommand snapshot_command, DataOutputPlus out, int version) throws IOException {
+        if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+            if (!isSerializeLoggingActive.get()) {
+                isSerializeLoggingActive.set(true);
+                serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(snapshot_command, snapshot_command.keyspace, "snapshot_command.keyspace").toJsonString());
+                isSerializeLoggingActive.set(false);
+            }
+        }
         out.writeUTF(snapshot_command.keyspace);
+        if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+            if (!isSerializeLoggingActive.get()) {
+                isSerializeLoggingActive.set(true);
+                serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(snapshot_command, snapshot_command.column_family, "snapshot_command.column_family").toJsonString());
+                isSerializeLoggingActive.set(false);
+            }
+        }
         out.writeUTF(snapshot_command.column_family);
+        if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+            if (!isSerializeLoggingActive.get()) {
+                isSerializeLoggingActive.set(true);
+                serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(snapshot_command, snapshot_command.snapshot_name, "snapshot_command.snapshot_name").toJsonString());
+                isSerializeLoggingActive.set(false);
+            }
+        }
         out.writeUTF(snapshot_command.snapshot_name);
+        if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+            if (!isSerializeLoggingActive.get()) {
+                isSerializeLoggingActive.set(true);
+                serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(snapshot_command, snapshot_command.clear_snapshot, "snapshot_command.clear_snapshot").toJsonString());
+                isSerializeLoggingActive.set(false);
+            }
+        }
         out.writeBoolean(snapshot_command.clear_snapshot);
     }
 
-    public SnapshotCommand deserialize(DataInput in, int version) throws IOException
-    {
+    public SnapshotCommand deserialize(DataInput in, int version) throws IOException {
         String keyspace = in.readUTF();
         String column_family = in.readUTF();
         String snapshot_name = in.readUTF();
@@ -76,11 +110,7 @@ class SnapshotCommandSerializer implements IVersionedSerializer<SnapshotCommand>
         return new SnapshotCommand(keyspace, column_family, snapshot_name, clear_snapshot);
     }
 
-    public long serializedSize(SnapshotCommand sc, int version)
-    {
-        return TypeSizes.NATIVE.sizeof(sc.keyspace)
-             + TypeSizes.NATIVE.sizeof(sc.column_family)
-             + TypeSizes.NATIVE.sizeof(sc.snapshot_name)
-             + TypeSizes.NATIVE.sizeof(sc.clear_snapshot);
+    public long serializedSize(SnapshotCommand sc, int version) {
+        return TypeSizes.NATIVE.sizeof(sc.keyspace) + TypeSizes.NATIVE.sizeof(sc.column_family) + TypeSizes.NATIVE.sizeof(sc.snapshot_name) + TypeSizes.NATIVE.sizeof(sc.clear_snapshot);
     }
 }

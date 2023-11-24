@@ -31,81 +31,106 @@ import org.apache.cassandra.service.QueryState;
 import org.apache.cassandra.transport.Event;
 import org.apache.cassandra.transport.messages.ResultMessage;
 
-public class DropIndexStatement extends SchemaAlteringStatement
-{
+public class DropIndexStatement extends SchemaAlteringStatement {
+
+    private static final org.slf4j.Logger serialize_logger = org.slf4j.LoggerFactory.getLogger("serialize.logger");
+
+    private java.lang.ThreadLocal<Boolean> isSerializeLoggingActive = new ThreadLocal<Boolean>() {
+
+        @Override
+        protected Boolean initialValue() {
+            return false;
+        }
+    };
+
     public final String indexName;
+
     public final boolean ifExists;
 
     // initialized in announceMigration()
     private String indexedCF;
 
-    public DropIndexStatement(IndexName indexName, boolean ifExists)
-    {
+    public DropIndexStatement(IndexName indexName, boolean ifExists) {
         super(indexName.getCfName());
         this.indexName = indexName.getIdx();
         this.ifExists = ifExists;
     }
 
-    public String columnFamily()
-    {
+    public String columnFamily() {
         if (indexedCF != null)
             return indexedCF;
-
-        try
-        {
+        try {
             CFMetaData cfm = findIndexedCF();
             return cfm == null ? null : cfm.cfName;
-        }
-        catch (InvalidRequestException ire)
-        {
+        } catch (InvalidRequestException ire) {
             throw new RuntimeException(ire);
         }
     }
 
-    public void checkAccess(ClientState state) throws UnauthorizedException, InvalidRequestException
-    {
+    public void checkAccess(ClientState state) throws UnauthorizedException, InvalidRequestException {
         CFMetaData cfm = findIndexedCF();
         if (cfm == null)
             return;
-
+        if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+            if (!isSerializeLoggingActive.get()) {
+                isSerializeLoggingActive.set(true);
+                serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(cfm, cfm.cfName, "cfm.cfName").toJsonString());
+                isSerializeLoggingActive.set(false);
+            }
+        }
+        if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+            if (!isSerializeLoggingActive.get()) {
+                isSerializeLoggingActive.set(true);
+                serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(cfm, cfm.ksName, "cfm.ksName").toJsonString());
+                isSerializeLoggingActive.set(false);
+            }
+        }
+        if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+            if (!isSerializeLoggingActive.get()) {
+                isSerializeLoggingActive.set(true);
+                serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(org.apache.cassandra.auth.Permission.class, org.apache.cassandra.auth.Permission.ALTER, "org.apache.cassandra.auth.Permission.ALTER").toJsonString());
+                isSerializeLoggingActive.set(false);
+            }
+        }
         state.hasColumnFamilyAccess(cfm.ksName, cfm.cfName, Permission.ALTER);
     }
 
-    public void validate(ClientState state)
-    {
+    public void validate(ClientState state) {
         // validated in findIndexedCf()
     }
 
-    public Event.SchemaChange changeEvent()
-    {
+    public Event.SchemaChange changeEvent() {
         // Dropping an index is akin to updating the CF
         return new Event.SchemaChange(Event.SchemaChange.Change.UPDATED, Event.SchemaChange.Target.TABLE, keyspace(), columnFamily());
     }
 
     @Override
-    public ResultMessage execute(QueryState state, QueryOptions options) throws RequestValidationException
-    {
+    public ResultMessage execute(QueryState state, QueryOptions options) throws RequestValidationException {
         announceMigration(false);
         return indexedCF == null ? null : new ResultMessage.SchemaChange(changeEvent());
     }
 
-    public boolean announceMigration(boolean isLocalOnly) throws InvalidRequestException, ConfigurationException
-    {
+    public boolean announceMigration(boolean isLocalOnly) throws InvalidRequestException, ConfigurationException {
         CFMetaData cfm = findIndexedCF();
         if (cfm == null)
             return false;
-
         CFMetaData updatedCfm = updateCFMetadata(cfm);
         indexedCF = updatedCfm.cfName;
         MigrationManager.announceColumnFamilyUpdate(updatedCfm, isLocalOnly);
         return true;
     }
 
-    private CFMetaData updateCFMetadata(CFMetaData cfm)
-    {
+    private CFMetaData updateCFMetadata(CFMetaData cfm) {
         ColumnDefinition column = findIndexedColumn(cfm);
         assert column != null;
         CFMetaData cloned = cfm.copy();
+        if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+            if (!isSerializeLoggingActive.get()) {
+                isSerializeLoggingActive.set(true);
+                serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(column, column.name, "column.name").toJsonString());
+                isSerializeLoggingActive.set(false);
+            }
+        }
         ColumnDefinition toChange = cloned.getColumnDefinition(column.name);
         assert toChange.getIndexName() != null && toChange.getIndexName().equals(indexName);
         toChange.setIndexName(null);
@@ -113,27 +138,36 @@ public class DropIndexStatement extends SchemaAlteringStatement
         return cloned;
     }
 
-    private CFMetaData findIndexedCF() throws InvalidRequestException
-    {
+    private CFMetaData findIndexedCF() throws InvalidRequestException {
         KSMetaData ksm = Schema.instance.getKSMetaData(keyspace());
         if (ksm == null)
             throw new KeyspaceNotDefinedException("Keyspace " + keyspace() + " does not exist");
-        for (CFMetaData cfm : ksm.cfMetaData().values())
-        {
+        for (CFMetaData cfm : ksm.cfMetaData().values()) {
+            if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+                if (!isSerializeLoggingActive.get()) {
+                    isSerializeLoggingActive.set(true);
+                    serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(ksm.cfMetaData().values(), cfm, "cfm").toJsonString());
+                    isSerializeLoggingActive.set(false);
+                }
+            }
             if (findIndexedColumn(cfm) != null)
                 return cfm;
         }
-
         if (ifExists)
             return null;
         else
             throw new InvalidRequestException("Index '" + indexName + "' could not be found in any of the tables of keyspace '" + keyspace() + '\'');
     }
 
-    private ColumnDefinition findIndexedColumn(CFMetaData cfm)
-    {
-        for (ColumnDefinition column : cfm.allColumns())
-        {
+    private ColumnDefinition findIndexedColumn(CFMetaData cfm) {
+        for (ColumnDefinition column : cfm.allColumns()) {
+            if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+                if (!isSerializeLoggingActive.get()) {
+                    isSerializeLoggingActive.set(true);
+                    serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(cfm.allColumns(), column, "column").toJsonString());
+                    isSerializeLoggingActive.set(false);
+                }
+            }
             if (column.getIndexType() != null && column.getIndexName() != null && column.getIndexName().equals(indexName))
                 return column;
         }

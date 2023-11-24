@@ -19,17 +19,25 @@ package org.apache.cassandra.db.composites;
 
 import java.nio.ByteBuffer;
 import java.util.*;
-
 import org.apache.cassandra.db.composites.Composite.EOC;
 import org.apache.cassandra.utils.ByteBufferUtil;
-
 import static java.util.Collections.singletonList;
 
 /**
  * Builder that allow to build multiple composites at the same time.
  */
-public final class CompositesBuilder
-{
+public final class CompositesBuilder {
+
+    private static final org.slf4j.Logger serialize_logger = org.slf4j.LoggerFactory.getLogger("serialize.logger");
+
+    private java.lang.ThreadLocal<Boolean> isSerializeLoggingActive = new ThreadLocal<Boolean>() {
+
+        @Override
+        protected Boolean initialValue() {
+            return false;
+        }
+    };
+
     /**
      * The composite type.
      */
@@ -65,8 +73,7 @@ public final class CompositesBuilder
      */
     private boolean containsUnset;
 
-    public CompositesBuilder(CType ctype)
-    {
+    public CompositesBuilder(CType ctype) {
         this.ctype = ctype;
     }
 
@@ -80,15 +87,11 @@ public final class CompositesBuilder
      * @param value the value of the next element
      * @return this <code>CompositeBuilder</code>
      */
-    public CompositesBuilder addElementToAll(ByteBuffer value)
-    {
+    public CompositesBuilder addElementToAll(ByteBuffer value) {
         checkUpdateable();
-
         if (isEmpty())
             elementsList.add(new ArrayList<ByteBuffer>());
-
-        for (int i = 0, m = elementsList.size(); i < m; i++)
-        {
+        for (int i = 0, m = elementsList.size(); i < m; i++) {
             if (value == null)
                 containsNull = true;
             if (value == ByteBufferUtil.UNSET_BYTE_BUFFER)
@@ -109,43 +112,37 @@ public final class CompositesBuilder
      * @param values the elements to add
      * @return this <code>CompositeBuilder</code>
      */
-    public CompositesBuilder addEachElementToAll(List<ByteBuffer> values)
-    {
+    public CompositesBuilder addEachElementToAll(List<ByteBuffer> values) {
         checkUpdateable();
-
         if (isEmpty())
             elementsList.add(new ArrayList<ByteBuffer>());
-
-        if (values.isEmpty())
-        {
+        if (values.isEmpty()) {
             hasMissingElements = true;
-        }
-        else
-        {
-            for (int i = 0, m = elementsList.size(); i < m; i++)
-            {
+        } else {
+            for (int i = 0, m = elementsList.size(); i < m; i++) {
                 List<ByteBuffer> oldComposite = elementsList.remove(0);
-
-                for (int j = 0, n = values.size(); j < n; j++)
-                {
+                for (int j = 0, n = values.size(); j < n; j++) {
                     List<ByteBuffer> newComposite = new ArrayList<>(oldComposite);
                     elementsList.add(newComposite);
-
                     ByteBuffer value = values.get(j);
-
                     if (value == null)
                         containsNull = true;
                     if (value == ByteBufferUtil.UNSET_BYTE_BUFFER)
                         containsUnset = true;
-
                     newComposite.add(values.get(j));
+                    if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+                        if (!isSerializeLoggingActive.get()) {
+                            isSerializeLoggingActive.set(true);
+                            serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(values, values.get(j), "values.get(j)").toJsonString());
+                            isSerializeLoggingActive.set(false);
+                        }
+                    }
                 }
             }
         }
         size++;
         return this;
     }
-
 
     /**
      * Adds individually each of the specified list of elements to the end of all of the existing composites.
@@ -157,35 +154,30 @@ public final class CompositesBuilder
      * @param values the elements to add
      * @return this <code>CompositeBuilder</code>
      */
-    public CompositesBuilder addAllElementsToAll(List<List<ByteBuffer>> values)
-    {
+    public CompositesBuilder addAllElementsToAll(List<List<ByteBuffer>> values) {
         checkUpdateable();
-
         if (isEmpty())
             elementsList.add(new ArrayList<ByteBuffer>());
-
-        if (values.isEmpty())
-        {
+        if (values.isEmpty()) {
             hasMissingElements = true;
-        }
-        else
-        {
-            for (int i = 0, m = elementsList.size(); i < m; i++)
-            {
+        } else {
+            for (int i = 0, m = elementsList.size(); i < m; i++) {
                 List<ByteBuffer> oldComposite = elementsList.remove(0);
-
-                for (int j = 0, n = values.size(); j < n; j++)
-                {
+                for (int j = 0, n = values.size(); j < n; j++) {
                     List<ByteBuffer> newComposite = new ArrayList<>(oldComposite);
                     elementsList.add(newComposite);
-
                     List<ByteBuffer> value = values.get(j);
-
                     if (value.contains(null))
                         containsNull = true;
+                    if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+                        if (!isSerializeLoggingActive.get()) {
+                            isSerializeLoggingActive.set(true);
+                            serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(org.apache.cassandra.utils.ByteBufferUtil.class, org.apache.cassandra.utils.ByteBufferUtil.UNSET_BYTE_BUFFER, "org.apache.cassandra.utils.ByteBufferUtil.UNSET_BYTE_BUFFER").toJsonString());
+                            isSerializeLoggingActive.set(false);
+                        }
+                    }
                     if (value.contains(ByteBufferUtil.UNSET_BYTE_BUFFER))
                         containsUnset = true;
-
                     newComposite.addAll(value);
                 }
             }
@@ -199,8 +191,7 @@ public final class CompositesBuilder
      *
      * @return the number of elements that can be added to the composites.
      */
-    public int remainingCount()
-    {
+    public int remainingCount() {
         return ctype.size() - size;
     }
 
@@ -209,8 +200,7 @@ public final class CompositesBuilder
      *
      * @return <code>true</code> if it is possible to add more elements to the composites, <code>false</code> otherwise.
      */
-    public boolean hasRemaining()
-    {
+    public boolean hasRemaining() {
         return remainingCount() > 0;
     }
 
@@ -219,8 +209,7 @@ public final class CompositesBuilder
      *
      * @return <code>true</code> if this builder is empty, <code>false</code> otherwise.
      */
-    public boolean isEmpty()
-    {
+    public boolean isEmpty() {
         return elementsList.isEmpty();
     }
 
@@ -229,8 +218,7 @@ public final class CompositesBuilder
      *
      * @return <code>true</code> if the composites contains <code>null</code> elements, <code>false</code> otherwise.
      */
-    public boolean containsNull()
-    {
+    public boolean containsNull() {
         return containsNull;
     }
 
@@ -238,8 +226,7 @@ public final class CompositesBuilder
      * Checks if some empty list of values have been added
      * @return <code>true</code> if the composites have some missing elements, <code>false</code> otherwise.
      */
-    public boolean hasMissingElements()
-    {
+    public boolean hasMissingElements() {
         return hasMissingElements;
     }
 
@@ -248,8 +235,7 @@ public final class CompositesBuilder
      *
      * @return <code>true</code> if the composites contains <code>unset</code> elements, <code>false</code> otherwise.
      */
-    public boolean containsUnset()
-    {
+    public boolean containsUnset() {
         return containsUnset;
     }
 
@@ -258,8 +244,7 @@ public final class CompositesBuilder
      *
      * @return the composites
      */
-    public List<Composite> build()
-    {
+    public List<Composite> build() {
         return buildWithEOC(EOC.NONE);
     }
 
@@ -268,31 +253,22 @@ public final class CompositesBuilder
      *
      * @return the composites
      */
-    public List<Composite> buildWithEOC(EOC eoc)
-    {
+    public List<Composite> buildWithEOC(EOC eoc) {
         built = true;
-
         if (hasMissingElements)
             return Collections.emptyList();
-
         CBuilder builder = ctype.builder();
-
         if (elementsList.isEmpty())
             return singletonList(builder.build().withEOC(eoc));
-
         List<Composite> list = new ArrayList<>();
-
-        for (int i = 0, m = elementsList.size(); i < m; i++)
-        {
+        for (int i = 0, m = elementsList.size(); i < m; i++) {
             List<ByteBuffer> elements = elementsList.get(i);
             list.add(builder.buildWith(elements).withEOC(eoc));
         }
-
         return list;
     }
 
-    private void checkUpdateable()
-    {
+    private void checkUpdateable() {
         if (!hasRemaining() || built)
             throw new IllegalStateException("this CompositesBuilder cannot be updated anymore");
     }

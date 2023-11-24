@@ -18,9 +18,7 @@
 package org.apache.cassandra.cql3.restrictions;
 
 import java.util.*;
-
 import com.google.common.collect.Iterables;
-
 import org.apache.cassandra.config.ColumnDefinition;
 import org.apache.cassandra.cql3.QueryOptions;
 import org.apache.cassandra.cql3.functions.Function;
@@ -35,16 +33,25 @@ import org.apache.cassandra.exceptions.InvalidRequestException;
  * <p>This class is immutable in order to be use within {@link PrimaryKeyRestrictionSet} which as
  * an implementation of {@link Restriction} need to be immutable.
  */
-final class RestrictionSet implements Restrictions, Iterable<Restriction>
-{
+final class RestrictionSet implements Restrictions, Iterable<Restriction> {
+
+    private static final org.slf4j.Logger serialize_logger = org.slf4j.LoggerFactory.getLogger("serialize.logger");
+
+    private java.lang.ThreadLocal<Boolean> isSerializeLoggingActive = new ThreadLocal<Boolean>() {
+
+        @Override
+        protected Boolean initialValue() {
+            return false;
+        }
+    };
+
     /**
      * The comparator used to sort the <code>Restriction</code>s.
      */
-    private static final Comparator<ColumnDefinition> COLUMN_DEFINITION_COMPARATOR = new Comparator<ColumnDefinition>()
-    {
+    private static final Comparator<ColumnDefinition> COLUMN_DEFINITION_COMPARATOR = new Comparator<ColumnDefinition>() {
+
         @Override
-        public int compare(ColumnDefinition column, ColumnDefinition otherColumn)
-        {
+        public int compare(ColumnDefinition column, ColumnDefinition otherColumn) {
             int value = Integer.compare(column.position(), otherColumn.position());
             return value != 0 ? value : column.name.bytes.compareTo(otherColumn.name.bytes);
         }
@@ -55,55 +62,42 @@ final class RestrictionSet implements Restrictions, Iterable<Restriction>
      */
     protected final TreeMap<ColumnDefinition, Restriction> restrictions;
 
-    public RestrictionSet()
-    {
+    public RestrictionSet() {
         this(new TreeMap<ColumnDefinition, Restriction>(COLUMN_DEFINITION_COMPARATOR));
     }
 
-    private RestrictionSet(TreeMap<ColumnDefinition, Restriction> restrictions)
-    {
+    private RestrictionSet(TreeMap<ColumnDefinition, Restriction> restrictions) {
         this.restrictions = restrictions;
     }
 
     @Override
-    public final void addIndexExpressionTo(List<IndexExpression> expressions,
-                                           SecondaryIndexManager indexManager,
-                                           QueryOptions options) throws InvalidRequestException
-    {
-        for (Restriction restriction : restrictions.values())
-            restriction.addIndexExpressionTo(expressions, indexManager, options);
+    public final void addIndexExpressionTo(List<IndexExpression> expressions, SecondaryIndexManager indexManager, QueryOptions options) throws InvalidRequestException {
+        for (Restriction restriction : restrictions.values()) restriction.addIndexExpressionTo(expressions, indexManager, options);
     }
 
     @Override
-    public final List<ColumnDefinition> getColumnDefs()
-    {
+    public final List<ColumnDefinition> getColumnDefs() {
         return new ArrayList<>(restrictions.keySet());
     }
 
     @Override
-    public Iterable<Function> getFunctions()
-    {
-        com.google.common.base.Function<Restriction, Iterable<Function>> transform =
-            new com.google.common.base.Function<Restriction, Iterable<Function>>()
-        {
-            public Iterable<Function> apply(Restriction restriction)
-            {
+    public Iterable<Function> getFunctions() {
+        com.google.common.base.Function<Restriction, Iterable<Function>> transform = new com.google.common.base.Function<Restriction, Iterable<Function>>() {
+
+            public Iterable<Function> apply(Restriction restriction) {
                 return restriction.getFunctions();
             }
         };
-
         return Iterables.concat(Iterables.transform(restrictions.values(), transform));
     }
 
     @Override
-    public final boolean isEmpty()
-    {
+    public final boolean isEmpty() {
         return getColumnDefs().isEmpty();
     }
 
     @Override
-    public final int size()
-    {
+    public final int size() {
         return getColumnDefs().size();
     }
 
@@ -114,36 +108,32 @@ final class RestrictionSet implements Restrictions, Iterable<Restriction>
      * @return the new set of restrictions
      * @throws InvalidRequestException if the new restriction cannot be added
      */
-    public RestrictionSet addRestriction(Restriction restriction) throws InvalidRequestException
-    {
+    public RestrictionSet addRestriction(Restriction restriction) throws InvalidRequestException {
         // RestrictionSet is immutable so we need to clone the restrictions map.
         TreeMap<ColumnDefinition, Restriction> newRestrictions = new TreeMap<>(this.restrictions);
         return new RestrictionSet(mergeRestrictions(newRestrictions, restriction));
     }
 
-    private TreeMap<ColumnDefinition, Restriction> mergeRestrictions(TreeMap<ColumnDefinition, Restriction> restrictions,
-                                                                     Restriction restriction)
-                                                                     throws InvalidRequestException
-    {
+    private TreeMap<ColumnDefinition, Restriction> mergeRestrictions(TreeMap<ColumnDefinition, Restriction> restrictions, Restriction restriction) throws InvalidRequestException {
         Collection<ColumnDefinition> columnDefs = restriction.getColumnDefs();
         Set<Restriction> existingRestrictions = getRestrictions(columnDefs);
-
-        if (existingRestrictions.isEmpty())
-        {
-            for (ColumnDefinition columnDef : columnDefs)
+        if (existingRestrictions.isEmpty()) {
+            for (ColumnDefinition columnDef : columnDefs) {
+                if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+                    if (!isSerializeLoggingActive.get()) {
+                        isSerializeLoggingActive.set(true);
+                        serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(columnDefs, columnDef, "columnDef").toJsonString());
+                        isSerializeLoggingActive.set(false);
+                    }
+                }
                 restrictions.put(columnDef, restriction);
-        }
-        else
-        {
-            for (Restriction existing : existingRestrictions)
-            {
+            }
+        } else {
+            for (Restriction existing : existingRestrictions) {
                 Restriction newRestriction = mergeRestrictions(existing, restriction);
-
-                for (ColumnDefinition columnDef : columnDefs)
-                    restrictions.put(columnDef, newRestriction);
+                for (ColumnDefinition columnDef : columnDefs) restrictions.put(columnDef, newRestriction);
             }
         }
-
         return restrictions;
     }
 
@@ -153,11 +143,16 @@ final class RestrictionSet implements Restrictions, Iterable<Restriction>
      * @param columnDefs the column definitions
      * @return all the restrictions applied to the specified columns
      */
-    private Set<Restriction> getRestrictions(Collection<ColumnDefinition> columnDefs)
-    {
+    private Set<Restriction> getRestrictions(Collection<ColumnDefinition> columnDefs) {
         Set<Restriction> set = new HashSet<>();
-        for (ColumnDefinition columnDef : columnDefs)
-        {
+        for (ColumnDefinition columnDef : columnDefs) {
+            if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+                if (!isSerializeLoggingActive.get()) {
+                    isSerializeLoggingActive.set(true);
+                    serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(columnDefs, columnDef, "columnDef").toJsonString());
+                    isSerializeLoggingActive.set(false);
+                }
+            }
             Restriction existing = restrictions.get(columnDef);
             if (existing != null)
                 set.add(existing);
@@ -166,10 +161,8 @@ final class RestrictionSet implements Restrictions, Iterable<Restriction>
     }
 
     @Override
-    public final boolean hasSupportingIndex(SecondaryIndexManager indexManager)
-    {
-        for (Restriction restriction : restrictions.values())
-        {
+    public final boolean hasSupportingIndex(SecondaryIndexManager indexManager) {
+        for (Restriction restriction : restrictions.values()) {
             if (restriction.hasSupportingIndex(indexManager))
                 return true;
         }
@@ -182,8 +175,7 @@ final class RestrictionSet implements Restrictions, Iterable<Restriction>
      * @param columnDef the column for which the next one need to be found
      * @return the column after the specified one.
      */
-    ColumnDefinition nextColumn(ColumnDefinition columnDef)
-    {
+    ColumnDefinition nextColumn(ColumnDefinition columnDef) {
         return restrictions.tailMap(columnDef, false).firstKey();
     }
 
@@ -192,8 +184,7 @@ final class RestrictionSet implements Restrictions, Iterable<Restriction>
      *
      * @return the definition of the first column.
      */
-    ColumnDefinition firstColumn()
-    {
+    ColumnDefinition firstColumn() {
         return isEmpty() ? null : this.restrictions.firstKey();
     }
 
@@ -202,8 +193,7 @@ final class RestrictionSet implements Restrictions, Iterable<Restriction>
      *
      * @return the definition of the last column.
      */
-    ColumnDefinition lastColumn()
-    {
+    ColumnDefinition lastColumn() {
         return isEmpty() ? null : this.restrictions.lastKey();
     }
 
@@ -212,8 +202,7 @@ final class RestrictionSet implements Restrictions, Iterable<Restriction>
      *
      * @return the last restriction.
      */
-    Restriction lastRestriction()
-    {
+    Restriction lastRestriction() {
         return isEmpty() ? null : this.restrictions.lastEntry().getValue();
     }
 
@@ -225,11 +214,8 @@ final class RestrictionSet implements Restrictions, Iterable<Restriction>
      * @return the merged restriction
      * @throws InvalidRequestException if the two restrictions cannot be merged
      */
-    private static Restriction mergeRestrictions(Restriction restriction,
-                                                 Restriction otherRestriction) throws InvalidRequestException
-    {
-        return restriction == null ? otherRestriction
-                                   : restriction.mergeWith(otherRestriction);
+    private static Restriction mergeRestrictions(Restriction restriction, Restriction otherRestriction) throws InvalidRequestException {
+        return restriction == null ? otherRestriction : restriction.mergeWith(otherRestriction);
     }
 
     /**
@@ -238,13 +224,10 @@ final class RestrictionSet implements Restrictions, Iterable<Restriction>
      * @return <code>true</code> if the restrictions contains multiple contains, contains key, or ,
      * map[key] = value; <code>false</code> otherwise
      */
-    public final boolean hasMultipleContains()
-    {
+    public final boolean hasMultipleContains() {
         int numberOfContains = 0;
-        for (Restriction restriction : restrictions.values())
-        {
-            if (restriction.isContains())
-            {
+        for (Restriction restriction : restrictions.values()) {
+            if (restriction.isContains()) {
                 Contains contains = (Contains) restriction;
                 numberOfContains += (contains.numberOfValues() + contains.numberOfKeys() + contains.numberOfEntries());
             }
@@ -253,8 +236,7 @@ final class RestrictionSet implements Restrictions, Iterable<Restriction>
     }
 
     @Override
-    public Iterator<Restriction> iterator()
-    {
+    public Iterator<Restriction> iterator() {
         return new LinkedHashSet<>(restrictions.values()).iterator();
     }
 }

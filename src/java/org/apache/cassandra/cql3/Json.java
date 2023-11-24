@@ -20,7 +20,6 @@ package org.apache.cassandra.cql3;
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.util.*;
-
 import org.apache.cassandra.config.CFMetaData;
 import org.apache.cassandra.config.ColumnDefinition;
 import org.apache.cassandra.cql3.functions.Function;
@@ -30,9 +29,21 @@ import org.apache.cassandra.serializers.MarshalException;
 import org.codehaus.jackson.io.JsonStringEncoder;
 import org.codehaus.jackson.map.ObjectMapper;
 
-/** Term-related classes for INSERT JSON support. */
-public class Json
-{
+/**
+ * Term-related classes for INSERT JSON support.
+ */
+public class Json {
+
+    private static java.lang.ThreadLocal<Boolean> isSerializeLoggingActiveStatic = new ThreadLocal<Boolean>() {
+
+        @Override
+        protected Boolean initialValue() {
+            return false;
+        }
+    };
+
+    private static final org.slf4j.Logger serialize_logger = org.slf4j.LoggerFactory.getLogger("serialize.logger");
+
     public static final ObjectMapper JSON_OBJECT_MAPPER = new ObjectMapper();
 
     public static final ColumnIdentifier JSON_COLUMN_ID = new ColumnIdentifier("[json]", true);
@@ -40,25 +51,20 @@ public class Json
     /**
      * Quotes string contents using standard JSON quoting.
      */
-    public static String quoteAsJsonString(String s)
-    {
+    public static String quoteAsJsonString(String s) {
         return new String(JsonStringEncoder.getInstance().quoteAsString(s));
     }
 
-    public static Object decodeJson(String json)
-    {
-        try
-        {
+    public static Object decodeJson(String json) {
+        try {
             return JSON_OBJECT_MAPPER.readValue(json, Object.class);
-        }
-        catch (IOException exc)
-        {
+        } catch (IOException exc) {
             throw new MarshalException("Error decoding JSON string: " + exc.getMessage());
         }
     }
 
-    public interface Raw
-    {
+    public interface Raw {
+
         public Prepared prepareAndCollectMarkers(CFMetaData metadata, Collection<ColumnDefinition> receivers, VariableSpecifications boundNames);
     }
 
@@ -66,17 +72,15 @@ public class Json
      * Represents a literal JSON string in an INSERT JSON statement.
      * For example: INSERT INTO mytable (key, col) JSON '{"key": 0, "col": 0}';
      */
-    public static class Literal implements Raw
-    {
+    public static class Literal implements Raw {
+
         private final String text;
 
-        public Literal(String text)
-        {
+        public Literal(String text) {
             this.text = text;
         }
 
-        public Prepared prepareAndCollectMarkers(CFMetaData metadata, Collection<ColumnDefinition> receivers, VariableSpecifications boundNames)
-        {
+        public Prepared prepareAndCollectMarkers(CFMetaData metadata, Collection<ColumnDefinition> receivers, VariableSpecifications boundNames) {
             return new PreparedLiteral(metadata.ksName, parseJson(text, receivers));
         }
     }
@@ -85,23 +89,20 @@ public class Json
      * Represents a marker for a JSON string in an INSERT JSON statement.
      * For example: INSERT INTO mytable (key, col) JSON ?;
      */
-    public static class Marker implements Raw
-    {
+    public static class Marker implements Raw {
+
         protected final int bindIndex;
 
-        public Marker(int bindIndex)
-        {
+        public Marker(int bindIndex) {
             this.bindIndex = bindIndex;
         }
 
-        public Prepared prepareAndCollectMarkers(CFMetaData metadata, Collection<ColumnDefinition> receivers, VariableSpecifications boundNames)
-        {
+        public Prepared prepareAndCollectMarkers(CFMetaData metadata, Collection<ColumnDefinition> receivers, VariableSpecifications boundNames) {
             boundNames.add(bindIndex, makeReceiver(metadata));
             return new PreparedMarker(metadata.ksName, bindIndex, receivers);
         }
 
-        private ColumnSpecification makeReceiver(CFMetaData metadata)
-        {
+        private ColumnSpecification makeReceiver(CFMetaData metadata) {
             return new ColumnSpecification(metadata.ksName, metadata.cfName, JSON_COLUMN_ID, UTF8Type.instance);
         }
     }
@@ -109,25 +110,22 @@ public class Json
     /**
      * A prepared, full set of JSON values.
      */
-    public static abstract class Prepared
-    {
+    public static abstract class Prepared {
+
         private final String keyspace;
 
-        protected Prepared(String keyspace)
-        {
+        protected Prepared(String keyspace) {
             this.keyspace = keyspace;
         }
 
         protected abstract Term.Raw getRawTermForColumn(ColumnDefinition def);
 
-        public Term getPrimaryKeyValueForColumn(ColumnDefinition def)
-        {
+        public Term getPrimaryKeyValueForColumn(ColumnDefinition def) {
             // Note that we know we don't have to call collectMarkerSpecification since it has already been collected
             return getRawTermForColumn(def).prepare(keyspace, def);
         }
 
-        public Operation getSetOperationForColumn(ColumnDefinition def)
-        {
+        public Operation getSetOperationForColumn(ColumnDefinition def) {
             // Note that we know we don't have to call collectMarkerSpecification on the operation since we have
             // already collected all we need.
             return new Operation.SetValue(getRawTermForColumn(def)).prepare(keyspace, def);
@@ -137,18 +135,31 @@ public class Json
     /**
      * A prepared literal set of JSON values
      */
-    private static class PreparedLiteral extends Prepared
-    {
+    private static class PreparedLiteral extends Prepared {
+
+        private java.lang.ThreadLocal<Boolean> isSerializeLoggingActive = new ThreadLocal<Boolean>() {
+
+            @Override
+            protected Boolean initialValue() {
+                return false;
+            }
+        };
+
         private final Map<ColumnIdentifier, Term> columnMap;
 
-        public PreparedLiteral(String keyspace, Map<ColumnIdentifier, Term> columnMap)
-        {
+        public PreparedLiteral(String keyspace, Map<ColumnIdentifier, Term> columnMap) {
             super(keyspace);
             this.columnMap = columnMap;
         }
 
-        protected Term.Raw getRawTermForColumn(ColumnDefinition def)
-        {
+        protected Term.Raw getRawTermForColumn(ColumnDefinition def) {
+            if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+                if (!isSerializeLoggingActive.get()) {
+                    isSerializeLoggingActive.set(true);
+                    serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(def, def.name, "def.name").toJsonString());
+                    isSerializeLoggingActive.set(false);
+                }
+            }
             Term value = columnMap.get(def.name);
             return value == null ? Constants.NULL_LITERAL : new ColumnValue(value);
         }
@@ -157,20 +168,19 @@ public class Json
     /**
      *  A prepared bind marker for a set of JSON values
      */
-    private static class PreparedMarker extends Prepared
-    {
+    private static class PreparedMarker extends Prepared {
+
         private final int bindIndex;
+
         private final Collection<ColumnDefinition> columns;
 
-        public PreparedMarker(String keyspace, int bindIndex, Collection<ColumnDefinition> columns)
-        {
+        public PreparedMarker(String keyspace, int bindIndex, Collection<ColumnDefinition> columns) {
             super(keyspace);
             this.bindIndex = bindIndex;
             this.columns = columns;
         }
 
-        protected DelayedColumnValue getRawTermForColumn(ColumnDefinition def)
-        {
+        protected DelayedColumnValue getRawTermForColumn(ColumnDefinition def) {
             return new DelayedColumnValue(this, def);
         }
     }
@@ -181,24 +191,36 @@ public class Json
      * Note that this is intrinsically an already prepared term, but this still implements Term.Raw so that we can
      * easily use it to create raw operations.
      */
-    private static class ColumnValue implements Term.Raw
-    {
+    private static class ColumnValue implements Term.Raw {
+
+        private java.lang.ThreadLocal<Boolean> isSerializeLoggingActive = new ThreadLocal<Boolean>() {
+
+            @Override
+            protected Boolean initialValue() {
+                return false;
+            }
+        };
+
         private final Term term;
 
-        public ColumnValue(Term term)
-        {
+        public ColumnValue(Term term) {
             this.term = term;
         }
 
         @Override
-        public Term prepare(String keyspace, ColumnSpecification receiver) throws InvalidRequestException
-        {
+        public Term prepare(String keyspace, ColumnSpecification receiver) throws InvalidRequestException {
+            if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+                if (!isSerializeLoggingActive.get()) {
+                    isSerializeLoggingActive.set(true);
+                    serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(this, this.term, "this.term").toJsonString());
+                    isSerializeLoggingActive.set(false);
+                }
+            }
             return term;
         }
 
         @Override
-        public TestResult testAssignment(String keyspace, ColumnSpecification receiver)
-        {
+        public TestResult testAssignment(String keyspace, ColumnSpecification receiver) {
             return TestResult.NOT_ASSIGNABLE;
         }
     }
@@ -208,51 +230,60 @@ public class Json
      *
      * As with {@code ColumnValue}, this is intrinsically a prepared term but implements Terms.Raw for convenience.
      */
-    private static class DelayedColumnValue extends Term.NonTerminal implements Term.Raw
-    {
+    private static class DelayedColumnValue extends Term.NonTerminal implements Term.Raw {
+
+        private java.lang.ThreadLocal<Boolean> isSerializeLoggingActive = new ThreadLocal<Boolean>() {
+
+            @Override
+            protected Boolean initialValue() {
+                return false;
+            }
+        };
+
         private final PreparedMarker marker;
+
         private final ColumnDefinition column;
 
-        public DelayedColumnValue(PreparedMarker prepared, ColumnDefinition column)
-        {
+        public DelayedColumnValue(PreparedMarker prepared, ColumnDefinition column) {
             this.marker = prepared;
             this.column = column;
         }
 
         @Override
-        public Term prepare(String keyspace, ColumnSpecification receiver) throws InvalidRequestException
-        {
+        public Term prepare(String keyspace, ColumnSpecification receiver) throws InvalidRequestException {
             return this;
         }
 
         @Override
-        public TestResult testAssignment(String keyspace, ColumnSpecification receiver)
-        {
+        public TestResult testAssignment(String keyspace, ColumnSpecification receiver) {
             return TestResult.WEAKLY_ASSIGNABLE;
         }
 
         @Override
-        public void collectMarkerSpecification(VariableSpecifications boundNames)
-        {
+        public void collectMarkerSpecification(VariableSpecifications boundNames) {
             // We've already collected what we should (and in practice this method is never called).
         }
 
         @Override
-        public boolean containsBindMarker()
-        {
+        public boolean containsBindMarker() {
             return true;
         }
 
         @Override
-        public Terminal bind(QueryOptions options) throws InvalidRequestException
-        {
+        public Terminal bind(QueryOptions options) throws InvalidRequestException {
+            if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+                if (!isSerializeLoggingActive.get()) {
+                    isSerializeLoggingActive.set(true);
+                    serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(this, this.column, "this.column").toJsonString());
+                    isSerializeLoggingActive.set(false);
+                }
+            }
             Term term = options.getJsonColumnValue(marker.bindIndex, column.name, marker.columns);
             return term == null ? null : term.bind(options);
         }
 
         @Override
-        public Iterable<Function> getFunctions()
-        {
+        public Iterable<Function> getFunctions() {
             return Collections.emptyList();
         }
     }
@@ -260,52 +291,32 @@ public class Json
     /**
      * Given a JSON string, return a map of columns to their values for the insert.
      */
-    public static Map<ColumnIdentifier, Term> parseJson(String jsonString, Collection<ColumnDefinition> expectedReceivers)
-    {
-        try
-        {
+    public static Map<ColumnIdentifier, Term> parseJson(String jsonString, Collection<ColumnDefinition> expectedReceivers) {
+        try {
             Map<String, Object> valueMap = JSON_OBJECT_MAPPER.readValue(jsonString, Map.class);
-
             if (valueMap == null)
                 throw new InvalidRequestException("Got null for INSERT JSON values");
-
             handleCaseSensitivity(valueMap);
-
             Map<ColumnIdentifier, Term> columnMap = new HashMap<>(expectedReceivers.size());
-            for (ColumnSpecification spec : expectedReceivers)
-            {
+            for (ColumnSpecification spec : expectedReceivers) {
                 Object parsedJsonObject = valueMap.remove(spec.name.toString());
-                if (parsedJsonObject == null)
-                {
+                if (parsedJsonObject == null) {
                     columnMap.put(spec.name, null);
-                }
-                else
-                {
-                    try
-                    {
+                } else {
+                    try {
                         columnMap.put(spec.name, spec.type.fromJSONObject(parsedJsonObject));
-                    }
-                    catch(MarshalException exc)
-                    {
+                    } catch (MarshalException exc) {
                         throw new InvalidRequestException(String.format("Error decoding JSON value for %s: %s", spec.name, exc.getMessage()));
                     }
                 }
             }
-
-            if (!valueMap.isEmpty())
-            {
-                throw new InvalidRequestException(String.format(
-                        "JSON values map contains unrecognized column: %s", valueMap.keySet().iterator().next()));
+            if (!valueMap.isEmpty()) {
+                throw new InvalidRequestException(String.format("JSON values map contains unrecognized column: %s", valueMap.keySet().iterator().next()));
             }
-
             return columnMap;
-        }
-        catch (IOException exc)
-        {
+        } catch (IOException exc) {
             throw new InvalidRequestException(String.format("Could not decode JSON string as a map: %s. (String was: %s)", exc.toString(), jsonString));
-        }
-        catch (MarshalException exc)
-        {
+        } catch (MarshalException exc) {
             throw new InvalidRequestException(exc.getMessage());
         }
     }
@@ -313,17 +324,20 @@ public class Json
     /**
      * Handles unquoting and case-insensitivity in map keys.
      */
-    public static void handleCaseSensitivity(Map<String, Object> valueMap)
-    {
-        for (String mapKey : new ArrayList<>(valueMap.keySet()))
-        {
+    public static void handleCaseSensitivity(Map<String, Object> valueMap) {
+        for (String mapKey : new ArrayList<>(valueMap.keySet())) {
+            if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+                if (!isSerializeLoggingActiveStatic.get()) {
+                    isSerializeLoggingActiveStatic.set(true);
+                    serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(new ArrayList<>(valueMap.keySet()), mapKey, "mapKey").toJsonString());
+                    isSerializeLoggingActiveStatic.set(false);
+                }
+            }
             // if it's surrounded by quotes, remove them and preserve the case
-            if (mapKey.startsWith("\"") && mapKey.endsWith("\""))
-            {
+            if (mapKey.startsWith("\"") && mapKey.endsWith("\"")) {
                 valueMap.put(mapKey.substring(1, mapKey.length() - 1), valueMap.remove(mapKey));
                 continue;
             }
-
             // otherwise, lowercase it if needed
             String lowered = mapKey.toLowerCase(Locale.US);
             if (!mapKey.equals(lowered))

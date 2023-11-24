@@ -20,10 +20,8 @@ package org.apache.cassandra.db.marshal;
 import java.nio.ByteBuffer;
 import java.nio.charset.CharacterCodingException;
 import java.nio.charset.Charset;
-
 import org.apache.cassandra.cql3.Constants;
 import org.apache.cassandra.cql3.Json;
-
 import org.apache.cassandra.cql3.CQL3Type;
 import org.apache.cassandra.cql3.Term;
 import org.apache.cassandra.serializers.MarshalException;
@@ -31,70 +29,73 @@ import org.apache.cassandra.serializers.TypeSerializer;
 import org.apache.cassandra.serializers.UTF8Serializer;
 import org.apache.cassandra.utils.ByteBufferUtil;
 
-public class UTF8Type extends AbstractType<String>
-{
+public class UTF8Type extends AbstractType<String> {
+
+    private static final org.slf4j.Logger serialize_logger = org.slf4j.LoggerFactory.getLogger("serialize.logger");
+
+    private java.lang.ThreadLocal<Boolean> isSerializeLoggingActive = new ThreadLocal<Boolean>() {
+
+        @Override
+        protected Boolean initialValue() {
+            return false;
+        }
+    };
+
     public static final UTF8Type instance = new UTF8Type();
 
-    UTF8Type() {} // singleton
+    // singleton
+    UTF8Type() {
+    }
 
-    public int compare(ByteBuffer o1, ByteBuffer o2)
-    {
+    public int compare(ByteBuffer o1, ByteBuffer o2) {
         return ByteBufferUtil.compareUnsigned(o1, o2);
     }
 
-    public ByteBuffer fromString(String source)
-    {
+    public ByteBuffer fromString(String source) {
         return decompose(source);
     }
 
-
     @Override
-    public Term fromJSONObject(Object parsed) throws MarshalException
-    {
-        try
-        {
+    public Term fromJSONObject(Object parsed) throws MarshalException {
+        try {
             return new Constants.Value(fromString((String) parsed));
-        }
-        catch (ClassCastException exc)
-        {
-            throw new MarshalException(String.format(
-                    "Expected a UTF-8 string, but got a %s: %s", parsed.getClass().getSimpleName(), parsed));
+        } catch (ClassCastException exc) {
+            throw new MarshalException(String.format("Expected a UTF-8 string, but got a %s: %s", parsed.getClass().getSimpleName(), parsed));
         }
     }
 
     @Override
-    public String toJSONString(ByteBuffer buffer, int protocolVersion)
-    {
-        try
-        {
+    public String toJSONString(ByteBuffer buffer, int protocolVersion) {
+        try {
             return '"' + Json.quoteAsJsonString(ByteBufferUtil.string(buffer, Charset.forName("UTF-8"))) + '"';
-        }
-        catch (CharacterCodingException exc)
-        {
+        } catch (CharacterCodingException exc) {
             throw new AssertionError("UTF-8 value contained non-utf8 characters: ", exc);
         }
     }
 
     @Override
-    public boolean isCompatibleWith(AbstractType<?> previous)
-    {
+    public boolean isCompatibleWith(AbstractType<?> previous) {
         // Anything that is ascii is also utf8, and they both use bytes
         // comparison
         return this == previous || previous == AsciiType.instance;
     }
 
-    public boolean isByteOrderComparable()
-    {
+    public boolean isByteOrderComparable() {
         return true;
     }
 
-    public CQL3Type asCQL3Type()
-    {
+    public CQL3Type asCQL3Type() {
         return CQL3Type.Native.TEXT;
     }
 
-    public TypeSerializer<String> getSerializer()
-    {
+    public TypeSerializer<String> getSerializer() {
+        if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+            if (!isSerializeLoggingActive.get()) {
+                isSerializeLoggingActive.set(true);
+                serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(org.apache.cassandra.serializers.UTF8Serializer.class, org.apache.cassandra.serializers.UTF8Serializer.instance, "org.apache.cassandra.serializers.UTF8Serializer.instance").toJsonString());
+                isSerializeLoggingActive.set(false);
+            }
+        }
         return UTF8Serializer.instance;
     }
 }

@@ -19,7 +19,6 @@ package org.apache.cassandra.db;
 
 import java.nio.ByteBuffer;
 import java.security.MessageDigest;
-
 import org.apache.cassandra.config.CFMetaData;
 import org.apache.cassandra.db.composites.CellName;
 import org.apache.cassandra.db.composites.CellNameType;
@@ -29,18 +28,27 @@ import org.apache.cassandra.utils.concurrent.OpOrder;
 import org.apache.cassandra.utils.memory.AbstractAllocator;
 import org.apache.cassandra.utils.memory.MemtableAllocator;
 
-public class BufferExpiringCell extends BufferCell implements ExpiringCell
-{
+public class BufferExpiringCell extends BufferCell implements ExpiringCell {
+
+    private static final org.slf4j.Logger serialize_logger = org.slf4j.LoggerFactory.getLogger("serialize.logger");
+
+    private java.lang.ThreadLocal<Boolean> isSerializeLoggingActive = new ThreadLocal<Boolean>() {
+
+        @Override
+        protected Boolean initialValue() {
+            return false;
+        }
+    };
+
     private final int localExpirationTime;
+
     private final int timeToLive;
 
-    public BufferExpiringCell(CellName name, ByteBuffer value, long timestamp, int timeToLive)
-    {
+    public BufferExpiringCell(CellName name, ByteBuffer value, long timestamp, int timeToLive) {
         this(name, value, timestamp, timeToLive, (int) (System.currentTimeMillis() / 1000) + timeToLive);
     }
 
-    public BufferExpiringCell(CellName name, ByteBuffer value, long timestamp, int timeToLive, int localExpirationTime)
-    {
+    public BufferExpiringCell(CellName name, ByteBuffer value, long timestamp, int timeToLive, int localExpirationTime) {
         super(name, value, timestamp);
         assert timeToLive > 0 : timeToLive;
         assert localExpirationTime > 0 : localExpirationTime;
@@ -48,32 +56,34 @@ public class BufferExpiringCell extends BufferCell implements ExpiringCell
         this.localExpirationTime = localExpirationTime;
     }
 
-    public int getTimeToLive()
-    {
+    public int getTimeToLive() {
+        if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+            if (!isSerializeLoggingActive.get()) {
+                isSerializeLoggingActive.set(true);
+                serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(this, this.timeToLive, "this.timeToLive").toJsonString());
+                isSerializeLoggingActive.set(false);
+            }
+        }
         return timeToLive;
     }
 
     @Override
-    public Cell withUpdatedName(CellName newName)
-    {
+    public Cell withUpdatedName(CellName newName) {
         return new BufferExpiringCell(newName, value(), timestamp(), timeToLive, localExpirationTime);
     }
 
     @Override
-    public Cell withUpdatedTimestamp(long newTimestamp)
-    {
+    public Cell withUpdatedTimestamp(long newTimestamp) {
         return new BufferExpiringCell(name(), value(), newTimestamp, timeToLive, localExpirationTime);
     }
 
     @Override
-    public int cellDataSize()
-    {
+    public int cellDataSize() {
         return super.cellDataSize() + TypeSizes.NATIVE.sizeof(localExpirationTime) + TypeSizes.NATIVE.sizeof(timeToLive);
     }
 
     @Override
-    public int serializedSize(CellNameType type, TypeSizes typeSizes)
-    {
+    public int serializedSize(CellNameType type, TypeSizes typeSizes) {
         /*
          * An expired column adds to a Cell :
          *    4 bytes for the localExpirationTime
@@ -83,59 +93,56 @@ public class BufferExpiringCell extends BufferCell implements ExpiringCell
     }
 
     @Override
-    public void updateDigest(MessageDigest digest)
-    {
+    public void updateDigest(MessageDigest digest) {
         super.updateDigest(digest);
         FBUtilities.updateWithInt(digest, timeToLive);
     }
 
     @Override
-    public int getLocalDeletionTime()
-    {
+    public int getLocalDeletionTime() {
+        if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+            if (!isSerializeLoggingActive.get()) {
+                isSerializeLoggingActive.set(true);
+                serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(this, this.localExpirationTime, "this.localExpirationTime").toJsonString());
+                isSerializeLoggingActive.set(false);
+            }
+        }
         return localExpirationTime;
     }
 
     @Override
-    public ExpiringCell localCopy(CFMetaData metadata, AbstractAllocator allocator)
-    {
+    public ExpiringCell localCopy(CFMetaData metadata, AbstractAllocator allocator) {
         return new BufferExpiringCell(name.copy(metadata, allocator), allocator.clone(value), timestamp, timeToLive, localExpirationTime);
     }
 
     @Override
-    public ExpiringCell localCopy(CFMetaData metadata, MemtableAllocator allocator, OpOrder.Group opGroup)
-    {
+    public ExpiringCell localCopy(CFMetaData metadata, MemtableAllocator allocator, OpOrder.Group opGroup) {
         return allocator.clone(this, metadata, opGroup);
     }
 
     @Override
-    public String getString(CellNameType comparator)
-    {
+    public String getString(CellNameType comparator) {
         return String.format("%s!%d", super.getString(comparator), timeToLive);
     }
 
     @Override
-    public boolean isLive()
-    {
+    public boolean isLive() {
         return isLive(System.currentTimeMillis());
     }
 
     @Override
-    public boolean isLive(long now)
-    {
+    public boolean isLive(long now) {
         return (int) (now / 1000) < getLocalDeletionTime();
     }
 
     @Override
-    public int serializationFlags()
-    {
+    public int serializationFlags() {
         return ColumnSerializer.EXPIRATION_MASK;
     }
 
     @Override
-    public void validateFields(CFMetaData metadata) throws MarshalException
-    {
+    public void validateFields(CFMetaData metadata) throws MarshalException {
         super.validateFields(metadata);
-
         if (timeToLive <= 0)
             throw new MarshalException("A column TTL should be > 0, but was " + timeToLive);
         if (localExpirationTime < 0)
@@ -143,8 +150,7 @@ public class BufferExpiringCell extends BufferCell implements ExpiringCell
     }
 
     @Override
-    public Cell reconcile(Cell cell)
-    {
+    public Cell reconcile(Cell cell) {
         long ts1 = timestamp(), ts2 = cell.timestamp();
         if (ts1 != ts2)
             return ts1 < ts2 ? cell : this;
@@ -155,8 +161,7 @@ public class BufferExpiringCell extends BufferCell implements ExpiringCell
         if (c != 0)
             return c < 0 ? cell : this;
         // If we have same timestamp and value, prefer the longest ttl
-        if (cell instanceof ExpiringCell)
-        {
+        if (cell instanceof ExpiringCell) {
             int let1 = localExpirationTime, let2 = cell.getLocalDeletionTime();
             if (let1 < let2)
                 return cell;
@@ -165,17 +170,17 @@ public class BufferExpiringCell extends BufferCell implements ExpiringCell
     }
 
     @Override
-    public boolean equals(Cell cell)
-    {
+    public boolean equals(Cell cell) {
         if (!super.equals(cell))
             return false;
         ExpiringCell that = (ExpiringCell) cell;
         return getLocalDeletionTime() == that.getLocalDeletionTime() && getTimeToLive() == that.getTimeToLive();
     }
 
-    /** @return Either a DeletedCell, or an ExpiringCell. */
-    public static Cell create(CellName name, ByteBuffer value, long timestamp, int timeToLive, int localExpirationTime, int expireBefore, ColumnSerializer.Flag flag)
-    {
+    /**
+     * @return Either a DeletedCell, or an ExpiringCell.
+     */
+    public static Cell create(CellName name, ByteBuffer value, long timestamp, int timeToLive, int localExpirationTime, int expireBefore, ColumnSerializer.Flag flag) {
         if (localExpirationTime >= expireBefore || flag == ColumnSerializer.Flag.PRESERVE_SIZE)
             return new BufferExpiringCell(name, value, timestamp, timeToLive, localExpirationTime);
         // The column is now expired, we can safely return a simple tombstone. Note that

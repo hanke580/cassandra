@@ -18,12 +18,9 @@
 package org.apache.cassandra.cql3;
 
 import static org.apache.cassandra.cql3.Constants.UNSET_VALUE;
-
 import java.nio.ByteBuffer;
 import java.util.*;
-
 import com.google.common.base.Joiner;
-
 import org.apache.cassandra.config.ColumnDefinition;
 import org.apache.cassandra.cql3.functions.Function;
 import org.apache.cassandra.db.ColumnFamily;
@@ -42,269 +39,273 @@ import org.apache.cassandra.utils.FBUtilities;
 /**
  * Static helper methods and classes for sets.
  */
-public abstract class Sets
-{
-    private Sets() {}
+public abstract class Sets {
 
-    public static ColumnSpecification valueSpecOf(ColumnSpecification column)
-    {
-        return new ColumnSpecification(column.ksName, column.cfName, new ColumnIdentifier("value(" + column.name + ")", true), ((SetType)column.type).getElementsType());
+    private static final org.slf4j.Logger serialize_logger = org.slf4j.LoggerFactory.getLogger("serialize.logger");
+
+    private Sets() {
     }
 
-    public static class Literal implements Term.Raw
-    {
+    public static ColumnSpecification valueSpecOf(ColumnSpecification column) {
+        return new ColumnSpecification(column.ksName, column.cfName, new ColumnIdentifier("value(" + column.name + ")", true), ((SetType) column.type).getElementsType());
+    }
+
+    public static class Literal implements Term.Raw {
+
         private final List<Term.Raw> elements;
 
-        public Literal(List<Term.Raw> elements)
-        {
+        public Literal(List<Term.Raw> elements) {
             this.elements = elements;
         }
 
-        public Term prepare(String keyspace, ColumnSpecification receiver) throws InvalidRequestException
-        {
+        public Term prepare(String keyspace, ColumnSpecification receiver) throws InvalidRequestException {
             validateAssignableTo(keyspace, receiver);
-
             // We've parsed empty maps as a set literal to break the ambiguity so
             // handle that case now
             if (receiver.type instanceof MapType && elements.isEmpty())
                 return new Maps.Value(Collections.<ByteBuffer, ByteBuffer>emptyMap());
-
             ColumnSpecification valueSpec = Sets.valueSpecOf(receiver);
             Set<Term> values = new HashSet<>(elements.size());
             boolean allTerminal = true;
-            for (Term.Raw rt : elements)
-            {
+            for (Term.Raw rt : elements) {
                 Term t = rt.prepare(keyspace, valueSpec);
-
                 if (t.containsBindMarker())
                     throw new InvalidRequestException(String.format("Invalid set literal for %s: bind variables are not supported inside collection literals", receiver.name));
-
                 if (t instanceof Term.NonTerminal)
                     allTerminal = false;
-
                 values.add(t);
             }
-            DelayedValue value = new DelayedValue(((SetType)receiver.type).getElementsType(), values);
+            DelayedValue value = new DelayedValue(((SetType) receiver.type).getElementsType(), values);
             return allTerminal ? value.bind(QueryOptions.DEFAULT) : value;
         }
 
-        private void validateAssignableTo(String keyspace, ColumnSpecification receiver) throws InvalidRequestException
-        {
-            if (!(receiver.type instanceof SetType))
-            {
+        private void validateAssignableTo(String keyspace, ColumnSpecification receiver) throws InvalidRequestException {
+            if (!(receiver.type instanceof SetType)) {
                 // We've parsed empty maps as a set literal to break the ambiguity so
                 // handle that case now
                 if ((receiver.type instanceof MapType) && elements.isEmpty())
                     return;
-
                 throw new InvalidRequestException(String.format("Invalid set literal for %s of type %s", receiver.name, receiver.type.asCQL3Type()));
             }
-
             ColumnSpecification valueSpec = Sets.valueSpecOf(receiver);
-            for (Term.Raw rt : elements)
-            {
+            for (Term.Raw rt : elements) {
                 if (!rt.testAssignment(keyspace, valueSpec).isAssignable())
                     throw new InvalidRequestException(String.format("Invalid set literal for %s: value %s is not of type %s", receiver.name, rt, valueSpec.type.asCQL3Type()));
             }
         }
 
-        public AssignmentTestable.TestResult testAssignment(String keyspace, ColumnSpecification receiver)
-        {
-            if (!(receiver.type instanceof SetType))
-            {
+        public AssignmentTestable.TestResult testAssignment(String keyspace, ColumnSpecification receiver) {
+            if (!(receiver.type instanceof SetType)) {
                 // We've parsed empty maps as a set literal to break the ambiguity so handle that case now
                 if (receiver.type instanceof MapType && elements.isEmpty())
                     return AssignmentTestable.TestResult.WEAKLY_ASSIGNABLE;
-
                 return AssignmentTestable.TestResult.NOT_ASSIGNABLE;
             }
-
             // If there is no elements, we can't say it's an exact match (an empty set if fundamentally polymorphic).
             if (elements.isEmpty())
                 return AssignmentTestable.TestResult.WEAKLY_ASSIGNABLE;
-
             ColumnSpecification valueSpec = Sets.valueSpecOf(receiver);
             return AssignmentTestable.TestResult.testAll(keyspace, valueSpec, elements);
         }
 
         @Override
-        public String toString()
-        {
+        public String toString() {
             return "{" + Joiner.on(", ").join(elements) + "}";
         }
     }
 
-    public static class Value extends Term.Terminal
-    {
+    public static class Value extends Term.Terminal {
+
         public final SortedSet<ByteBuffer> elements;
 
-        public Value(SortedSet<ByteBuffer> elements)
-        {
+        public Value(SortedSet<ByteBuffer> elements) {
             this.elements = elements;
         }
 
-        public static Value fromSerialized(ByteBuffer value, SetType type, int version) throws InvalidRequestException
-        {
-            try
-            {
+        public static Value fromSerialized(ByteBuffer value, SetType type, int version) throws InvalidRequestException {
+            try {
                 // Collections have this small hack that validate cannot be called on a serialized object,
                 // but compose does the validation (so we're fine).
                 Set<?> s = type.getSerializer().deserializeForNativeProtocol(value, version);
                 SortedSet<ByteBuffer> elements = new TreeSet<>(type.getElementsType());
-                for (Object element : s)
-                    elements.add(type.getElementsType().decompose(element));
+                for (Object element : s) elements.add(type.getElementsType().decompose(element));
                 return new Value(elements);
-            }
-            catch (MarshalException e)
-            {
+            } catch (MarshalException e) {
                 throw new InvalidRequestException(e.getMessage());
             }
         }
 
-        public ByteBuffer get(int protocolVersion)
-        {
+        public ByteBuffer get(int protocolVersion) {
             return CollectionSerializer.pack(elements, elements.size(), protocolVersion);
         }
 
-        public boolean equals(SetType st, Value v)
-        {
+        public boolean equals(SetType st, Value v) {
             if (elements.size() != v.elements.size())
                 return false;
-
             Iterator<ByteBuffer> thisIter = elements.iterator();
             Iterator<ByteBuffer> thatIter = v.elements.iterator();
             AbstractType elementsType = st.getElementsType();
-            while (thisIter.hasNext())
-                if (elementsType.compare(thisIter.next(), thatIter.next()) != 0)
-                    return false;
-
+            while (thisIter.hasNext()) if (elementsType.compare(thisIter.next(), thatIter.next()) != 0)
+                return false;
             return true;
         }
     }
 
     // See Lists.DelayedValue
-    public static class DelayedValue extends Term.NonTerminal
-    {
+    public static class DelayedValue extends Term.NonTerminal {
+
         private final Comparator<ByteBuffer> comparator;
+
         private final Set<Term> elements;
 
-        public DelayedValue(Comparator<ByteBuffer> comparator, Set<Term> elements)
-        {
+        public DelayedValue(Comparator<ByteBuffer> comparator, Set<Term> elements) {
             this.comparator = comparator;
             this.elements = elements;
         }
 
-        public boolean containsBindMarker()
-        {
+        public boolean containsBindMarker() {
             // False since we don't support them in collection
             return false;
         }
 
-        public void collectMarkerSpecification(VariableSpecifications boundNames)
-        {
+        public void collectMarkerSpecification(VariableSpecifications boundNames) {
         }
 
-        public Terminal bind(QueryOptions options) throws InvalidRequestException
-        {
+        public Terminal bind(QueryOptions options) throws InvalidRequestException {
             SortedSet<ByteBuffer> buffers = new TreeSet<>(comparator);
-            for (Term t : elements)
-            {
+            for (Term t : elements) {
                 ByteBuffer bytes = t.bindAndGet(options);
-
                 if (bytes == null)
                     throw new InvalidRequestException("null is not supported inside collections");
                 if (bytes == ByteBufferUtil.UNSET_BYTE_BUFFER)
                     return UNSET_VALUE;
-
                 // We don't support value > 64K because the serialization format encode the length as an unsigned short.
                 if (bytes.remaining() > FBUtilities.MAX_UNSIGNED_SHORT)
-                    throw new InvalidRequestException(String.format("Set value is too long. Set values are limited to %d bytes but %d bytes value provided",
-                                                                    FBUtilities.MAX_UNSIGNED_SHORT,
-                                                                    bytes.remaining()));
-
+                    throw new InvalidRequestException(String.format("Set value is too long. Set values are limited to %d bytes but %d bytes value provided", FBUtilities.MAX_UNSIGNED_SHORT, bytes.remaining()));
                 buffers.add(bytes);
             }
             return new Value(buffers);
         }
 
-        public Iterable<Function> getFunctions()
-        {
+        public Iterable<Function> getFunctions() {
             return Terms.getFunctions(elements);
         }
     }
 
-    public static class Marker extends AbstractMarker
-    {
-        protected Marker(int bindIndex, ColumnSpecification receiver)
-        {
+    public static class Marker extends AbstractMarker {
+
+        private java.lang.ThreadLocal<Boolean> isSerializeLoggingActive = new ThreadLocal<Boolean>() {
+
+            @Override
+            protected Boolean initialValue() {
+                return false;
+            }
+        };
+
+        protected Marker(int bindIndex, ColumnSpecification receiver) {
             super(bindIndex, receiver);
             assert receiver.type instanceof SetType;
         }
 
-        public Terminal bind(QueryOptions options) throws InvalidRequestException
-        {
+        public Terminal bind(QueryOptions options) throws InvalidRequestException {
             ByteBuffer value = options.getValues().get(bindIndex);
             if (value == null)
                 return null;
-            if (value == ByteBufferUtil.UNSET_BYTE_BUFFER)
+            if (value == ByteBufferUtil.UNSET_BYTE_BUFFER) {
+                if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+                    if (!isSerializeLoggingActive.get()) {
+                        isSerializeLoggingActive.set(true);
+                        serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(org.apache.cassandra.cql3.Constants.class, org.apache.cassandra.cql3.Constants.UNSET_VALUE, "org.apache.cassandra.cql3.Constants.UNSET_VALUE").toJsonString());
+                        isSerializeLoggingActive.set(false);
+                    }
+                }
                 return UNSET_VALUE;
-            return Value.fromSerialized(value, (SetType)receiver.type, options.getProtocolVersion());
+            }
+            return Value.fromSerialized(value, (SetType) receiver.type, options.getProtocolVersion());
         }
     }
 
-    public static class Setter extends Operation
-    {
-        public Setter(ColumnDefinition column, Term t)
-        {
+    public static class Setter extends Operation {
+
+        private java.lang.ThreadLocal<Boolean> isSerializeLoggingActive = new ThreadLocal<Boolean>() {
+
+            @Override
+            protected Boolean initialValue() {
+                return false;
+            }
+        };
+
+        public Setter(ColumnDefinition column, Term t) {
             super(column, t);
         }
 
-        public void execute(ByteBuffer rowKey, ColumnFamily cf, Composite prefix, UpdateParameters params) throws InvalidRequestException
-        {
+        public void execute(ByteBuffer rowKey, ColumnFamily cf, Composite prefix, UpdateParameters params) throws InvalidRequestException {
             Term.Terminal value = t.bind(params.options);
-            if (column.type.isMultiCell() && value != UNSET_VALUE)
-            {
+            if (column.type.isMultiCell() && value != UNSET_VALUE) {
+                if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+                    if (!isSerializeLoggingActive.get()) {
+                        isSerializeLoggingActive.set(true);
+                        serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(this, this.column, "this.column").toJsonString());
+                        isSerializeLoggingActive.set(false);
+                    }
+                }
                 // delete + add
                 CellName name = cf.getComparator().create(prefix, column);
                 cf.addAtom(params.makeTombstoneForOverwrite(name.slice()));
             }
-            if (value != UNSET_VALUE)
+            if (value != UNSET_VALUE) {
+                if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+                    if (!isSerializeLoggingActive.get()) {
+                        isSerializeLoggingActive.set(true);
+                        serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(this, this.column, "this.column").toJsonString());
+                        isSerializeLoggingActive.set(false);
+                    }
+                }
                 Adder.doAdd(cf, prefix, column, params, value);
+            }
         }
     }
 
-    public static class Adder extends Operation
-    {
-        public Adder(ColumnDefinition column, Term t)
-        {
+    public static class Adder extends Operation {
+
+        private java.lang.ThreadLocal<Boolean> isSerializeLoggingActive = new ThreadLocal<Boolean>() {
+
+            @Override
+            protected Boolean initialValue() {
+                return false;
+            }
+        };
+
+        public Adder(ColumnDefinition column, Term t) {
             super(column, t);
         }
 
-        public void execute(ByteBuffer rowKey, ColumnFamily cf, Composite prefix, UpdateParameters params) throws InvalidRequestException
-        {
+        public void execute(ByteBuffer rowKey, ColumnFamily cf, Composite prefix, UpdateParameters params) throws InvalidRequestException {
             assert column.type.isMultiCell() : "Attempted to add items to a frozen set";
             Term.Terminal value = t.bind(params.options);
-            if (value != UNSET_VALUE)
+            if (value != UNSET_VALUE) {
+                if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+                    if (!isSerializeLoggingActive.get()) {
+                        isSerializeLoggingActive.set(true);
+                        serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(this, this.column, "this.column").toJsonString());
+                        isSerializeLoggingActive.set(false);
+                    }
+                }
                 doAdd(cf, prefix, column, params, value);
+            }
         }
 
-        static void doAdd(ColumnFamily cf, Composite prefix, ColumnDefinition column, UpdateParameters params, Term.Terminal value) throws InvalidRequestException
-        {
-            if (column.type.isMultiCell())
-            {
+        static void doAdd(ColumnFamily cf, Composite prefix, ColumnDefinition column, UpdateParameters params, Term.Terminal value) throws InvalidRequestException {
+            if (column.type.isMultiCell()) {
                 if (value == null)
                     return;
-
-                for (ByteBuffer bb : ((Value) value).elements)
-                {
+                for (ByteBuffer bb : ((Value) value).elements) {
                     if (bb == ByteBufferUtil.UNSET_BYTE_BUFFER)
                         continue;
                     CellName cellName = cf.getComparator().create(prefix, column, bb);
                     cf.addColumn(params.makeColumn(cellName, ByteBufferUtil.EMPTY_BYTE_BUFFER));
                 }
-            }
-            else
-            {
+            } else {
                 // for frozen sets, we're overwriting the whole cell
                 CellName cellName = cf.getComparator().create(prefix, column);
                 if (value == null)
@@ -316,45 +317,34 @@ public abstract class Sets
     }
 
     // Note that this is reused for Map subtraction too (we subtract a set from a map)
-    public static class Discarder extends Operation
-    {
-        public Discarder(ColumnDefinition column, Term t)
-        {
+    public static class Discarder extends Operation {
+
+        public Discarder(ColumnDefinition column, Term t) {
             super(column, t);
         }
 
-        public void execute(ByteBuffer rowKey, ColumnFamily cf, Composite prefix, UpdateParameters params) throws InvalidRequestException
-        {
+        public void execute(ByteBuffer rowKey, ColumnFamily cf, Composite prefix, UpdateParameters params) throws InvalidRequestException {
             assert column.type.isMultiCell() : "Attempted to remove items from a frozen set";
-
             Term.Terminal value = t.bind(params.options);
             if (value == null || value == UNSET_VALUE)
                 return;
-
             // This can be either a set or a single element
-            Set<ByteBuffer> toDiscard = value instanceof Sets.Value
-                                      ? ((Sets.Value)value).elements
-                                      : Collections.singleton(value.get(params.options.getProtocolVersion()));
-
-            for (ByteBuffer bb : toDiscard)
-                cf.addColumn(params.makeTombstone(cf.getComparator().create(prefix, column, bb)));
+            Set<ByteBuffer> toDiscard = value instanceof Sets.Value ? ((Sets.Value) value).elements : Collections.singleton(value.get(params.options.getProtocolVersion()));
+            for (ByteBuffer bb : toDiscard) cf.addColumn(params.makeTombstone(cf.getComparator().create(prefix, column, bb)));
         }
     }
 
-    public static class ElementDiscarder extends Operation
-    {
-        public ElementDiscarder(ColumnDefinition column, Term k)
-        {
+    public static class ElementDiscarder extends Operation {
+
+        public ElementDiscarder(ColumnDefinition column, Term k) {
             super(column, k);
         }
 
-        public void execute(ByteBuffer rowKey, ColumnFamily cf, Composite prefix, UpdateParameters params) throws InvalidRequestException
-        {
+        public void execute(ByteBuffer rowKey, ColumnFamily cf, Composite prefix, UpdateParameters params) throws InvalidRequestException {
             assert column.type.isMultiCell() : "Attempted to delete a single element in a frozen set";
             Term.Terminal elt = t.bind(params.options);
             if (elt == null)
                 throw new InvalidRequestException("Invalid null set element");
-
             CellName cellName = cf.getComparator().create(prefix, column, elt.get(params.options.getProtocolVersion()));
             cf.addColumn(params.makeTombstone(cellName));
         }

@@ -26,30 +26,39 @@ import java.util.HashMap;
 import java.util.Map;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
-
 import javax.management.MBeanServer;
 import javax.management.Notification;
 import javax.management.NotificationListener;
 import javax.management.ObjectName;
 import javax.management.openmbean.CompositeData;
-
 import com.sun.management.GarbageCollectionNotificationInfo;
 import com.sun.management.GcInfo;
-
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-
 import org.apache.cassandra.config.DatabaseDescriptor;
-
 import org.apache.cassandra.io.sstable.SSTableDeletingTask;
 import org.apache.cassandra.utils.StatusLogger;
 
-public class GCInspector implements NotificationListener, GCInspectorMXBean
-{
+public class GCInspector implements NotificationListener, GCInspectorMXBean {
+
+    private static final org.slf4j.Logger serialize_logger = org.slf4j.LoggerFactory.getLogger("serialize.logger");
+
+    private java.lang.ThreadLocal<Boolean> isSerializeLoggingActive = new ThreadLocal<Boolean>() {
+
+        @Override
+        protected Boolean initialValue() {
+            return false;
+        }
+    };
+
     public static final String MBEAN_NAME = "org.apache.cassandra.service:type=GCInspector";
+
     private static final Logger logger = LoggerFactory.getLogger(GCInspector.class);
+
     final static long MIN_LOG_DURATION = DatabaseDescriptor.getGCLogThreshold();
+
     final static long GC_WARN_THRESHOLD_IN_MS = DatabaseDescriptor.getGCWarnThreshold();
+
     final static long STAT_THRESHOLD = GC_WARN_THRESHOLD_IN_MS != 0 ? GC_WARN_THRESHOLD_IN_MS : MIN_LOG_DURATION;
 
     /*
@@ -58,35 +67,35 @@ public class GCInspector implements NotificationListener, GCInspectorMXBean
      */
     final static Field BITS_TOTAL_CAPACITY;
 
-    static
-    {
+    static {
         Field temp = null;
-        try
-        {
+        try {
             Class<?> bitsClass = Class.forName("java.nio.Bits");
             Field f = bitsClass.getDeclaredField("totalCapacity");
             f.setAccessible(true);
             temp = f;
-        }
-        catch (Throwable t)
-        {
+        } catch (Throwable t) {
             logger.debug("Error accessing field of java.nio.Bits", t);
             //Don't care, will just return the dummy value -1 if we can't get at the field in this JVM
         }
         BITS_TOTAL_CAPACITY = temp;
     }
 
-    static final class State
-    {
+    static final class State {
+
         final double maxRealTimeElapsed;
+
         final double totalRealTimeElapsed;
+
         final double sumSquaresRealTimeElapsed;
+
         final double totalBytesReclaimed;
+
         final double count;
+
         final long startNanos;
 
-        State(double extraElapsed, double extraBytes, State prev)
-        {
+        State(double extraElapsed, double extraBytes, State prev) {
             this.totalRealTimeElapsed = prev.totalRealTimeElapsed + extraElapsed;
             this.totalBytesReclaimed = prev.totalBytesReclaimed + extraBytes;
             this.sumSquaresRealTimeElapsed = prev.sumSquaresRealTimeElapsed + (extraElapsed * extraElapsed);
@@ -95,37 +104,65 @@ public class GCInspector implements NotificationListener, GCInspectorMXBean
             this.maxRealTimeElapsed = Math.max(prev.maxRealTimeElapsed, extraElapsed);
         }
 
-        State()
-        {
+        State() {
             count = maxRealTimeElapsed = sumSquaresRealTimeElapsed = totalRealTimeElapsed = totalBytesReclaimed = 0;
             startNanos = System.nanoTime();
         }
     }
 
-    static final class GCState
-    {
+    static final class GCState {
+
+        private java.lang.ThreadLocal<Boolean> isSerializeLoggingActive = new ThreadLocal<Boolean>() {
+
+            @Override
+            protected Boolean initialValue() {
+                return false;
+            }
+        };
+
         final GarbageCollectorMXBean gcBean;
+
         final boolean assumeGCIsPartiallyConcurrent;
+
         final boolean assumeGCIsOldGen;
+
         private String[] keys;
+
         long lastGcTotalDuration = 0;
 
-
-        GCState(GarbageCollectorMXBean gcBean, boolean assumeGCIsPartiallyConcurrent, boolean assumeGCIsOldGen)
-        {
+        GCState(GarbageCollectorMXBean gcBean, boolean assumeGCIsPartiallyConcurrent, boolean assumeGCIsOldGen) {
             this.gcBean = gcBean;
             this.assumeGCIsPartiallyConcurrent = assumeGCIsPartiallyConcurrent;
             this.assumeGCIsOldGen = assumeGCIsOldGen;
         }
 
-        String[] keys(GarbageCollectionNotificationInfo info)
-        {
-            if (keys != null)
+        String[] keys(GarbageCollectionNotificationInfo info) {
+            if (keys != null) {
+                if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+                    if (!isSerializeLoggingActive.get()) {
+                        isSerializeLoggingActive.set(true);
+                        serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(this, this.keys, "this.keys").toJsonString());
+                        isSerializeLoggingActive.set(false);
+                    }
+                }
                 return keys;
-
+            }
             keys = info.getGcInfo().getMemoryUsageBeforeGc().keySet().toArray(new String[0]);
+            if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+                if (!isSerializeLoggingActive.get()) {
+                    isSerializeLoggingActive.set(true);
+                    serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(this, this.keys, "this.keys").toJsonString());
+                    isSerializeLoggingActive.set(false);
+                }
+            }
             Arrays.sort(keys);
-
+            if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+                if (!isSerializeLoggingActive.get()) {
+                    isSerializeLoggingActive.set(true);
+                    serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(this, this.keys, "this.keys").toJsonString());
+                    isSerializeLoggingActive.set(false);
+                }
+            }
             return keys;
         }
     }
@@ -134,34 +171,25 @@ public class GCInspector implements NotificationListener, GCInspectorMXBean
 
     final Map<String, GCState> gcStates = new HashMap<>();
 
-    public GCInspector()
-    {
+    public GCInspector() {
         MBeanServer mbs = ManagementFactory.getPlatformMBeanServer();
-
-        try
-        {
+        try {
             ObjectName gcName = new ObjectName(ManagementFactory.GARBAGE_COLLECTOR_MXBEAN_DOMAIN_TYPE + ",*");
-            for (ObjectName name : mbs.queryNames(gcName, null))
-            {
+            for (ObjectName name : mbs.queryNames(gcName, null)) {
                 GarbageCollectorMXBean gc = ManagementFactory.newPlatformMXBeanProxy(mbs, name.getCanonicalName(), GarbageCollectorMXBean.class);
                 gcStates.put(gc.getName(), new GCState(gc, assumeGCIsPartiallyConcurrent(gc), assumeGCIsOldGen(gc)));
             }
-
             mbs.registerMBean(this, new ObjectName(MBEAN_NAME));
-        }
-        catch (Exception e)
-        {
+        } catch (Exception e) {
             throw new RuntimeException(e);
         }
     }
 
-    public static void register() throws Exception
-    {
+    public static void register() throws Exception {
         GCInspector inspector = new GCInspector();
         MBeanServer server = ManagementFactory.getPlatformMBeanServer();
         ObjectName gcName = new ObjectName(ManagementFactory.GARBAGE_COLLECTOR_MXBEAN_DOMAIN_TYPE + ",*");
-        for (ObjectName name : server.queryNames(gcName, null))
-        {
+        for (ObjectName name : server.queryNames(gcName, null)) {
             server.addNotificationListener(name, inspector, null, null);
         }
     }
@@ -173,18 +201,16 @@ public class GCInspector implements NotificationListener, GCInspectorMXBean
      * If the GC isn't recognized then assume that is concurrent and we need to do our own calculation
      * via the the side channel.
      */
-    private static boolean assumeGCIsPartiallyConcurrent(GarbageCollectorMXBean gc)
-    {
-        switch (gc.getName())
-        {
-                //First two are from the serial collector
+    private static boolean assumeGCIsPartiallyConcurrent(GarbageCollectorMXBean gc) {
+        switch(gc.getName()) {
+            //First two are from the serial collector
             case "Copy":
             case "MarkSweepCompact":
-                //Parallel collector
+            //Parallel collector
             case "PS MarkSweep":
             case "PS Scavenge":
             case "G1 Young Generation":
-                //CMS young generation collector
+            //CMS young generation collector
             case "ParNew":
                 return false;
             case "ConcurrentMarkSweep":
@@ -202,10 +228,8 @@ public class GCInspector implements NotificationListener, GCInspectorMXBean
      *
      * Defaults to not invoking SSTableDeletingTask.rescheduleFailedTasks() on unrecognized GC names
      */
-    private static boolean assumeGCIsOldGen(GarbageCollectorMXBean gc)
-    {
-        switch (gc.getName())
-        {
+    private static boolean assumeGCIsOldGen(GarbageCollectorMXBean gc) {
+        switch(gc.getName()) {
             case "Copy":
             case "PS Scavenge":
             case "G1 Young Generation":
@@ -223,44 +247,44 @@ public class GCInspector implements NotificationListener, GCInspectorMXBean
         }
     }
 
-    public void handleNotification(final Notification notification, final Object handback)
-    {
+    public void handleNotification(final Notification notification, final Object handback) {
         String type = notification.getType();
-        if (type.equals(GarbageCollectionNotificationInfo.GARBAGE_COLLECTION_NOTIFICATION))
-        {
+        if (type.equals(GarbageCollectionNotificationInfo.GARBAGE_COLLECTION_NOTIFICATION)) {
             // retrieve the garbage collection notification information
             CompositeData cd = (CompositeData) notification.getUserData();
             GarbageCollectionNotificationInfo info = GarbageCollectionNotificationInfo.from(cd);
             String gcName = info.getGcName();
             GcInfo gcInfo = info.getGcInfo();
-
             long duration = gcInfo.getDuration();
-
             /*
              * The duration supplied in the notification info includes more than just
              * application stopped time for concurrent GCs. Try and do a better job coming up with a good stopped time
              * value by asking for and tracking cumulative time spent blocked in GC.
              */
             GCState gcState = gcStates.get(gcName);
-            if (gcState.assumeGCIsPartiallyConcurrent)
-            {
+            if (gcState.assumeGCIsPartiallyConcurrent) {
                 long previousTotal = gcState.lastGcTotalDuration;
                 long total = gcState.gcBean.getCollectionTime();
                 gcState.lastGcTotalDuration = total;
-                duration = total - previousTotal; // may be zero for a really fast collection
+                // may be zero for a really fast collection
+                duration = total - previousTotal;
             }
-
             StringBuilder sb = new StringBuilder();
             sb.append(info.getGcName()).append(" GC in ").append(duration).append("ms.  ");
             long bytes = 0;
             Map<String, MemoryUsage> beforeMemoryUsage = gcInfo.getMemoryUsageBeforeGc();
             Map<String, MemoryUsage> afterMemoryUsage = gcInfo.getMemoryUsageAfterGc();
-            for (String key : gcState.keys(info))
-            {
+            for (String key : gcState.keys(info)) {
+                if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+                    if (!isSerializeLoggingActive.get()) {
+                        isSerializeLoggingActive.set(true);
+                        serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(gcState.keys(info), key, "key").toJsonString());
+                        isSerializeLoggingActive.set(false);
+                    }
+                }
                 MemoryUsage before = beforeMemoryUsage.get(key);
                 MemoryUsage after = afterMemoryUsage.get(key);
-                if (after != null && after.getUsed() != before.getUsed())
-                {
+                if (after != null && after.getUsed() != before.getUsed()) {
                     sb.append(key).append(": ").append(before.getUsed());
                     sb.append(" -> ");
                     sb.append(after.getUsed());
@@ -269,14 +293,11 @@ public class GCInspector implements NotificationListener, GCInspectorMXBean
                     bytes += before.getUsed() - after.getUsed();
                 }
             }
-
-            while (true)
-            {
+            while (true) {
                 State prev = state.get();
                 if (state.compareAndSet(prev, new State(duration, bytes, prev)))
                     break;
             }
-
             String st = sb.toString();
             if (GC_WARN_THRESHOLD_IN_MS != 0 && duration > GC_WARN_THRESHOLD_IN_MS)
                 logger.warn(st);
@@ -284,23 +305,19 @@ public class GCInspector implements NotificationListener, GCInspectorMXBean
                 logger.info(st);
             else if (logger.isTraceEnabled())
                 logger.trace(st);
-
             if (duration > STAT_THRESHOLD)
                 StatusLogger.log();
-
             // if we just finished an old gen collection and we're still using a lot of memory, try to reduce the pressure
             if (gcState.assumeGCIsOldGen)
                 SSTableDeletingTask.rescheduleFailedTasks();
         }
     }
 
-    public State getTotalSinceLastCheck()
-    {
+    public State getTotalSinceLastCheck() {
         return state.getAndSet(new State());
     }
 
-    public double[] getAndResetStats()
-    {
+    public double[] getAndResetStats() {
         State state = getTotalSinceLastCheck();
         double[] r = new double[7];
         r[0] = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - state.startNanos);
@@ -310,19 +327,15 @@ public class GCInspector implements NotificationListener, GCInspectorMXBean
         r[4] = state.totalBytesReclaimed;
         r[5] = state.count;
         r[6] = getAllocatedDirectMemory();
-
         return r;
     }
 
-    private static long getAllocatedDirectMemory()
-    {
-        if (BITS_TOTAL_CAPACITY == null) return -1;
-        try
-        {
+    private static long getAllocatedDirectMemory() {
+        if (BITS_TOTAL_CAPACITY == null)
+            return -1;
+        try {
             return BITS_TOTAL_CAPACITY.getLong(null);
-        }
-        catch (Throwable t)
-        {
+        } catch (Throwable t) {
             logger.trace("Error accessing field of java.nio.Bits", t);
             //Don't care how or why we failed to get the value in this JVM. Return -1 to indicate failure
             return -1;

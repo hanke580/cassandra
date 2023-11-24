@@ -15,7 +15,6 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
 package org.apache.cassandra.service;
 
 import org.apache.cassandra.concurrent.JMXEnabledThreadPoolExecutor;
@@ -25,81 +24,82 @@ import org.apache.cassandra.db.Keyspace;
 import org.apache.cassandra.locator.AbstractReplicationStrategy;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicInteger;
 
-public class PendingRangeCalculatorService
-{
+public class PendingRangeCalculatorService {
+
+    private static final org.slf4j.Logger serialize_logger = org.slf4j.LoggerFactory.getLogger("serialize.logger");
+
     public static final PendingRangeCalculatorService instance = new PendingRangeCalculatorService();
 
     private static Logger logger = LoggerFactory.getLogger(PendingRangeCalculatorService.class);
-    private final JMXEnabledThreadPoolExecutor executor = new JMXEnabledThreadPoolExecutor(1, Integer.MAX_VALUE, TimeUnit.SECONDS,
-            new LinkedBlockingQueue<Runnable>(1), new NamedThreadFactory("PendingRangeCalculator"), "internal");
+
+    private final JMXEnabledThreadPoolExecutor executor = new JMXEnabledThreadPoolExecutor(1, Integer.MAX_VALUE, TimeUnit.SECONDS, new LinkedBlockingQueue<Runnable>(1), new NamedThreadFactory("PendingRangeCalculator"), "internal");
 
     private AtomicInteger updateJobs = new AtomicInteger(0);
 
-    public PendingRangeCalculatorService()
-    {
-        executor.setRejectedExecutionHandler(new RejectedExecutionHandler()
-        {
-            public void rejectedExecution(Runnable r, ThreadPoolExecutor e)
-            {
+    public PendingRangeCalculatorService() {
+        executor.setRejectedExecutionHandler(new RejectedExecutionHandler() {
+
+            public void rejectedExecution(Runnable r, ThreadPoolExecutor e) {
                 PendingRangeCalculatorService.instance.finishUpdate();
             }
-        }
-        );
+        });
     }
 
-    private static class PendingRangeTask implements Runnable
-    {
-        public void run()
-        {
-            try
-            {
+    private static class PendingRangeTask implements Runnable {
+
+        private java.lang.ThreadLocal<Boolean> isSerializeLoggingActive = new ThreadLocal<Boolean>() {
+
+            @Override
+            protected Boolean initialValue() {
+                return false;
+            }
+        };
+
+        public void run() {
+            try {
                 long start = System.currentTimeMillis();
-                for (String keyspaceName : Schema.instance.getNonSystemKeyspaces())
+                for (String keyspaceName : Schema.instance.getNonSystemKeyspaces()) {
+                    if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+                        if (!isSerializeLoggingActive.get()) {
+                            isSerializeLoggingActive.set(true);
+                            serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(Schema.instance.getNonSystemKeyspaces(), keyspaceName, "keyspaceName").toJsonString());
+                            isSerializeLoggingActive.set(false);
+                        }
+                    }
                     calculatePendingRanges(Keyspace.open(keyspaceName).getReplicationStrategy(), keyspaceName);
+                }
                 logger.debug("finished calculation for {} keyspaces in {}ms", Schema.instance.getNonSystemKeyspaces().size(), System.currentTimeMillis() - start);
-            }
-            finally
-            {
+            } finally {
                 PendingRangeCalculatorService.instance.finishUpdate();
             }
         }
     }
 
-    private void finishUpdate()
-    {
+    private void finishUpdate() {
         updateJobs.decrementAndGet();
     }
 
-    public void update()
-    {
+    public void update() {
         updateJobs.incrementAndGet();
         executor.submit(new PendingRangeTask());
     }
 
-    public void blockUntilFinished()
-    {
+    public void blockUntilFinished() {
         // We want to be sure the job we're blocking for is actually finished and we can't trust the TPE's active job count
-        while (updateJobs.get() > 0)
-        {
-            try
-            {
+        while (updateJobs.get() > 0) {
+            try {
                 Thread.sleep(100);
-            }
-            catch (InterruptedException e)
-            {
+            } catch (InterruptedException e) {
                 throw new RuntimeException(e);
             }
         }
     }
 
-
     // public & static for testing purposes
-    public static void calculatePendingRanges(AbstractReplicationStrategy strategy, String keyspaceName)
-    {
+    public static void calculatePendingRanges(AbstractReplicationStrategy strategy, String keyspaceName) {
         StorageService.instance.getTokenMetadata().calculatePendingRanges(strategy, keyspaceName);
     }
 }

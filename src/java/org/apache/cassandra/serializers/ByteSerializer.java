@@ -15,40 +15,50 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
 package org.apache.cassandra.serializers;
 
 import org.apache.cassandra.utils.ByteBufferUtil;
-
 import java.nio.ByteBuffer;
 
-public class ByteSerializer implements TypeSerializer<Byte>
-{
+public class ByteSerializer implements TypeSerializer<Byte> {
+
+    private static final org.slf4j.Logger serialize_logger = org.slf4j.LoggerFactory.getLogger("serialize.logger");
+
+    private java.lang.ThreadLocal<Boolean> isSerializeLoggingActive = new ThreadLocal<Boolean>() {
+
+        @Override
+        protected Boolean initialValue() {
+            return false;
+        }
+    };
+
     public static final ByteSerializer instance = new ByteSerializer();
 
-    public Byte deserialize(ByteBuffer bytes)
-    {
+    public Byte deserialize(ByteBuffer bytes) {
         return bytes.remaining() == 0 ? null : bytes.get(bytes.position());
     }
 
-    public ByteBuffer serialize(Byte value)
-    {
+    public ByteBuffer serialize(Byte value) {
+        if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+            if (!isSerializeLoggingActive.get()) {
+                isSerializeLoggingActive.set(true);
+                serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(org.apache.cassandra.utils.ByteBufferUtil.class, org.apache.cassandra.utils.ByteBufferUtil.EMPTY_BYTE_BUFFER, "org.apache.cassandra.utils.ByteBufferUtil.EMPTY_BYTE_BUFFER").toJsonString());
+                isSerializeLoggingActive.set(false);
+            }
+        }
         return value == null ? ByteBufferUtil.EMPTY_BYTE_BUFFER : ByteBuffer.allocate(1).put(0, value);
     }
 
-    public void validate(ByteBuffer bytes) throws MarshalException
-    {
+    public void validate(ByteBuffer bytes) throws MarshalException {
         if (bytes.remaining() != 1)
             throw new MarshalException(String.format("Expected 1 byte for a tinyint (%d)", bytes.remaining()));
     }
 
-    public String toString(Byte value)
-    {
+    public String toString(Byte value) {
         return value == null ? "" : String.valueOf(value);
     }
 
-    public Class<Byte> getType()
-    {
+    public Class<Byte> getType() {
         return Byte.class;
     }
 }

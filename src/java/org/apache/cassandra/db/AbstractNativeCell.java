@@ -20,7 +20,6 @@ package org.apache.cassandra.db;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.security.MessageDigest;
-
 import net.nicoulaj.compilecommand.annotations.Inline;
 import org.apache.cassandra.config.CFMetaData;
 import org.apache.cassandra.config.ColumnDefinition;
@@ -34,7 +33,6 @@ import org.apache.cassandra.utils.FBUtilities;
 import org.apache.cassandra.utils.FastByteOperations;
 import org.apache.cassandra.utils.concurrent.OpOrder;
 import org.apache.cassandra.utils.memory.*;
-
 
 /**
  * <pre>
@@ -60,85 +58,89 @@ import org.apache.cassandra.utils.memory.*;
  * }
  * </pre>
  */
-public abstract class AbstractNativeCell extends AbstractCell implements CellName
-{
+public abstract class AbstractNativeCell extends AbstractCell implements CellName {
+
+    private static java.lang.ThreadLocal<Boolean> isSerializeLoggingActiveStatic = new ThreadLocal<Boolean>() {
+
+        @Override
+        protected Boolean initialValue() {
+            return false;
+        }
+    };
+
+    private static final org.slf4j.Logger serialize_logger = org.slf4j.LoggerFactory.getLogger("serialize.logger");
+
     static final int TIMESTAMP_OFFSET = 4;
+
     private static final int VALUE_OFFSET_OFFSET = 12;
+
     private static final int CELL_NAME_SIZE_OFFSET = 16;
+
     private static final int CELL_NAME_EXTRA_OFFSET = 18;
+
     private static final int CELL_NAME_OFFSETS_OFFSET = 19;
+
     private static final int CELL_NAME_SIZE_DELTA_MASK = 3;
+
     private static final int CELL_NAME_TYPE_SHIFT = 2;
+
     private static final int CELL_NAME_TYPE_MASK = 7;
 
-    private static enum NameType
-    {
+    private static enum NameType {
+
         COMPOUND_DENSE(0 << 2), COMPOUND_SPARSE(1 << 2), COMPOUND_SPARSE_STATIC(2 << 2), SIMPLE_DENSE(3 << 2), SIMPLE_SPARSE(4 << 2);
+
         static final NameType[] TYPES = NameType.values();
+
         final int bits;
 
-        NameType(int bits)
-        {
+        NameType(int bits) {
             this.bits = bits;
         }
 
-        static NameType typeOf(CellName name)
-        {
-            if (name instanceof CompoundDenseCellName)
-            {
+        static NameType typeOf(CellName name) {
+            if (name instanceof CompoundDenseCellName) {
                 assert !name.isStatic();
                 return COMPOUND_DENSE;
             }
-
             if (name instanceof CompoundSparseCellName)
                 return name.isStatic() ? COMPOUND_SPARSE_STATIC : COMPOUND_SPARSE;
-
-            if (name instanceof SimpleDenseCellName)
-            {
+            if (name instanceof SimpleDenseCellName) {
                 assert !name.isStatic();
                 return SIMPLE_DENSE;
             }
-
-            if (name instanceof SimpleSparseCellName)
-            {
+            if (name instanceof SimpleSparseCellName) {
                 assert !name.isStatic();
                 return SIMPLE_SPARSE;
             }
-
             if (name instanceof NativeCell)
                 return ((NativeCell) name).nametype();
-
             throw new AssertionError();
         }
     }
 
-    private final long peer; // peer is assigned by peer updater in setPeer method
+    // peer is assigned by peer updater in setPeer method
+    private final long peer;
 
-    AbstractNativeCell()
-    {
+    AbstractNativeCell() {
         peer = -1;
     }
 
-    public AbstractNativeCell(NativeAllocator allocator, OpOrder.Group writeOp, Cell copyOf)
-    {
+    public AbstractNativeCell(NativeAllocator allocator, OpOrder.Group writeOp, Cell copyOf) {
         int size = sizeOf(copyOf);
         peer = allocator.allocate(size, writeOp);
-
         MemoryUtil.setInt(peer, size);
         construct(copyOf);
     }
 
-    protected int sizeOf(Cell cell)
-    {
+    protected int sizeOf(Cell cell) {
         int size = CELL_NAME_OFFSETS_OFFSET + Math.max(0, cell.name().size() - 1) * 2 + cell.value().remaining();
         CellName name = cell.name();
-        for (int i = 0; i < name.size(); i++)
-            size += name.get(i).remaining();
+        for (int i = 0; i < name.size(); i++) size += name.get(i).remaining();
         return size;
     }
 
-    protected void construct(Cell from)
-    {
+    protected void construct(Cell from) {
         setLong(TIMESTAMP_OFFSET, from.timestamp());
         CellName name = from.name();
         int nameSize = name.size();
@@ -149,14 +151,12 @@ public abstract class AbstractNativeCell extends AbstractCell implements CellNam
         setByte(offset += 2, cellNameExtraBits);
         offset += 1;
         short cellNameDelta = 0;
-        for (int i = 1; i < nameSize; i++)
-        {
+        for (int i = 1; i < nameSize; i++) {
             cellNameDelta += name.get(i - 1).remaining();
             setShort(offset, cellNameDelta);
             offset += 2;
         }
-        for (int i = 0; i < nameSize; i++)
-        {
+        for (int i = 0; i < nameSize; i++) {
             ByteBuffer bb = name.get(i);
             setBytes(offset, bb);
             offset += bb.remaining();
@@ -166,68 +166,55 @@ public abstract class AbstractNativeCell extends AbstractCell implements CellNam
     }
 
     // the offset at which to read the short that gives the names
-    private int nameDeltaOffset(int i)
-    {
+    private int nameDeltaOffset(int i) {
         return CELL_NAME_OFFSETS_OFFSET + ((i - 1) * 2);
     }
 
-    int valueStartOffset()
-    {
+    int valueStartOffset() {
         return getInt(VALUE_OFFSET_OFFSET);
     }
 
-    private int valueEndOffset()
-    {
+    private int valueEndOffset() {
         return (int) (internalSize() - postfixSize());
     }
 
-    protected int postfixSize()
-    {
+    protected int postfixSize() {
         return 0;
     }
 
     @Override
-    public ByteBuffer value()
-    {
+    public ByteBuffer value() {
         long offset = valueStartOffset();
         return getByteBuffer(offset, (int) (internalSize() - (postfixSize() + offset))).order(ByteOrder.BIG_ENDIAN);
     }
 
-    private int clusteringSizeDelta()
-    {
+    private int clusteringSizeDelta() {
         return getByte(CELL_NAME_EXTRA_OFFSET) & CELL_NAME_SIZE_DELTA_MASK;
     }
 
-    public boolean isStatic()
-    {
+    public boolean isStatic() {
         return nametype() == NameType.COMPOUND_SPARSE_STATIC;
     }
 
-    NameType nametype()
-    {
+    NameType nametype() {
         return NameType.TYPES[(((int) this.getByte(CELL_NAME_EXTRA_OFFSET)) >> CELL_NAME_TYPE_SHIFT) & CELL_NAME_TYPE_MASK];
     }
 
-    public long minTimestamp()
-    {
+    public long minTimestamp() {
         return timestamp();
     }
 
-    public long maxTimestamp()
-    {
+    public long maxTimestamp() {
         return timestamp();
     }
 
-    public int clusteringSize()
-    {
+    public int clusteringSize() {
         return size() - clusteringSizeDelta();
     }
 
     @Override
-    public ColumnIdentifier cql3ColumnName(CFMetaData metadata)
-    {
-        switch (nametype())
-        {
+    public ColumnIdentifier cql3ColumnName(CFMetaData metadata) {
+        switch(nametype()) {
             case SIMPLE_SPARSE:
                 return getIdentifier(metadata, get(clusteringSize()));
             case COMPOUND_SPARSE_STATIC:
@@ -235,7 +222,6 @@ public abstract class AbstractNativeCell extends AbstractCell implements CellNam
                 ByteBuffer buffer = get(clusteringSize());
                 if (buffer.remaining() == 0)
                     return CompoundSparseCellNameType.rowMarkerId;
-
                 return getIdentifier(metadata, buffer);
             case SIMPLE_DENSE:
             case COMPOUND_DENSE:
@@ -245,22 +231,18 @@ public abstract class AbstractNativeCell extends AbstractCell implements CellNam
         }
     }
 
-    public ByteBuffer collectionElement()
-    {
+    public ByteBuffer collectionElement() {
         return isCollectionCell() ? get(size() - 1) : null;
     }
 
     // we always have a collection element if our clustering size is 2 less than our total size,
     // and we never have one otherwiss
-    public boolean isCollectionCell()
-    {
+    public boolean isCollectionCell() {
         return clusteringSizeDelta() == 2;
     }
 
-    public boolean isSameCQL3RowAs(CellNameType type, CellName other)
-    {
-        switch (nametype())
-        {
+    public boolean isSameCQL3RowAs(CellNameType type, CellName other) {
+        switch(nametype()) {
             case SIMPLE_DENSE:
             case COMPOUND_DENSE:
                 return type.compare(this, other) == 0;
@@ -269,9 +251,8 @@ public abstract class AbstractNativeCell extends AbstractCell implements CellNam
                 int clusteringSize = clusteringSize();
                 if (clusteringSize != other.clusteringSize() || other.isStatic() != isStatic())
                     return false;
-                for (int i = 0; i < clusteringSize; i++)
-                    if (type.subtype(i).compare(get(i), other.get(i)) != 0)
-                        return false;
+                for (int i = 0; i < clusteringSize; i++) if (type.subtype(i).compare(get(i), other.get(i)) != 0)
+                    return false;
                 return true;
             case SIMPLE_SPARSE:
                 return true;
@@ -280,23 +261,19 @@ public abstract class AbstractNativeCell extends AbstractCell implements CellNam
         }
     }
 
-    public int size()
-    {
+    public int size() {
         return getShort(CELL_NAME_SIZE_OFFSET);
     }
 
-    public boolean isEmpty()
-    {
+    public boolean isEmpty() {
         return size() == 0;
     }
 
-    public ByteBuffer get(int i)
-    {
+    public ByteBuffer get(int i) {
         return get(i, null);
     }
 
-    private ByteBuffer get(int i, AbstractAllocator copy)
-    {
+    private ByteBuffer get(int i, AbstractAllocator copy) {
         // remember to take dense/sparse into account, and only return EOC when not dense
         int size = size();
         assert i >= 0 && i < size();
@@ -311,94 +288,75 @@ public abstract class AbstractNativeCell extends AbstractCell implements CellNam
         return result;
     }
 
-    private static final ThreadLocal<byte[]> BUFFER = new ThreadLocal<byte[]>()
-    {
-        protected byte[] initialValue()
-        {
+    private static final ThreadLocal<byte[]> BUFFER = new ThreadLocal<byte[]>() {
+
+        protected byte[] initialValue() {
             return new byte[256];
         }
     };
 
-    protected void writeComponentTo(MessageDigest digest, int i, boolean includeSize)
-    {
+    protected void writeComponentTo(MessageDigest digest, int i, boolean includeSize) {
         // remember to take dense/sparse into account, and only return EOC when not dense
         int size = size();
         assert i >= 0 && i < size();
         int cellNamesOffset = nameDeltaOffset(size);
         int startDelta = i == 0 ? 0 : getShort(nameDeltaOffset(i));
         int endDelta = i < size - 1 ? getShort(nameDeltaOffset(i + 1)) : valueStartOffset() - cellNamesOffset;
-
         int componentStart = cellNamesOffset + startDelta;
         int count = endDelta - startDelta;
-
         if (includeSize)
             FBUtilities.updateWithShort(digest, count);
-
         writeMemoryTo(digest, componentStart, count);
     }
 
-    protected void writeMemoryTo(MessageDigest digest, int from, int count)
-    {
+    protected void writeMemoryTo(MessageDigest digest, int from, int count) {
         // only batch if we have more than 16 bytes remaining to transfer, otherwise fall-back to single-byte updates
         int i = 0, batchEnd = count - 16;
-        if (i < batchEnd)
-        {
+        if (i < batchEnd) {
             byte[] buffer = BUFFER.get();
-            while (i < batchEnd)
-            {
+            while (i < batchEnd) {
                 int transfer = Math.min(count - i, 256);
                 getBytes(from + i, buffer, 0, transfer);
                 digest.update(buffer, 0, transfer);
                 i += transfer;
             }
         }
-        while (i < count)
-            digest.update(getByte(from + i++));
+        while (i < count) digest.update(getByte(from + i++));
     }
 
-    public EOC eoc()
-    {
+    public EOC eoc() {
         return EOC.NONE;
     }
 
-    public Composite withEOC(EOC eoc)
-    {
+    public Composite withEOC(EOC eoc) {
         throw new UnsupportedOperationException();
     }
 
-    public Composite start()
-    {
+    public Composite start() {
         throw new UnsupportedOperationException();
     }
 
-    public Composite end()
-    {
+    public Composite end() {
         throw new UnsupportedOperationException();
     }
 
-    public ColumnSlice slice()
-    {
+    public ColumnSlice slice() {
         throw new UnsupportedOperationException();
     }
 
-    public boolean isPrefixOf(CType type, Composite c)
-    {
+    public boolean isPrefixOf(CType type, Composite c) {
         if (size() > c.size() || isStatic() != c.isStatic())
             return false;
-
-        for (int i = 0; i < size(); i++)
-        {
+        for (int i = 0; i < size(); i++) {
             if (type.subtype(i).compare(get(i), c.get(i)) != 0)
                 return false;
         }
         return true;
     }
 
-    public ByteBuffer toByteBuffer()
-    {
+    public ByteBuffer toByteBuffer() {
         // for simple sparse we just return our one name buffer
-        switch (nametype())
-        {
+        switch(nametype()) {
             case SIMPLE_DENSE:
             case SIMPLE_SPARSE:
                 return get(0);
@@ -410,9 +368,7 @@ public abstract class AbstractNativeCell extends AbstractCell implements CellNam
                 ByteBuffer result = ByteBuffer.allocate(cellDataSize());
                 if (isStatic())
                     ByteBufferUtil.writeShortLength(result, CompositeType.STATIC_MARKER);
-
-                for (int i = 0; i < size(); i++)
-                {
+                for (int i = 0; i < size(); i++) {
                     ByteBuffer bb = get(i);
                     ByteBufferUtil.writeShortLength(result, bb.remaining());
                     result.put(bb);
@@ -425,16 +381,13 @@ public abstract class AbstractNativeCell extends AbstractCell implements CellNam
         }
     }
 
-    protected void updateWithName(MessageDigest digest)
-    {
+    protected void updateWithName(MessageDigest digest) {
         // for simple sparse we just return our one name buffer
-        switch (nametype())
-        {
+        switch(nametype()) {
             case SIMPLE_DENSE:
             case SIMPLE_SPARSE:
                 writeComponentTo(digest, 0, false);
                 break;
-
             case COMPOUND_DENSE:
             case COMPOUND_SPARSE_STATIC:
             case COMPOUND_SPARSE:
@@ -442,31 +395,26 @@ public abstract class AbstractNativeCell extends AbstractCell implements CellNam
                 // See org.apache.cassandra.db.marshal.CompositeType for details.
                 if (isStatic())
                     FBUtilities.updateWithShort(digest, CompositeType.STATIC_MARKER);
-
-                for (int i = 0; i < size(); i++)
-                {
+                for (int i = 0; i < size(); i++) {
                     writeComponentTo(digest, i, true);
                     digest.update((byte) 0);
                 }
                 break;
-
             default:
                 throw new AssertionError();
         }
     }
 
-    protected void updateWithValue(MessageDigest digest)
-    {
+    protected void updateWithValue(MessageDigest digest) {
         int offset = valueStartOffset();
         int length = valueEndOffset() - offset;
         writeMemoryTo(digest, offset, length);
     }
 
-    @Override // this is the NAME dataSize, only!
-    public int dataSize()
-    {
-        switch (nametype())
-        {
+    // this is the NAME dataSize, only!
+    @Override
+    public int dataSize() {
+        switch(nametype()) {
             case SIMPLE_DENSE:
             case SIMPLE_SPARSE:
                 return valueStartOffset() - nameDeltaOffset(size());
@@ -480,8 +428,7 @@ public abstract class AbstractNativeCell extends AbstractCell implements CellNam
         }
     }
 
-    public boolean equals(Object obj)
-    {
+    public boolean equals(Object obj) {
         if (obj == this)
             return true;
         if (obj instanceof CellName)
@@ -491,76 +438,62 @@ public abstract class AbstractNativeCell extends AbstractCell implements CellNam
         return false;
     }
 
-    public boolean equals(CellName that)
-    {
+    public boolean equals(CellName that) {
         int size = this.size();
         if (size != that.size())
             return false;
-
-        for (int i = 0 ; i < size ; i++)
-            if (!get(i).equals(that.get(i)))
-                return false;
+        for (int i = 0; i < size; i++) if (!get(i).equals(that.get(i)))
+            return false;
         return true;
     }
 
     private static final ByteBuffer[] EMPTY = new ByteBuffer[0];
 
     @Override
-    public CellName copy(CFMetaData cfm, AbstractAllocator allocator)
-    {
+    public CellName copy(CFMetaData cfm, AbstractAllocator allocator) {
         ByteBuffer[] r;
-        switch (nametype())
-        {
+        switch(nametype()) {
             case SIMPLE_DENSE:
                 return CellNames.simpleDense(get(0, allocator));
-
             case COMPOUND_DENSE:
                 r = new ByteBuffer[size()];
-                for (int i = 0; i < r.length; i++)
-                    r[i] = get(i, allocator);
+                for (int i = 0; i < r.length; i++) r[i] = get(i, allocator);
                 return CellNames.compositeDense(r);
-
             case COMPOUND_SPARSE_STATIC:
             case COMPOUND_SPARSE:
                 int clusteringSize = clusteringSize();
                 r = clusteringSize == 0 ? EMPTY : new ByteBuffer[clusteringSize()];
-                for (int i = 0; i < clusteringSize; i++)
-                    r[i] = get(i, allocator);
-
+                for (int i = 0; i < clusteringSize; i++) r[i] = get(i, allocator);
                 ByteBuffer nameBuffer = get(r.length);
                 ColumnIdentifier name;
-
-                if (nameBuffer.remaining() == 0)
-                {
+                if (nameBuffer.remaining() == 0) {
                     name = CompoundSparseCellNameType.rowMarkerId;
-                }
-                else
-                {
+                } else {
                     name = getIdentifier(cfm, nameBuffer);
                 }
-
-                if (clusteringSizeDelta() == 2)
-                {
+                if (clusteringSizeDelta() == 2) {
                     ByteBuffer element = allocator.clone(get(size() - 1));
                     return CellNames.compositeSparseWithCollection(r, element, name, isStatic());
                 }
                 return CellNames.compositeSparse(r, name, isStatic());
-
             case SIMPLE_SPARSE:
                 return CellNames.simpleSparse(getIdentifier(cfm, get(0)));
         }
         throw new IllegalStateException();
     }
 
-    private static ColumnIdentifier getIdentifier(CFMetaData cfMetaData, ByteBuffer name)
-    {
+    private static ColumnIdentifier getIdentifier(CFMetaData cfMetaData, ByteBuffer name) {
         ColumnDefinition def = cfMetaData.getColumnDefinition(name);
-        if (def != null)
-        {
+        if (def != null) {
+            if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+                if (!isSerializeLoggingActiveStatic.get()) {
+                    isSerializeLoggingActiveStatic.set(true);
+                    serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(def, def.name, "def.name").toJsonString());
+                    isSerializeLoggingActiveStatic.set(false);
+                }
+            }
             return def.name;
-        }
-        else
-        {
+        } else {
             // it's safe to simply grab based on clusteringPrefixSize() as we are only called if not a dense type
             AbstractType<?> type = cfMetaData.comparator.subtype(cfMetaData.comparator.clusteringPrefixSize());
             return new ColumnIdentifier(HeapAllocator.instance.clone(name), type);
@@ -568,106 +501,88 @@ public abstract class AbstractNativeCell extends AbstractCell implements CellNam
     }
 
     @Override
-    public Cell withUpdatedName(CellName newName)
-    {
+    public Cell withUpdatedName(CellName newName) {
         throw new UnsupportedOperationException();
     }
 
     @Override
-    public Cell withUpdatedTimestamp(long newTimestamp)
-    {
+    public Cell withUpdatedTimestamp(long newTimestamp) {
         throw new UnsupportedOperationException();
     }
 
-    protected long internalSize()
-    {
+    protected long internalSize() {
         return MemoryUtil.getInt(peer);
     }
 
-    private void checkPosition(long offset, long size)
-    {
+    private void checkPosition(long offset, long size) {
         assert size >= 0;
         assert peer > 0 : "Memory was freed";
         assert offset >= 0 && offset + size <= internalSize() : String.format("Illegal range: [%d..%d), size: %s", offset, offset + size, internalSize());
     }
 
-    protected final void setByte(long offset, byte b)
-    {
+    protected final void setByte(long offset, byte b) {
         checkPosition(offset, 1);
         MemoryUtil.setByte(peer + offset, b);
     }
 
-    protected final void setShort(long offset, short s)
-    {
+    protected final void setShort(long offset, short s) {
         checkPosition(offset, 1);
         MemoryUtil.setShort(peer + offset, s);
     }
 
-    protected final void setInt(long offset, int l)
-    {
+    protected final void setInt(long offset, int l) {
         checkPosition(offset, 4);
         MemoryUtil.setInt(peer + offset, l);
     }
 
-    protected final void setLong(long offset, long l)
-    {
+    protected final void setLong(long offset, long l) {
         checkPosition(offset, 8);
         MemoryUtil.setLong(peer + offset, l);
     }
 
-    protected final void setBytes(long offset, ByteBuffer buffer)
-    {
+    protected final void setBytes(long offset, ByteBuffer buffer) {
         int start = buffer.position();
         int count = buffer.limit() - start;
         if (count == 0)
             return;
-
         checkPosition(offset, count);
         MemoryUtil.setBytes(peer + offset, buffer);
     }
 
-    protected final byte getByte(long offset)
-    {
+    protected final byte getByte(long offset) {
         checkPosition(offset, 1);
         return MemoryUtil.getByte(peer + offset);
     }
 
-    protected final void getBytes(long offset, byte[] trg, int trgOffset, int count)
-    {
+    protected final void getBytes(long offset, byte[] trg, int trgOffset, int count) {
         checkPosition(offset, count);
         MemoryUtil.getBytes(peer + offset, trg, trgOffset, count);
     }
 
-    protected final int getShort(long offset)
-    {
+    protected final int getShort(long offset) {
         checkPosition(offset, 2);
         return MemoryUtil.getShort(peer + offset);
     }
 
-    protected final int getInt(long offset)
-    {
+    protected final int getInt(long offset) {
         checkPosition(offset, 4);
         return MemoryUtil.getInt(peer + offset);
     }
 
-    protected final long getLong(long offset)
-    {
+    protected final long getLong(long offset) {
         checkPosition(offset, 8);
         return MemoryUtil.getLong(peer + offset);
     }
 
-    protected final ByteBuffer getByteBuffer(long offset, int length)
-    {
+    protected final ByteBuffer getByteBuffer(long offset, int length) {
         checkPosition(offset, length);
         return MemoryUtil.getByteBuffer(peer + offset, length);
     }
 
     // requires isByteOrderComparable to be true. Compares the name components only; ; may need to compare EOC etc still
     @Inline
-    public final int compareTo(final Composite that)
-    {
-        if (isStatic() != that.isStatic())
-        {
+    public final int compareTo(final Composite that) {
+        if (isStatic() != that.isStatic()) {
             // Static sorts before non-static no matter what, except for empty which
             // always sort first
             if (isEmpty())
@@ -676,14 +591,12 @@ public abstract class AbstractNativeCell extends AbstractCell implements CellNam
                 return 1;
             return isStatic() ? -1 : 1;
         }
-
         int size = size();
         int size2 = that.size();
         int minSize = Math.min(size, size2);
         int startDelta = 0;
         int cellNamesOffset = nameDeltaOffset(size);
-        for (int i = 0 ; i < minSize ; i++)
-        {
+        for (int i = 0; i < minSize; i++) {
             int endDelta = i < size - 1 ? getShort(nameDeltaOffset(i + 1)) : valueStartOffset() - cellNamesOffset;
             long offset = peer + cellNamesOffset + startDelta;
             int length = endDelta - startDelta;
@@ -692,16 +605,13 @@ public abstract class AbstractNativeCell extends AbstractCell implements CellNam
                 return cmp;
             startDelta = endDelta;
         }
-
         EOC eoc = that.eoc();
         if (size == size2)
             return this.eoc().compareTo(eoc);
-
         return size < size2 ? this.eoc().prefixComparisonResult : -eoc.prefixComparisonResult;
     }
 
-    public final int compareToSimple(final Composite that)
-    {
+    public final int compareToSimple(final Composite that) {
         assert size() == 1 && that.size() == 1;
         int length = valueStartOffset() - nameDeltaOffset(1);
         long offset = peer + nameDeltaOffset(1);

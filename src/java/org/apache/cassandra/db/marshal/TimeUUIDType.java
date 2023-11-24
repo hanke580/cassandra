@@ -19,7 +19,6 @@ package org.apache.cassandra.db.marshal;
 
 import java.nio.ByteBuffer;
 import java.util.UUID;
-
 import org.apache.cassandra.cql3.CQL3Type;
 import org.apache.cassandra.cql3.Constants;
 import org.apache.cassandra.cql3.Term;
@@ -27,46 +26,48 @@ import org.apache.cassandra.serializers.TypeSerializer;
 import org.apache.cassandra.serializers.MarshalException;
 import org.apache.cassandra.serializers.TimeUUIDSerializer;
 
-public class TimeUUIDType extends AbstractType<UUID>
-{
+public class TimeUUIDType extends AbstractType<UUID> {
+
+    private static final org.slf4j.Logger serialize_logger = org.slf4j.LoggerFactory.getLogger("serialize.logger");
+
+    private java.lang.ThreadLocal<Boolean> isSerializeLoggingActive = new ThreadLocal<Boolean>() {
+
+        @Override
+        protected Boolean initialValue() {
+            return false;
+        }
+    };
+
     public static final TimeUUIDType instance = new TimeUUIDType();
 
-    TimeUUIDType()
-    {
-    } // singleton
+    TimeUUIDType() {
+    }
 
-    public boolean isEmptyValueMeaningless()
-    {
+    // singleton
+    public boolean isEmptyValueMeaningless() {
         return true;
     }
 
-    public int compare(ByteBuffer b1, ByteBuffer b2)
-    {
+    public int compare(ByteBuffer b1, ByteBuffer b2) {
         // Compare for length
         int s1 = b1.position(), s2 = b2.position();
         int l1 = b1.limit(), l2 = b2.limit();
-
         // should we assert exactly 16 bytes (or 0)? seems prudent
         boolean p1 = l1 - s1 == 16, p2 = l2 - s2 == 16;
-        if (!(p1 & p2))
-        {
+        if (!(p1 & p2)) {
             assert p1 | (l1 == s1);
             assert p2 | (l2 == s2);
             return p1 ? 1 : p2 ? -1 : 0;
         }
-
         long msb1 = b1.getLong(s1);
         long msb2 = b2.getLong(s2);
         msb1 = reorderTimestampBytes(msb1);
         msb2 = reorderTimestampBytes(msb2);
-
         assert (msb1 & topbyte(0xf0L)) == topbyte(0x10L);
         assert (msb2 & topbyte(0xf0L)) == topbyte(0x10L);
-
         int c = Long.compare(msb1, msb2);
         if (c != 0)
             return c;
-
         // this has to be a signed per-byte comparison for compatibility
         // so we transform the bytes so that a simple long comparison is equivalent
         long lsb1 = signedBytesToNativeLong(b1.getLong(s1 + 8));
@@ -77,25 +78,19 @@ public class TimeUUIDType extends AbstractType<UUID>
     // takes as input 8 signed bytes in native machine order
     // returns the first byte unchanged, and the following 7 bytes converted to an unsigned representation
     // which is the same as a 2's complement long in native format
-    private static long signedBytesToNativeLong(long signedBytes)
-    {
+    private static long signedBytesToNativeLong(long signedBytes) {
         return signedBytes ^ 0x0080808080808080L;
     }
 
-    private static long topbyte(long topbyte)
-    {
+    private static long topbyte(long topbyte) {
         return topbyte << 56;
     }
 
-    protected static long reorderTimestampBytes(long input)
-    {
-        return    (input <<  48)
-                  | ((input <<  16) & 0xFFFF00000000L)
-                  |  (input >>> 32);
+    protected static long reorderTimestampBytes(long input) {
+        return (input << 48) | ((input << 16) & 0xFFFF00000000L) | (input >>> 32);
     }
 
-    public ByteBuffer fromString(String source) throws MarshalException
-    {
+    public ByteBuffer fromString(String source) throws MarshalException {
         ByteBuffer parsed = UUIDType.parse(source);
         if (parsed == null)
             throw new MarshalException(String.format("Unknown timeuuid representation: %s", source));
@@ -105,26 +100,26 @@ public class TimeUUIDType extends AbstractType<UUID>
     }
 
     @Override
-    public Term fromJSONObject(Object parsed) throws MarshalException
-    {
-        try
-        {
+    public Term fromJSONObject(Object parsed) throws MarshalException {
+        try {
             return new Constants.Value(fromString((String) parsed));
-        }
-        catch (ClassCastException exc)
-        {
-            throw new MarshalException(
-                    String.format("Expected a string representation of a timeuuid, but got a %s: %s", parsed.getClass().getSimpleName(), parsed));
+        } catch (ClassCastException exc) {
+            throw new MarshalException(String.format("Expected a string representation of a timeuuid, but got a %s: %s", parsed.getClass().getSimpleName(), parsed));
         }
     }
 
-    public CQL3Type asCQL3Type()
-    {
+    public CQL3Type asCQL3Type() {
         return CQL3Type.Native.TIMEUUID;
     }
 
-    public TypeSerializer<UUID> getSerializer()
-    {
+    public TypeSerializer<UUID> getSerializer() {
+        if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+            if (!isSerializeLoggingActive.get()) {
+                isSerializeLoggingActive.set(true);
+                serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(org.apache.cassandra.serializers.TimeUUIDSerializer.class, org.apache.cassandra.serializers.TimeUUIDSerializer.instance, "org.apache.cassandra.serializers.TimeUUIDSerializer.instance").toJsonString());
+                isSerializeLoggingActive.set(false);
+            }
+        }
         return TimeUUIDSerializer.instance;
     }
 }

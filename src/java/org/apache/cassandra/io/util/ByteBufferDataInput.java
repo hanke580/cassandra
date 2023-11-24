@@ -19,18 +19,29 @@ package org.apache.cassandra.io.util;
 
 import java.io.*;
 import java.nio.ByteBuffer;
-
 import org.apache.cassandra.utils.ByteBufferUtil;
 
-public class ByteBufferDataInput extends AbstractDataInput implements FileDataInput, DataInput
-{
+public class ByteBufferDataInput extends AbstractDataInput implements FileDataInput, DataInput {
+
+    private static final org.slf4j.Logger serialize_logger = org.slf4j.LoggerFactory.getLogger("serialize.logger");
+
+    private java.lang.ThreadLocal<Boolean> isSerializeLoggingActive = new ThreadLocal<Boolean>() {
+
+        @Override
+        protected Boolean initialValue() {
+            return false;
+        }
+    };
+
     private final ByteBuffer buffer;
+
     private final String filename;
+
     private final long segmentOffset;
+
     private int position;
 
-    public ByteBufferDataInput(ByteBuffer buffer, String filename, long segmentOffset, int position)
-    {
+    public ByteBufferDataInput(ByteBuffer buffer, String filename, long segmentOffset, int position) {
         assert buffer != null;
         this.buffer = buffer;
         this.filename = filename;
@@ -40,71 +51,58 @@ public class ByteBufferDataInput extends AbstractDataInput implements FileDataIn
 
     // Only use when we know the seek in within the mapped segment. Throws an
     // IOException otherwise.
-    public void seek(long pos) throws IOException
-    {
+    public void seek(long pos) throws IOException {
         long inSegmentPos = pos - segmentOffset;
         if (inSegmentPos < 0 || inSegmentPos > buffer.capacity())
             throw new IOException(String.format("Seek position %d is not within mmap segment (seg offs: %d, length: %d)", pos, segmentOffset, buffer.capacity()));
-
         position = (int) inSegmentPos;
     }
 
-    public long getFilePointer()
-    {
+    public long getFilePointer() {
         return segmentOffset + position;
     }
 
-    public long getPosition()
-    {
+    public long getPosition() {
         return segmentOffset + position;
     }
 
-    public long getPositionLimit()
-    {
+    public long getPositionLimit() {
         return segmentOffset + buffer.capacity();
     }
 
     @Override
-    public boolean markSupported()
-    {
+    public boolean markSupported() {
         return false;
     }
 
-    public void reset(FileMark mark) throws IOException
-    {
+    public void reset(FileMark mark) throws IOException {
         assert mark instanceof MappedFileDataInputMark;
         position = ((MappedFileDataInputMark) mark).position;
     }
 
-    public FileMark mark()
-    {
+    public FileMark mark() {
         return new MappedFileDataInputMark(position);
     }
 
-    public long bytesPastMark(FileMark mark)
-    {
+    public long bytesPastMark(FileMark mark) {
         assert mark instanceof MappedFileDataInputMark;
         assert position >= ((MappedFileDataInputMark) mark).position;
         return position - ((MappedFileDataInputMark) mark).position;
     }
 
-    public boolean isEOF() throws IOException
-    {
+    public boolean isEOF() throws IOException {
         return position == buffer.capacity();
     }
 
-    public long bytesRemaining() throws IOException
-    {
+    public long bytesRemaining() throws IOException {
         return buffer.capacity() - position;
     }
 
-    public String getPath()
-    {
+    public String getPath() {
         return filename;
     }
 
-    public int read() throws IOException
-    {
+    public int read() throws IOException {
         if (isEOF())
             return -1;
         return buffer.get(position++) & 0xFF;
@@ -116,20 +114,23 @@ public class ByteBufferDataInput extends AbstractDataInput implements FileDataIn
      * @return buffer with portion of file content
      * @throws IOException on any fail of I/O operation
      */
-    public ByteBuffer readBytes(int length) throws IOException
-    {
+    public ByteBuffer readBytes(int length) throws IOException {
         int remaining = buffer.remaining() - position;
         if (length > remaining)
-            throw new IOException(String.format("mmap segment underflow; remaining is %d but %d requested",
-                                                remaining, length));
-
-        if (length == 0)
+            throw new IOException(String.format("mmap segment underflow; remaining is %d but %d requested", remaining, length));
+        if (length == 0) {
+            if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+                if (!isSerializeLoggingActive.get()) {
+                    isSerializeLoggingActive.set(true);
+                    serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(org.apache.cassandra.utils.ByteBufferUtil.class, org.apache.cassandra.utils.ByteBufferUtil.EMPTY_BYTE_BUFFER, "org.apache.cassandra.utils.ByteBufferUtil.EMPTY_BYTE_BUFFER").toJsonString());
+                    isSerializeLoggingActive.set(false);
+                }
+            }
             return ByteBufferUtil.EMPTY_BYTE_BUFFER;
-
+        }
         ByteBuffer bytes = buffer.duplicate();
         bytes.position(buffer.position() + position).limit(buffer.position() + position + length);
         position += length;
-
         // we have to copy the data in case we unreference the underlying sstable.  See CASSANDRA-3179
         ByteBuffer clone = ByteBuffer.allocate(bytes.remaining());
         clone.put(bytes);
@@ -138,34 +139,28 @@ public class ByteBufferDataInput extends AbstractDataInput implements FileDataIn
     }
 
     @Override
-    public final void readFully(byte[] bytes) throws IOException
-    {
+    public final void readFully(byte[] bytes) throws IOException {
         ByteBufferUtil.arrayCopy(buffer, buffer.position() + position, bytes, 0, bytes.length);
         position += bytes.length;
     }
 
     @Override
-    public final void readFully(byte[] bytes, int offset, int count) throws IOException
-    {
+    public final void readFully(byte[] bytes, int offset, int count) throws IOException {
         ByteBufferUtil.arrayCopy(buffer, buffer.position() + position, bytes, offset, count);
         position += count;
     }
 
-    private static class MappedFileDataInputMark implements FileMark
-    {
+    private static class MappedFileDataInputMark implements FileMark {
+
         int position;
 
-        MappedFileDataInputMark(int position)
-        {
+        MappedFileDataInputMark(int position) {
             this.position = position;
         }
     }
 
     @Override
     public String toString() {
-        return getClass().getSimpleName() + "(" +
-               "filename='" + filename + "'" +
-               ", position=" + position +
-               ")";
+        return getClass().getSimpleName() + "(" + "filename='" + filename + "'" + ", position=" + position + ")";
     }
 }

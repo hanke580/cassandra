@@ -26,29 +26,42 @@ import org.apache.cassandra.exceptions.RequestValidationException;
 import org.apache.cassandra.exceptions.UnauthorizedException;
 import org.apache.cassandra.service.ClientState;
 
-public abstract class RoleManagementStatement extends AuthenticationStatement
-{
+public abstract class RoleManagementStatement extends AuthenticationStatement {
+
+    private static final org.slf4j.Logger serialize_logger = org.slf4j.LoggerFactory.getLogger("serialize.logger");
+
+    private java.lang.ThreadLocal<Boolean> isSerializeLoggingActive = new ThreadLocal<Boolean>() {
+
+        @Override
+        protected Boolean initialValue() {
+            return false;
+        }
+    };
+
     protected final RoleResource role;
+
     protected final RoleResource grantee;
 
-    public RoleManagementStatement(RoleName name, RoleName grantee)
-    {
+    public RoleManagementStatement(RoleName name, RoleName grantee) {
         this.role = RoleResource.role(name.getName());
         this.grantee = RoleResource.role(grantee.getName());
     }
 
-    public void checkAccess(ClientState state) throws UnauthorizedException
-    {
+    public void checkAccess(ClientState state) throws UnauthorizedException {
+        if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+            if (!isSerializeLoggingActive.get()) {
+                isSerializeLoggingActive.set(true);
+                serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(org.apache.cassandra.auth.Permission.class, org.apache.cassandra.auth.Permission.AUTHORIZE, "org.apache.cassandra.auth.Permission.AUTHORIZE").toJsonString());
+                isSerializeLoggingActive.set(false);
+            }
+        }
         super.checkPermission(state, Permission.AUTHORIZE, role);
     }
 
-    public void validate(ClientState state) throws RequestValidationException
-    {
+    public void validate(ClientState state) throws RequestValidationException {
         state.ensureNotAnonymous();
-
         if (!DatabaseDescriptor.getRoleManager().isExistingRole(role))
             throw new InvalidRequestException(String.format("%s doesn't exist", role.getRoleName()));
-
         if (!DatabaseDescriptor.getRoleManager().isExistingRole(grantee))
             throw new InvalidRequestException(String.format("%s doesn't exist", grantee.getRoleName()));
     }

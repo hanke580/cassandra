@@ -22,16 +22,16 @@ import java.io.IOException;
 import java.util.Map;
 import java.util.NavigableMap;
 import java.util.TreeMap;
-
 import com.google.common.collect.Ordering;
-
 import org.apache.cassandra.db.TypeSizes;
 import org.apache.cassandra.io.ISerializer;
 import org.apache.cassandra.io.sstable.format.SSTableReader;
 import org.apache.cassandra.io.util.DataOutputPlus;
 
-public class ReplayPosition implements Comparable<ReplayPosition>
-{
+public class ReplayPosition implements Comparable<ReplayPosition> {
+
+    private static final org.slf4j.Logger serialize_logger = org.slf4j.LoggerFactory.getLogger("serialize.logger");
+
     public static final ReplayPositionSerializer serializer = new ReplayPositionSerializer();
 
     // NONE is used for SSTables that are streamed from other nodes and thus have no relationship
@@ -41,19 +41,19 @@ public class ReplayPosition implements Comparable<ReplayPosition>
     public static final ReplayPosition NONE = new ReplayPosition(-1, 0);
 
     public final long segment;
+
     public final int position;
 
     /**
      * A filter of known safe-to-discard commit log replay positions, based on
      * the range covered by on disk sstables and those prior to the most recent truncation record
      */
-    public static class ReplayFilter
-    {
+    public static class ReplayFilter {
+
         final NavigableMap<ReplayPosition, ReplayPosition> persisted = new TreeMap<>();
-        public ReplayFilter(Iterable<SSTableReader> onDisk, ReplayPosition truncatedAt)
-        {
-            for (SSTableReader reader : onDisk)
-            {
+
+        public ReplayFilter(Iterable<SSTableReader> onDisk, ReplayPosition truncatedAt) {
+            for (SSTableReader reader : onDisk) {
                 ReplayPosition start = reader.getSSTableMetadata().commitLogLowerBound;
                 ReplayPosition end = reader.getSSTableMetadata().commitLogUpperBound;
                 add(persisted, start, end);
@@ -62,41 +62,34 @@ public class ReplayPosition implements Comparable<ReplayPosition>
                 add(persisted, ReplayPosition.NONE, truncatedAt);
         }
 
-        private static void add(NavigableMap<ReplayPosition, ReplayPosition> ranges, ReplayPosition start, ReplayPosition end)
-        {
+        private static void add(NavigableMap<ReplayPosition, ReplayPosition> ranges, ReplayPosition start, ReplayPosition end) {
             // extend ourselves to cover any ranges we overlap
             // record directly preceding our end may extend past us, so take the max of our end and its
             Map.Entry<ReplayPosition, ReplayPosition> extend = ranges.floorEntry(end);
             if (extend != null && extend.getValue().compareTo(end) > 0)
                 end = extend.getValue();
-
             // record directly preceding our start may extend into us; if it does, we take it as our start
             extend = ranges.lowerEntry(start);
             if (extend != null && extend.getValue().compareTo(start) >= 0)
                 start = extend.getKey();
-
             ranges.subMap(start, end).clear();
             ranges.put(start, end);
         }
 
-        public boolean shouldReplay(ReplayPosition position)
-        {
+        public boolean shouldReplay(ReplayPosition position) {
             // replay ranges are start exclusive, end inclusive
             Map.Entry<ReplayPosition, ReplayPosition> range = persisted.lowerEntry(position);
             return range == null || position.compareTo(range.getValue()) > 0;
         }
 
-        public boolean isEmpty()
-        {
+        public boolean isEmpty() {
             return persisted.isEmpty();
         }
     }
 
-    public static ReplayPosition firstNotCovered(Iterable<ReplayFilter> ranges)
-    {
+    public static ReplayPosition firstNotCovered(Iterable<ReplayFilter> ranges) {
         ReplayPosition min = null;
-        for (ReplayFilter map : ranges)
-        {
+        for (ReplayFilter map : ranges) {
             ReplayPosition first = map.persisted.firstEntry().getValue();
             if (min == null)
                 min = first;
@@ -108,70 +101,80 @@ public class ReplayPosition implements Comparable<ReplayPosition>
         return min;
     }
 
-    public ReplayPosition(long segment, int position)
-    {
+    public ReplayPosition(long segment, int position) {
         this.segment = segment;
         assert position >= 0;
         this.position = position;
     }
 
-    public int compareTo(ReplayPosition that)
-    {
+    public int compareTo(ReplayPosition that) {
         if (this.segment != that.segment)
             return Long.compare(this.segment, that.segment);
-
         return Integer.compare(this.position, that.position);
     }
 
     @Override
-    public boolean equals(Object o)
-    {
-        if (this == o) return true;
-        if (o == null || getClass() != o.getClass()) return false;
-
+    public boolean equals(Object o) {
+        if (this == o)
+            return true;
+        if (o == null || getClass() != o.getClass())
+            return false;
         ReplayPosition that = (ReplayPosition) o;
-
-        if (position != that.position) return false;
+        if (position != that.position)
+            return false;
         return segment == that.segment;
     }
 
     @Override
-    public int hashCode()
-    {
+    public int hashCode() {
         int result = (int) (segment ^ (segment >>> 32));
         result = 31 * result + position;
         return result;
     }
 
     @Override
-    public String toString()
-    {
-        return "ReplayPosition(" +
-               "segmentId=" + segment +
-               ", position=" + position +
-               ')';
+    public String toString() {
+        return "ReplayPosition(" + "segmentId=" + segment + ", position=" + position + ')';
     }
 
-    public ReplayPosition clone()
-    {
+    public ReplayPosition clone() {
         return new ReplayPosition(segment, position);
     }
 
-    public static class ReplayPositionSerializer implements ISerializer<ReplayPosition>
-    {
-        public void serialize(ReplayPosition rp, DataOutputPlus out) throws IOException
-        {
+    public static class ReplayPositionSerializer implements ISerializer<ReplayPosition> {
+
+        private java.lang.ThreadLocal<Boolean> isSerializeLoggingActive = new ThreadLocal<Boolean>() {
+
+            @Override
+            protected Boolean initialValue() {
+                return false;
+            }
+        };
+
+        public void serialize(ReplayPosition rp, DataOutputPlus out) throws IOException {
+            if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+                if (!isSerializeLoggingActive.get()) {
+                    isSerializeLoggingActive.set(true);
+                    serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(rp, rp.segment, "rp.segment").toJsonString());
+                    isSerializeLoggingActive.set(false);
+                }
+            }
             out.writeLong(rp.segment);
+            if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+                if (!isSerializeLoggingActive.get()) {
+                    isSerializeLoggingActive.set(true);
+                    serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(rp, rp.position, "rp.position").toJsonString());
+                    isSerializeLoggingActive.set(false);
+                }
+            }
             out.writeInt(rp.position);
         }
 
-        public ReplayPosition deserialize(DataInput in) throws IOException
-        {
+        public ReplayPosition deserialize(DataInput in) throws IOException {
             return new ReplayPosition(in.readLong(), in.readInt());
         }
 
-        public long serializedSize(ReplayPosition rp, TypeSizes typeSizes)
-        {
+        public long serializedSize(ReplayPosition rp, TypeSizes typeSizes) {
             return typeSizes.sizeof(rp.segment) + typeSizes.sizeof(rp.position);
         }
     }

@@ -18,12 +18,10 @@
 package org.apache.cassandra.cql3;
 
 import static org.apache.cassandra.cql3.Constants.UNSET_VALUE;
-
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicReference;
-
 import org.apache.cassandra.config.ColumnDefinition;
 import org.apache.cassandra.cql3.functions.Function;
 import org.apache.cassandra.db.Cell;
@@ -43,132 +41,122 @@ import org.apache.cassandra.utils.UUIDGen;
 /**
  * Static helper methods and classes for lists.
  */
-public abstract class Lists
-{
-    private Lists() {}
+public abstract class Lists {
 
-    public static ColumnSpecification indexSpecOf(ColumnSpecification column)
-    {
+    private static final org.slf4j.Logger serialize_logger = org.slf4j.LoggerFactory.getLogger("serialize.logger");
+
+    private Lists() {
+    }
+
+    public static ColumnSpecification indexSpecOf(ColumnSpecification column) {
         return new ColumnSpecification(column.ksName, column.cfName, new ColumnIdentifier("idx(" + column.name + ")", true), Int32Type.instance);
     }
 
-    public static ColumnSpecification valueSpecOf(ColumnSpecification column)
-    {
-        return new ColumnSpecification(column.ksName, column.cfName, new ColumnIdentifier("value(" + column.name + ")", true), ((ListType)column.type).getElementsType());
+    public static ColumnSpecification valueSpecOf(ColumnSpecification column) {
+        return new ColumnSpecification(column.ksName, column.cfName, new ColumnIdentifier("value(" + column.name + ")", true), ((ListType) column.type).getElementsType());
     }
 
-    public static class Literal implements Term.Raw
-    {
+    public static class Literal implements Term.Raw {
+
         private final List<Term.Raw> elements;
 
-        public Literal(List<Term.Raw> elements)
-        {
+        public Literal(List<Term.Raw> elements) {
             this.elements = elements;
         }
 
-        public Term prepare(String keyspace, ColumnSpecification receiver) throws InvalidRequestException
-        {
+        public Term prepare(String keyspace, ColumnSpecification receiver) throws InvalidRequestException {
             validateAssignableTo(keyspace, receiver);
-
             ColumnSpecification valueSpec = Lists.valueSpecOf(receiver);
             List<Term> values = new ArrayList<Term>(elements.size());
             boolean allTerminal = true;
-            for (Term.Raw rt : elements)
-            {
+            for (Term.Raw rt : elements) {
                 Term t = rt.prepare(keyspace, valueSpec);
-
                 if (t.containsBindMarker())
                     throw new InvalidRequestException(String.format("Invalid list literal for %s: bind variables are not supported inside collection literals", receiver.name));
-
                 if (t instanceof Term.NonTerminal)
                     allTerminal = false;
-
                 values.add(t);
             }
             DelayedValue value = new DelayedValue(values);
             return allTerminal ? value.bind(QueryOptions.DEFAULT) : value;
         }
 
-        private void validateAssignableTo(String keyspace, ColumnSpecification receiver) throws InvalidRequestException
-        {
+        private void validateAssignableTo(String keyspace, ColumnSpecification receiver) throws InvalidRequestException {
             if (!(receiver.type instanceof ListType))
                 throw new InvalidRequestException(String.format("Invalid list literal for %s of type %s", receiver.name, receiver.type.asCQL3Type()));
-
             ColumnSpecification valueSpec = Lists.valueSpecOf(receiver);
-            for (Term.Raw rt : elements)
-            {
+            for (Term.Raw rt : elements) {
                 if (!rt.testAssignment(keyspace, valueSpec).isAssignable())
                     throw new InvalidRequestException(String.format("Invalid list literal for %s: value %s is not of type %s", receiver.name, rt, valueSpec.type.asCQL3Type()));
             }
         }
 
-        public AssignmentTestable.TestResult testAssignment(String keyspace, ColumnSpecification receiver)
-        {
+        public AssignmentTestable.TestResult testAssignment(String keyspace, ColumnSpecification receiver) {
             if (!(receiver.type instanceof ListType))
                 return AssignmentTestable.TestResult.NOT_ASSIGNABLE;
-
             // If there is no elements, we can't say it's an exact match (an empty list if fundamentally polymorphic).
             if (elements.isEmpty())
                 return AssignmentTestable.TestResult.WEAKLY_ASSIGNABLE;
-
             ColumnSpecification valueSpec = Lists.valueSpecOf(receiver);
             return AssignmentTestable.TestResult.testAll(keyspace, valueSpec, elements);
         }
 
         @Override
-        public String toString()
-        {
+        public String toString() {
             return elements.toString();
         }
     }
 
-    public static class Value extends Term.MultiItemTerminal
-    {
+    public static class Value extends Term.MultiItemTerminal {
+
+        private java.lang.ThreadLocal<Boolean> isSerializeLoggingActive = new ThreadLocal<Boolean>() {
+
+            @Override
+            protected Boolean initialValue() {
+                return false;
+            }
+        };
+
         public final List<ByteBuffer> elements;
 
-        public Value(List<ByteBuffer> elements)
-        {
+        public Value(List<ByteBuffer> elements) {
             this.elements = elements;
         }
 
-        public static Value fromSerialized(ByteBuffer value, ListType type, int version) throws InvalidRequestException
-        {
-            try
-            {
+        public static Value fromSerialized(ByteBuffer value, ListType type, int version) throws InvalidRequestException {
+            try {
                 // Collections have this small hack that validate cannot be called on a serialized object,
                 // but compose does the validation (so we're fine).
                 List<?> l = type.getSerializer().deserializeForNativeProtocol(value, version);
                 List<ByteBuffer> elements = new ArrayList<>(l.size());
-                for (Object element : l)
-                    // elements can be null in lists that represent a set of IN values
-                    elements.add(element == null ? null : type.getElementsType().decompose(element));
+                for (Object element : l) // elements can be null in lists that represent a set of IN values
+                elements.add(element == null ? null : type.getElementsType().decompose(element));
                 return new Value(elements);
-            }
-            catch (MarshalException e)
-            {
+            } catch (MarshalException e) {
                 throw new InvalidRequestException(e.getMessage());
             }
         }
 
-        public ByteBuffer get(int protocolVersion)
-        {
+        public ByteBuffer get(int protocolVersion) {
             return CollectionSerializer.pack(elements, elements.size(), protocolVersion);
         }
 
-        public boolean equals(ListType lt, Value v)
-        {
+        public boolean equals(ListType lt, Value v) {
             if (elements.size() != v.elements.size())
                 return false;
-
-            for (int i = 0; i < elements.size(); i++)
-                if (lt.getElementsType().compare(elements.get(i), v.elements.get(i)) != 0)
-                    return false;
-
+            for (int i = 0; i < elements.size(); i++) if (lt.getElementsType().compare(elements.get(i), v.elements.get(i)) != 0)
+                return false;
             return true;
         }
 
-        public List<ByteBuffer> getElements()
-        {
+        public List<ByteBuffer> getElements() {
+            if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+                if (!isSerializeLoggingActive.get()) {
+                    isSerializeLoggingActive.set(true);
+                    serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(this, this.elements, "this.elements").toJsonString());
+                    isSerializeLoggingActive.set(false);
+                }
+            }
             return elements;
         }
     }
@@ -182,50 +170,39 @@ public abstract class Lists
      * column name to return in the ColumnSpecification for those markers (not a
      * blocker per-se but we don't bother due to 1)).
      */
-    public static class DelayedValue extends Term.NonTerminal
-    {
+    public static class DelayedValue extends Term.NonTerminal {
+
         private final List<Term> elements;
 
-        public DelayedValue(List<Term> elements)
-        {
+        public DelayedValue(List<Term> elements) {
             this.elements = elements;
         }
 
-        public boolean containsBindMarker()
-        {
+        public boolean containsBindMarker() {
             // False since we don't support them in collection
             return false;
         }
 
-        public void collectMarkerSpecification(VariableSpecifications boundNames)
-        {
+        public void collectMarkerSpecification(VariableSpecifications boundNames) {
         }
 
-        public Terminal bind(QueryOptions options) throws InvalidRequestException
-        {
+        public Terminal bind(QueryOptions options) throws InvalidRequestException {
             List<ByteBuffer> buffers = new ArrayList<ByteBuffer>(elements.size());
-            for (Term t : elements)
-            {
+            for (Term t : elements) {
                 ByteBuffer bytes = t.bindAndGet(options);
-
                 if (bytes == null)
                     throw new InvalidRequestException("null is not supported inside collections");
                 if (bytes == ByteBufferUtil.UNSET_BYTE_BUFFER)
                     return UNSET_VALUE;
-
                 // We don't support value > 64K because the serialization format encode the length as an unsigned short.
                 if (bytes.remaining() > FBUtilities.MAX_UNSIGNED_SHORT)
-                    throw new InvalidRequestException(String.format("List value is too long. List values are limited to %d bytes but %d bytes value provided",
-                                                                    FBUtilities.MAX_UNSIGNED_SHORT,
-                                                                    bytes.remaining()));
-
+                    throw new InvalidRequestException(String.format("List value is too long. List values are limited to %d bytes but %d bytes value provided", FBUtilities.MAX_UNSIGNED_SHORT, bytes.remaining()));
                 buffers.add(bytes);
             }
             return new Value(buffers);
         }
 
-        public Iterable<Function> getFunctions()
-        {
+        public Iterable<Function> getFunctions() {
             return Terms.getFunctions(elements);
         }
     }
@@ -233,22 +210,36 @@ public abstract class Lists
     /**
      * A marker for List values and IN relations
      */
-    public static class Marker extends AbstractMarker
-    {
-        protected Marker(int bindIndex, ColumnSpecification receiver)
-        {
+    public static class Marker extends AbstractMarker {
+
+        private java.lang.ThreadLocal<Boolean> isSerializeLoggingActive = new ThreadLocal<Boolean>() {
+
+            @Override
+            protected Boolean initialValue() {
+                return false;
+            }
+        };
+
+        protected Marker(int bindIndex, ColumnSpecification receiver) {
             super(bindIndex, receiver);
             assert receiver.type instanceof ListType;
         }
 
-        public Terminal bind(QueryOptions options) throws InvalidRequestException
-        {
+        public Terminal bind(QueryOptions options) throws InvalidRequestException {
             ByteBuffer value = options.getValues().get(bindIndex);
             if (value == null)
                 return null;
-            if (value == ByteBufferUtil.UNSET_BYTE_BUFFER)
+            if (value == ByteBufferUtil.UNSET_BYTE_BUFFER) {
+                if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+                    if (!isSerializeLoggingActive.get()) {
+                        isSerializeLoggingActive.set(true);
+                        serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(org.apache.cassandra.cql3.Constants.class, org.apache.cassandra.cql3.Constants.UNSET_VALUE, "org.apache.cassandra.cql3.Constants.UNSET_VALUE").toJsonString());
+                        isSerializeLoggingActive.set(false);
+                    }
+                }
                 return UNSET_VALUE;
-            return Value.fromSerialized(value, (ListType)receiver.type, options.getProtocolVersion());
+            }
+            return Value.fromSerialized(value, (ListType) receiver.type, options.getProtocolVersion());
         }
     }
 
@@ -260,152 +251,176 @@ public abstract class Lists
      * do rely on the fact that the user will only provide decreasing
      * milliseconds timestamp for that purpose.
      */
-    private static class PrecisionTime
-    {
+    private static class PrecisionTime {
+
         // Our reference time (1 jan 2010, 00:00:00) in milliseconds.
         private static final long REFERENCE_TIME = 1262304000000L;
+
         private static final AtomicReference<PrecisionTime> last = new AtomicReference<>(new PrecisionTime(Long.MAX_VALUE, 0));
 
         public final long millis;
+
         public final int nanos;
 
-        PrecisionTime(long millis, int nanos)
-        {
+        PrecisionTime(long millis, int nanos) {
             this.millis = millis;
             this.nanos = nanos;
         }
 
-        static PrecisionTime getNext(long millis)
-        {
-            while (true)
-            {
+        static PrecisionTime getNext(long millis) {
+            while (true) {
                 PrecisionTime current = last.get();
-
                 assert millis <= current.millis;
-                PrecisionTime next = millis < current.millis
-                    ? new PrecisionTime(millis, 9999)
-                    : new PrecisionTime(millis, Math.max(0, current.nanos - 1));
-
+                PrecisionTime next = millis < current.millis ? new PrecisionTime(millis, 9999) : new PrecisionTime(millis, Math.max(0, current.nanos - 1));
                 if (last.compareAndSet(current, next))
                     return next;
             }
         }
     }
 
-    public static class Setter extends Operation
-    {
-        public Setter(ColumnDefinition column, Term t)
-        {
+    public static class Setter extends Operation {
+
+        private java.lang.ThreadLocal<Boolean> isSerializeLoggingActive = new ThreadLocal<Boolean>() {
+
+            @Override
+            protected Boolean initialValue() {
+                return false;
+            }
+        };
+
+        public Setter(ColumnDefinition column, Term t) {
             super(column, t);
         }
 
-        public void execute(ByteBuffer rowKey, ColumnFamily cf, Composite prefix, UpdateParameters params) throws InvalidRequestException
-        {
+        public void execute(ByteBuffer rowKey, ColumnFamily cf, Composite prefix, UpdateParameters params) throws InvalidRequestException {
             Term.Terminal value = t.bind(params.options);
-            if (column.type.isMultiCell() && value != UNSET_VALUE)
-            {
+            if (column.type.isMultiCell() && value != UNSET_VALUE) {
+                if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+                    if (!isSerializeLoggingActive.get()) {
+                        isSerializeLoggingActive.set(true);
+                        serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(this, this.column, "this.column").toJsonString());
+                        isSerializeLoggingActive.set(false);
+                    }
+                }
                 // delete + append
                 CellName name = cf.getComparator().create(prefix, column);
                 cf.addAtom(params.makeTombstoneForOverwrite(name.slice()));
             }
-            if (value != UNSET_VALUE)
+            if (value != UNSET_VALUE) {
+                if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+                    if (!isSerializeLoggingActive.get()) {
+                        isSerializeLoggingActive.set(true);
+                        serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(this, this.column, "this.column").toJsonString());
+                        isSerializeLoggingActive.set(false);
+                    }
+                }
                 Appender.doAppend(cf, prefix, column, params, value);
+            }
         }
     }
 
-    public static class SetterByIndex extends Operation
-    {
+    public static class SetterByIndex extends Operation {
+
+        private java.lang.ThreadLocal<Boolean> isSerializeLoggingActive = new ThreadLocal<Boolean>() {
+
+            @Override
+            protected Boolean initialValue() {
+                return false;
+            }
+        };
+
         private final Term idx;
 
-        public SetterByIndex(ColumnDefinition column, Term idx, Term t)
-        {
+        public SetterByIndex(ColumnDefinition column, Term idx, Term t) {
             super(column, t);
             this.idx = idx;
         }
 
         @Override
-        public boolean requiresRead()
-        {
+        public boolean requiresRead() {
             return true;
         }
 
         @Override
-        public void collectMarkerSpecification(VariableSpecifications boundNames)
-        {
+        public void collectMarkerSpecification(VariableSpecifications boundNames) {
             super.collectMarkerSpecification(boundNames);
             idx.collectMarkerSpecification(boundNames);
         }
 
-        public void execute(ByteBuffer rowKey, ColumnFamily cf, Composite prefix, UpdateParameters params) throws InvalidRequestException
-        {
+        public void execute(ByteBuffer rowKey, ColumnFamily cf, Composite prefix, UpdateParameters params) throws InvalidRequestException {
             // we should not get here for frozen lists
             assert column.type.isMultiCell() : "Attempted to set an individual element on a frozen list";
-
             ByteBuffer index = idx.bindAndGet(params.options);
             ByteBuffer value = t.bindAndGet(params.options);
-
             if (index == null)
                 throw new InvalidRequestException("Invalid null value for list index");
             if (index == ByteBufferUtil.UNSET_BYTE_BUFFER)
                 throw new InvalidRequestException("Invalid unset value for list index");
-
+            if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+                if (!isSerializeLoggingActive.get()) {
+                    isSerializeLoggingActive.set(true);
+                    serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(this, this.column, "this.column").toJsonString());
+                    isSerializeLoggingActive.set(false);
+                }
+            }
             List<Cell> existingList = params.getPrefetchedList(rowKey, column.name);
             int idx = ByteBufferUtil.toInt(index);
             if (existingList == null || existingList.size() == 0)
                 throw new InvalidRequestException("Attempted to set an element on a list which is null");
             if (idx < 0 || idx >= existingList.size())
                 throw new InvalidRequestException(String.format("List index %d out of bound, list has size %d", idx, existingList.size()));
-
             CellName elementName = existingList.get(idx).name();
-            if (value == null)
-            {
+            if (value == null) {
                 cf.addColumn(params.makeTombstone(elementName));
-            }
-            else if (value != ByteBufferUtil.UNSET_BYTE_BUFFER)
-            {
+            } else if (value != ByteBufferUtil.UNSET_BYTE_BUFFER) {
                 // We don't support value > 64K because the serialization format encode the length as an unsigned short.
                 if (value.remaining() > FBUtilities.MAX_UNSIGNED_SHORT)
-                    throw new InvalidRequestException(String.format("List value is too long. List values are limited to %d bytes but %d bytes value provided",
-                                                                    FBUtilities.MAX_UNSIGNED_SHORT,
-                                                                    value.remaining()));
-
+                    throw new InvalidRequestException(String.format("List value is too long. List values are limited to %d bytes but %d bytes value provided", FBUtilities.MAX_UNSIGNED_SHORT, value.remaining()));
                 cf.addColumn(params.makeColumn(elementName, value));
             }
         }
     }
 
-    public static class Appender extends Operation
-    {
-        public Appender(ColumnDefinition column, Term t)
-        {
+    public static class Appender extends Operation {
+
+        private java.lang.ThreadLocal<Boolean> isSerializeLoggingActive = new ThreadLocal<Boolean>() {
+
+            @Override
+            protected Boolean initialValue() {
+                return false;
+            }
+        };
+
+        public Appender(ColumnDefinition column, Term t) {
             super(column, t);
         }
 
-        public void execute(ByteBuffer rowKey, ColumnFamily cf, Composite prefix, UpdateParameters params) throws InvalidRequestException
-        {
+        public void execute(ByteBuffer rowKey, ColumnFamily cf, Composite prefix, UpdateParameters params) throws InvalidRequestException {
             assert column.type.isMultiCell() : "Attempted to append to a frozen list";
             Term.Terminal value = t.bind(params.options);
-            if (value != UNSET_VALUE)
+            if (value != UNSET_VALUE) {
+                if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+                    if (!isSerializeLoggingActive.get()) {
+                        isSerializeLoggingActive.set(true);
+                        serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(this, this.column, "this.column").toJsonString());
+                        isSerializeLoggingActive.set(false);
+                    }
+                }
                 doAppend(cf, prefix, column, params, value);
+            }
         }
 
-        static void doAppend(ColumnFamily cf, Composite prefix, ColumnDefinition column, UpdateParameters params, Term.Terminal value) throws InvalidRequestException
-        {
-            if (column.type.isMultiCell())
-            {
+        static void doAppend(ColumnFamily cf, Composite prefix, ColumnDefinition column, UpdateParameters params, Term.Terminal value) throws InvalidRequestException {
+            if (column.type.isMultiCell()) {
                 // If we append null, do nothing. Note that for Setter, we've
                 // already removed the previous value so we're good here too
                 if (value == null)
                     return;
-
-                for (ByteBuffer buffer : ((Value) value).elements)
-                {
+                for (ByteBuffer buffer : ((Value) value).elements) {
                     ByteBuffer uuid = ByteBuffer.wrap(UUIDGen.getTimeUUIDBytes());
                     cf.addColumn(params.makeColumn(cf.getComparator().create(prefix, column, uuid), buffer));
                 }
-            }
-            else
-            {
+            } else {
                 // for frozen lists, we're overwriting the whole cell value
                 CellName name = cf.getComparator().create(prefix, column);
                 if (value == null)
@@ -416,25 +431,20 @@ public abstract class Lists
         }
     }
 
-    public static class Prepender extends Operation
-    {
-        public Prepender(ColumnDefinition column, Term t)
-        {
+    public static class Prepender extends Operation {
+
+        public Prepender(ColumnDefinition column, Term t) {
             super(column, t);
         }
 
-        public void execute(ByteBuffer rowKey, ColumnFamily cf, Composite prefix, UpdateParameters params) throws InvalidRequestException
-        {
+        public void execute(ByteBuffer rowKey, ColumnFamily cf, Composite prefix, UpdateParameters params) throws InvalidRequestException {
             assert column.type.isMultiCell() : "Attempted to prepend to a frozen list";
             Term.Terminal value = t.bind(params.options);
             if (value == null || value == UNSET_VALUE)
                 return;
-
             long time = PrecisionTime.REFERENCE_TIME - (System.currentTimeMillis() - PrecisionTime.REFERENCE_TIME);
-
             List<ByteBuffer> toAdd = ((Value) value).elements;
-            for (int i = toAdd.size() - 1; i >= 0; i--)
-            {
+            for (int i = toAdd.size() - 1; i >= 0; i--) {
                 PrecisionTime pt = PrecisionTime.getNext(time);
                 ByteBuffer uuid = ByteBuffer.wrap(UUIDGen.getTimeUUIDBytes(pt.millis, pt.nanos));
                 cf.addColumn(params.makeColumn(cf.getComparator().create(prefix, column, uuid), toAdd.get(i)));
@@ -442,76 +452,94 @@ public abstract class Lists
         }
     }
 
-    public static class Discarder extends Operation
-    {
-        public Discarder(ColumnDefinition column, Term t)
-        {
+    public static class Discarder extends Operation {
+
+        private java.lang.ThreadLocal<Boolean> isSerializeLoggingActive = new ThreadLocal<Boolean>() {
+
+            @Override
+            protected Boolean initialValue() {
+                return false;
+            }
+        };
+
+        public Discarder(ColumnDefinition column, Term t) {
             super(column, t);
         }
 
         @Override
-        public boolean requiresRead()
-        {
+        public boolean requiresRead() {
             return true;
         }
 
-        public void execute(ByteBuffer rowKey, ColumnFamily cf, Composite prefix, UpdateParameters params) throws InvalidRequestException
-        {
+        public void execute(ByteBuffer rowKey, ColumnFamily cf, Composite prefix, UpdateParameters params) throws InvalidRequestException {
             assert column.type.isMultiCell() : "Attempted to delete from a frozen list";
+            if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+                if (!isSerializeLoggingActive.get()) {
+                    isSerializeLoggingActive.set(true);
+                    serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(this, this.column, "this.column").toJsonString());
+                    isSerializeLoggingActive.set(false);
+                }
+            }
             List<Cell> existingList = params.getPrefetchedList(rowKey, column.name);
             // We want to call bind before possibly returning to reject queries where the value provided is not a list.
             Term.Terminal value = t.bind(params.options);
-
             if (existingList == null)
                 throw new InvalidRequestException("Attempted to delete an element from a list which is null");
             if (existingList.isEmpty())
                 return;
-
             if (value == null || value == UNSET_VALUE)
                 return;
-
             // Note: below, we will call 'contains' on this toDiscard list for each element of existingList.
             // Meaning that if toDiscard is big, converting it to a HashSet might be more efficient. However,
             // the read-before-write this operation requires limits its usefulness on big lists, so in practice
             // toDiscard will be small and keeping a list will be more efficient.
             List<ByteBuffer> toDiscard = ((Value) value).elements;
-            for (Cell cell : existingList)
-            {
+            for (Cell cell : existingList) {
                 if (toDiscard.contains(cell.value()))
                     cf.addColumn(params.makeTombstone(cell.name()));
             }
         }
     }
 
-    public static class DiscarderByIndex extends Operation
-    {
-        public DiscarderByIndex(ColumnDefinition column, Term idx)
-        {
+    public static class DiscarderByIndex extends Operation {
+
+        private java.lang.ThreadLocal<Boolean> isSerializeLoggingActive = new ThreadLocal<Boolean>() {
+
+            @Override
+            protected Boolean initialValue() {
+                return false;
+            }
+        };
+
+        public DiscarderByIndex(ColumnDefinition column, Term idx) {
             super(column, idx);
         }
 
         @Override
-        public boolean requiresRead()
-        {
+        public boolean requiresRead() {
             return true;
         }
 
-        public void execute(ByteBuffer rowKey, ColumnFamily cf, Composite prefix, UpdateParameters params) throws InvalidRequestException
-        {
+        public void execute(ByteBuffer rowKey, ColumnFamily cf, Composite prefix, UpdateParameters params) throws InvalidRequestException {
             assert column.type.isMultiCell() : "Attempted to delete an item by index from a frozen list";
             Term.Terminal index = t.bind(params.options);
             if (index == null)
                 throw new InvalidRequestException("Invalid null value for list index");
             if (index == Constants.UNSET_VALUE)
                 return;
-
+            if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+                if (!isSerializeLoggingActive.get()) {
+                    isSerializeLoggingActive.set(true);
+                    serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(this, this.column, "this.column").toJsonString());
+                    isSerializeLoggingActive.set(false);
+                }
+            }
             List<Cell> existingList = params.getPrefetchedList(rowKey, column.name);
             int idx = ByteBufferUtil.toInt(index.get(params.options.getProtocolVersion()));
             if (existingList == null || existingList.size() == 0)
                 throw new InvalidRequestException("Attempted to delete an element from a list which is null");
             if (idx < 0 || idx >= existingList.size())
                 throw new InvalidRequestException(String.format("List index %d out of bound, list has size %d", idx, existingList.size()));
-
             CellName elementName = existingList.get(idx).name();
             cf.addColumn(params.makeTombstone(elementName));
         }

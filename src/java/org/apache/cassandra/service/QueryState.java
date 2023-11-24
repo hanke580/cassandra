@@ -20,32 +20,39 @@ package org.apache.cassandra.service;
 import java.net.InetAddress;
 import java.util.UUID;
 import java.util.concurrent.ThreadLocalRandom;
-
 import org.apache.cassandra.tracing.Tracing;
 
 /**
  * Represents the state related to a given query.
  */
-public class QueryState
-{
+public class QueryState {
+
+    private static final org.slf4j.Logger serialize_logger = org.slf4j.LoggerFactory.getLogger("serialize.logger");
+
+    private java.lang.ThreadLocal<Boolean> isSerializeLoggingActive = new ThreadLocal<Boolean>() {
+
+        @Override
+        protected Boolean initialValue() {
+            return false;
+        }
+    };
+
     private final ClientState clientState;
+
     private volatile UUID preparedTracingSession;
 
-    public QueryState(ClientState clientState)
-    {
+    public QueryState(ClientState clientState) {
         this.clientState = clientState;
     }
 
     /**
      * @return a QueryState object for internal C* calls (not limited by any kind of auth).
      */
-    public static QueryState forInternalCalls()
-    {
+    public static QueryState forInternalCalls() {
         return new QueryState(ClientState.forInternalCalls());
     }
 
-    public ClientState getClientState()
-    {
+    public ClientState getClientState() {
         return clientState;
     }
 
@@ -53,45 +60,40 @@ public class QueryState
      * This clock guarantees that updates for the same QueryState will be ordered
      * in the sequence seen, even if multiple updates happen in the same millisecond.
      */
-    public long getTimestamp()
-    {
+    public long getTimestamp() {
         return clientState.getTimestamp();
     }
 
-    public boolean traceNextQuery()
-    {
-        if (preparedTracingSession != null)
-        {
+    public boolean traceNextQuery() {
+        if (preparedTracingSession != null) {
             return true;
         }
-
         double traceProbability = StorageService.instance.getTraceProbability();
         return traceProbability != 0 && ThreadLocalRandom.current().nextDouble() < traceProbability;
     }
 
-    public void prepareTracingSession(UUID sessionId)
-    {
+    public void prepareTracingSession(UUID sessionId) {
         this.preparedTracingSession = sessionId;
     }
 
-    public void createTracingSession()
-    {
-        UUID session = this.preparedTracingSession;
-        if (session == null)
-        {
-            Tracing.instance.newSession();
+    public void createTracingSession() {
+        if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+            if (!isSerializeLoggingActive.get()) {
+                isSerializeLoggingActive.set(true);
+                serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(this, this.preparedTracingSession, "this.preparedTracingSession").toJsonString());
+                isSerializeLoggingActive.set(false);
+            }
         }
-        else
-        {
+        UUID session = this.preparedTracingSession;
+        if (session == null) {
+            Tracing.instance.newSession();
+        } else {
             Tracing.instance.newSession(session);
             this.preparedTracingSession = null;
         }
     }
 
-    public InetAddress getClientAddress()
-    {
-        return clientState.isInternal
-             ? null
-             : clientState.getRemoteAddress().getAddress();
+    public InetAddress getClientAddress() {
+        return clientState.isInternal ? null : clientState.getRemoteAddress().getAddress();
     }
 }

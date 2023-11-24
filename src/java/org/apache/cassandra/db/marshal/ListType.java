@@ -19,7 +19,6 @@ package org.apache.cassandra.db.marshal;
 
 import java.nio.ByteBuffer;
 import java.util.*;
-
 import org.apache.cassandra.cql3.Json;
 import org.apache.cassandra.cql3.Lists;
 import org.apache.cassandra.cql3.Term;
@@ -29,46 +28,53 @@ import org.apache.cassandra.exceptions.SyntaxException;
 import org.apache.cassandra.serializers.CollectionSerializer;
 import org.apache.cassandra.serializers.MarshalException;
 import org.apache.cassandra.serializers.ListSerializer;
-
 import org.apache.cassandra.transport.Server;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-public class ListType<T> extends CollectionType<List<T>>
-{
+public class ListType<T> extends CollectionType<List<T>> {
+
+    private static final org.slf4j.Logger serialize_logger = org.slf4j.LoggerFactory.getLogger("serialize.logger");
+
+    private java.lang.ThreadLocal<Boolean> isSerializeLoggingActive = new ThreadLocal<Boolean>() {
+
+        @Override
+        protected Boolean initialValue() {
+            return false;
+        }
+    };
+
     private static final Logger logger = LoggerFactory.getLogger(ListType.class);
 
     // interning instances
     private static final Map<AbstractType<?>, ListType> instances = new HashMap<>();
+
     private static final Map<AbstractType<?>, ListType> frozenInstances = new HashMap<>();
 
     private final AbstractType<T> elements;
+
     public final ListSerializer<T> serializer;
+
     private final boolean isMultiCell;
 
-    public static ListType<?> getInstance(TypeParser parser) throws ConfigurationException, SyntaxException
-    {
+    public static ListType<?> getInstance(TypeParser parser) throws ConfigurationException, SyntaxException {
         List<AbstractType<?>> l = parser.getTypeParameters();
         if (l.size() != 1)
             throw new ConfigurationException("ListType takes exactly 1 type parameter");
-
         return getInstance(l.get(0), true);
     }
 
-    public static synchronized <T> ListType<T> getInstance(AbstractType<T> elements, boolean isMultiCell)
-    {
+    public static synchronized <T> ListType<T> getInstance(AbstractType<T> elements, boolean isMultiCell) {
         Map<AbstractType<?>, ListType> internMap = isMultiCell ? instances : frozenInstances;
         ListType<T> t = internMap.get(elements);
-        if (t == null)
-        {
+        if (t == null) {
             t = new ListType<T>(elements, isMultiCell);
             internMap.put(elements, t);
         }
         return t;
     }
 
-    private ListType(AbstractType<T> elements, boolean isMultiCell)
-    {
+    private ListType(AbstractType<T> elements, boolean isMultiCell) {
         super(Kind.LIST);
         this.elements = elements;
         this.serializer = ListSerializer.getInstance(elements.getSerializer());
@@ -76,95 +82,112 @@ public class ListType<T> extends CollectionType<List<T>>
     }
 
     @Override
-    public boolean references(AbstractType<?> check)
-    {
+    public boolean references(AbstractType<?> check) {
         return super.references(check) || elements.references(check);
     }
 
-    public AbstractType<T> getElementsType()
-    {
+    public AbstractType<T> getElementsType() {
+        if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+            if (!isSerializeLoggingActive.get()) {
+                isSerializeLoggingActive.set(true);
+                serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(this, this.elements, "this.elements").toJsonString());
+                isSerializeLoggingActive.set(false);
+            }
+        }
         return elements;
     }
 
-    public AbstractType<UUID> nameComparator()
-    {
+    public AbstractType<UUID> nameComparator() {
+        if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+            if (!isSerializeLoggingActive.get()) {
+                isSerializeLoggingActive.set(true);
+                serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(org.apache.cassandra.db.marshal.TimeUUIDType.class, org.apache.cassandra.db.marshal.TimeUUIDType.instance, "org.apache.cassandra.db.marshal.TimeUUIDType.instance").toJsonString());
+                isSerializeLoggingActive.set(false);
+            }
+        }
         return TimeUUIDType.instance;
     }
 
-    public AbstractType<T> valueComparator()
-    {
+    public AbstractType<T> valueComparator() {
+        if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+            if (!isSerializeLoggingActive.get()) {
+                isSerializeLoggingActive.set(true);
+                serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(this, this.elements, "this.elements").toJsonString());
+                isSerializeLoggingActive.set(false);
+            }
+        }
         return elements;
     }
 
-    public ListSerializer<T> getSerializer()
-    {
+    public ListSerializer<T> getSerializer() {
+        if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+            if (!isSerializeLoggingActive.get()) {
+                isSerializeLoggingActive.set(true);
+                serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(this, this.serializer, "this.serializer").toJsonString());
+                isSerializeLoggingActive.set(false);
+            }
+        }
         return serializer;
     }
 
     @Override
-    public AbstractType<?> freeze()
-    {
-        if (isMultiCell)
+    public AbstractType<?> freeze() {
+        if (isMultiCell) {
+            if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+                if (!isSerializeLoggingActive.get()) {
+                    isSerializeLoggingActive.set(true);
+                    serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(this, this.elements, "this.elements").toJsonString());
+                    isSerializeLoggingActive.set(false);
+                }
+            }
             return getInstance(this.elements, false);
-        else
+        } else
             return this;
     }
 
     @Override
-    public boolean isMultiCell()
-    {
+    public boolean isMultiCell() {
         return isMultiCell;
     }
 
     @Override
-    public boolean isCompatibleWithFrozen(CollectionType<?> previous)
-    {
+    public boolean isCompatibleWithFrozen(CollectionType<?> previous) {
         assert !isMultiCell;
         return this.elements.isCompatibleWith(((ListType) previous).elements);
     }
 
     @Override
-    public boolean isValueCompatibleWithFrozen(CollectionType<?> previous)
-    {
+    public boolean isValueCompatibleWithFrozen(CollectionType<?> previous) {
         assert !isMultiCell;
         return this.elements.isValueCompatibleWithInternal(((ListType) previous).elements);
     }
 
     @Override
-    public int compare(ByteBuffer o1, ByteBuffer o2)
-    {
+    public int compare(ByteBuffer o1, ByteBuffer o2) {
         return compareListOrSet(elements, o1, o2);
     }
 
-    static int compareListOrSet(AbstractType<?> elementsComparator, ByteBuffer o1, ByteBuffer o2)
-    {
+    static int compareListOrSet(AbstractType<?> elementsComparator, ByteBuffer o1, ByteBuffer o2) {
         // Note that this is only used if the collection is frozen
         if (!o1.hasRemaining() || !o2.hasRemaining())
             return o1.hasRemaining() ? 1 : o2.hasRemaining() ? -1 : 0;
-
         ByteBuffer bb1 = o1.duplicate();
         ByteBuffer bb2 = o2.duplicate();
-
         int size1 = CollectionSerializer.readCollectionSize(bb1, 3);
         int size2 = CollectionSerializer.readCollectionSize(bb2, 3);
-
-        for (int i = 0; i < Math.min(size1, size2); i++)
-        {
+        for (int i = 0; i < Math.min(size1, size2); i++) {
             ByteBuffer v1 = CollectionSerializer.readValue(bb1, 3);
             ByteBuffer v2 = CollectionSerializer.readValue(bb2, 3);
             int cmp = elementsComparator.compare(v1, v2);
             if (cmp != 0)
                 return cmp;
         }
-
         return size1 == size2 ? 0 : (size1 < size2 ? -1 : 1);
     }
 
     @Override
-    public String toString(boolean ignoreFreezing)
-    {
+    public String toString(boolean ignoreFreezing) {
         boolean includeFrozenType = !ignoreFreezing && !isMultiCell();
-
         StringBuilder sb = new StringBuilder();
         if (includeFrozenType)
             sb.append(FrozenType.class.getName()).append("(");
@@ -175,43 +198,33 @@ public class ListType<T> extends CollectionType<List<T>>
         return sb.toString();
     }
 
-    public List<ByteBuffer> serializedValues(List<Cell> cells)
-    {
+    public List<ByteBuffer> serializedValues(List<Cell> cells) {
         assert isMultiCell;
         List<ByteBuffer> bbs = new ArrayList<ByteBuffer>(cells.size());
-        for (Cell c : cells)
-            bbs.add(c.value());
+        for (Cell c : cells) bbs.add(c.value());
         return bbs;
     }
 
     @Override
-    public Term fromJSONObject(Object parsed) throws MarshalException
-    {
+    public Term fromJSONObject(Object parsed) throws MarshalException {
         if (parsed instanceof String)
             parsed = Json.decodeJson((String) parsed);
-
         if (!(parsed instanceof List))
-            throw new MarshalException(String.format(
-                    "Expected a list, but got a %s: %s", parsed.getClass().getSimpleName(), parsed));
-
+            throw new MarshalException(String.format("Expected a list, but got a %s: %s", parsed.getClass().getSimpleName(), parsed));
         List list = (List) parsed;
         List<Term> terms = new ArrayList<>(list.size());
-        for (Object element : list)
-        {
+        for (Object element : list) {
             if (element == null)
                 throw new MarshalException("Invalid null element in list");
             terms.add(elements.fromJSONObject(element));
         }
-
         return new Lists.DelayedValue(terms);
     }
 
-    public static String setOrListToJsonString(ByteBuffer buffer, AbstractType elementsType, int protocolVersion)
-    {
+    public static String setOrListToJsonString(ByteBuffer buffer, AbstractType elementsType, int protocolVersion) {
         StringBuilder sb = new StringBuilder("[");
         int size = CollectionSerializer.readCollectionSize(buffer, protocolVersion);
-        for (int i = 0; i < size; i++)
-        {
+        for (int i = 0; i < size; i++) {
             if (i > 0)
                 sb.append(", ");
             sb.append(elementsType.toJSONString(CollectionSerializer.readValue(buffer, protocolVersion), protocolVersion));
@@ -220,8 +233,7 @@ public class ListType<T> extends CollectionType<List<T>>
     }
 
     @Override
-    public String toJSONString(ByteBuffer buffer, int protocolVersion)
-    {
+    public String toJSONString(ByteBuffer buffer, int protocolVersion) {
         return setOrListToJsonString(buffer, elements, protocolVersion);
     }
 }

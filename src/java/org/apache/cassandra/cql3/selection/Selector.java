@@ -19,7 +19,6 @@ package org.apache.cassandra.cql3.selection;
 
 import java.nio.ByteBuffer;
 import java.util.Collections;
-
 import org.apache.cassandra.config.CFMetaData;
 import org.apache.cassandra.cql3.AssignmentTestable;
 import org.apache.cassandra.cql3.ColumnIdentifier;
@@ -31,20 +30,29 @@ import org.apache.cassandra.db.marshal.ReversedType;
 import org.apache.cassandra.exceptions.InvalidRequestException;
 
 /**
- * A <code>Selector</code> is used to convert the data returned by the storage engine into the data requested by the 
+ * A <code>Selector</code> is used to convert the data returned by the storage engine into the data requested by the
  * user. They correspond to the &lt;selector&gt; elements from the select clause.
- * <p>Since the introduction of aggregation, <code>Selector</code>s cannot be called anymore by multiple threads 
+ * <p>Since the introduction of aggregation, <code>Selector</code>s cannot be called anymore by multiple threads
  * as they have an internal state.</p>
  */
-public abstract class Selector implements AssignmentTestable
-{
+public abstract class Selector implements AssignmentTestable {
+
+    private static final org.slf4j.Logger serialize_logger = org.slf4j.LoggerFactory.getLogger("serialize.logger");
+
+    private java.lang.ThreadLocal<Boolean> isSerializeLoggingActive = new ThreadLocal<Boolean>() {
+
+        @Override
+        protected Boolean initialValue() {
+            return false;
+        }
+    };
+
     /**
      * A factory for <code>Selector</code> instances.
      */
-    public static abstract class Factory
-    {
-        public Iterable<Function> getFunctions()
-        {
+    public static abstract class Factory {
+
+        public Iterable<Function> getFunctions() {
             return Collections.emptySet();
         }
 
@@ -55,12 +63,8 @@ public abstract class Selector implements AssignmentTestable
          * @param cfm the column family meta data
          * @return a column specification
          */
-        public final ColumnSpecification getColumnSpecification(CFMetaData cfm)
-        {
-            return new ColumnSpecification(cfm.ksName,
-                                           cfm.cfName,
-                                           new ColumnIdentifier(getColumnName(), true),
-                                           getReturnType());
+        public final ColumnSpecification getColumnSpecification(CFMetaData cfm) {
+            return new ColumnSpecification(cfm.ksName, cfm.cfName, new ColumnIdentifier(getColumnName(), true), getReturnType());
         }
 
         /**
@@ -76,8 +80,7 @@ public abstract class Selector implements AssignmentTestable
          * @return <code>true</code> if this factory creates selectors instances that creates aggregates,
          * <code>false</code> otherwise
          */
-        public boolean isAggregateSelectorFactory()
-        {
+        public boolean isAggregateSelectorFactory() {
             return false;
         }
 
@@ -87,8 +90,7 @@ public abstract class Selector implements AssignmentTestable
          * @return <code>true</code> if this factory creates <code>writetime</code> selectors instances,
          * <code>false</code> otherwise
          */
-        public boolean isWritetimeSelectorFactory()
-        {
+        public boolean isWritetimeSelectorFactory() {
             return false;
         }
 
@@ -98,8 +100,7 @@ public abstract class Selector implements AssignmentTestable
          * @return <code>true</code> if this factory creates <code>TTL</code> selectors instances,
          * <code>false</code> otherwise
          */
-        public boolean isTTLSelectorFactory()
-        {
+        public boolean isTTLSelectorFactory() {
             return false;
         }
 
@@ -110,8 +111,7 @@ public abstract class Selector implements AssignmentTestable
          * @return <code>true</code> if this factory creates <code>Selector</code>s that simply return
          * the specified column, <code>false</code> otherwise.
          */
-        public boolean isSimpleSelectorFactory(int index)
-        {
+        public boolean isSimpleSelectorFactory(int index) {
             return false;
         }
 
@@ -175,8 +175,7 @@ public abstract class Selector implements AssignmentTestable
      * @return <code>true</code> if this <code>Selector</code> is creating aggregates <code>false</code>
      * otherwise.
      */
-    public boolean isAggregate()
-    {
+    public boolean isAggregate() {
         return false;
     }
 
@@ -185,23 +184,25 @@ public abstract class Selector implements AssignmentTestable
      */
     public abstract void reset();
 
-    public final AssignmentTestable.TestResult testAssignment(String keyspace, ColumnSpecification receiver)
-    {
+    public final AssignmentTestable.TestResult testAssignment(String keyspace, ColumnSpecification receiver) {
+        if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+            if (!isSerializeLoggingActive.get()) {
+                isSerializeLoggingActive.set(true);
+                serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(receiver, receiver.type, "receiver.type").toJsonString());
+                isSerializeLoggingActive.set(false);
+            }
+        }
         // We should ignore the fact that the output type is frozen in our comparison as functions do not support
         // frozen types for arguments
         AbstractType<?> receiverType = receiver.type;
         if (getType().isFrozenCollection())
             receiverType = receiverType.freeze();
-
         if (getType().isReversed())
             receiverType = ReversedType.getInstance(receiverType);
-
         if (receiverType.equals(getType()))
             return AssignmentTestable.TestResult.EXACT_MATCH;
-
         if (receiverType.isValueCompatibleWith(getType()))
             return AssignmentTestable.TestResult.WEAKLY_ASSIGNABLE;
-
         return AssignmentTestable.TestResult.NOT_ASSIGNABLE;
     }
 }

@@ -18,7 +18,6 @@
 package org.apache.cassandra.gms;
 
 import java.io.*;
-
 import org.apache.cassandra.db.TypeSizes;
 import org.apache.cassandra.io.IVersionedSerializer;
 import org.apache.cassandra.io.util.DataOutputPlus;
@@ -26,70 +25,86 @@ import org.apache.cassandra.io.util.DataOutputPlus;
 /**
  * HeartBeat State associated with any given endpoint.
  */
-class HeartBeatState
-{
+class HeartBeatState {
+
+    private static final org.slf4j.Logger serialize_logger = org.slf4j.LoggerFactory.getLogger("serialize.logger");
+
+    private java.lang.ThreadLocal<Boolean> isSerializeLoggingActive = new ThreadLocal<Boolean>() {
+
+        @Override
+        protected Boolean initialValue() {
+            return false;
+        }
+    };
+
     public static final IVersionedSerializer<HeartBeatState> serializer = new HeartBeatStateSerializer();
 
     private int generation;
+
     private int version;
 
-    HeartBeatState(int gen)
-    {
+    HeartBeatState(int gen) {
         this(gen, 0);
     }
 
-    HeartBeatState(int gen, int ver)
-    {
+    HeartBeatState(int gen, int ver) {
         generation = gen;
         version = ver;
     }
 
-    int getGeneration()
-    {
+    int getGeneration() {
+        if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+            if (!isSerializeLoggingActive.get()) {
+                isSerializeLoggingActive.set(true);
+                serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(this, this.generation, "this.generation").toJsonString());
+                isSerializeLoggingActive.set(false);
+            }
+        }
         return generation;
     }
 
-    void updateHeartBeat()
-    {
+    void updateHeartBeat() {
         version = VersionGenerator.getNextVersion();
     }
 
-    int getHeartBeatVersion()
-    {
+    int getHeartBeatVersion() {
+        if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+            if (!isSerializeLoggingActive.get()) {
+                isSerializeLoggingActive.set(true);
+                serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(this, this.version, "this.version").toJsonString());
+                isSerializeLoggingActive.set(false);
+            }
+        }
         return version;
     }
 
-    void forceNewerGenerationUnsafe()
-    {
+    void forceNewerGenerationUnsafe() {
         generation += 1;
     }
 
-    void forceHighestPossibleVersionUnsafe()
-    {
+    void forceHighestPossibleVersionUnsafe() {
         version = Integer.MAX_VALUE;
     }
 
-    public String toString()
-    {
+    public String toString() {
         return String.format("HeartBeat: generation = %d, version = %d", generation, version);
     }
 }
 
-class HeartBeatStateSerializer implements IVersionedSerializer<HeartBeatState>
-{
-    public void serialize(HeartBeatState hbState, DataOutputPlus out, int version) throws IOException
-    {
+class HeartBeatStateSerializer implements IVersionedSerializer<HeartBeatState> {
+
+    private static final org.slf4j.Logger serialize_logger = org.slf4j.LoggerFactory.getLogger("serialize.logger");
+
+    public void serialize(HeartBeatState hbState, DataOutputPlus out, int version) throws IOException {
         out.writeInt(hbState.getGeneration());
         out.writeInt(hbState.getHeartBeatVersion());
     }
 
-    public HeartBeatState deserialize(DataInput in, int version) throws IOException
-    {
+    public HeartBeatState deserialize(DataInput in, int version) throws IOException {
         return new HeartBeatState(in.readInt(), in.readInt());
     }
 
-    public long serializedSize(HeartBeatState state, int version)
-    {
+    public long serializedSize(HeartBeatState state, int version) {
         return TypeSizes.NATIVE.sizeof(state.getGeneration()) + TypeSizes.NATIVE.sizeof(state.getHeartBeatVersion());
     }
 }

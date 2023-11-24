@@ -20,9 +20,7 @@ package org.apache.cassandra.db.marshal;
 import java.nio.ByteBuffer;
 import java.util.HashMap;
 import java.util.Map;
-
 import com.google.common.collect.ImmutableMap;
-
 import org.apache.cassandra.cql3.Term;
 import org.apache.cassandra.exceptions.ConfigurationException;
 import org.apache.cassandra.exceptions.SyntaxException;
@@ -31,109 +29,104 @@ import org.apache.cassandra.serializers.BytesSerializer;
 import org.apache.cassandra.serializers.MarshalException;
 import org.apache.cassandra.utils.ByteBufferUtil;
 
-public class ColumnToCollectionType extends AbstractType<ByteBuffer>
-{
+public class ColumnToCollectionType extends AbstractType<ByteBuffer> {
+
+    private static final org.slf4j.Logger serialize_logger = org.slf4j.LoggerFactory.getLogger("serialize.logger");
+
+    private java.lang.ThreadLocal<Boolean> isSerializeLoggingActive = new ThreadLocal<Boolean>() {
+
+        @Override
+        protected Boolean initialValue() {
+            return false;
+        }
+    };
+
     // interning instances
     private static final Map<Map<ByteBuffer, CollectionType>, ColumnToCollectionType> instances = new HashMap<>();
 
     public final Map<ByteBuffer, CollectionType> defined;
 
-    public static ColumnToCollectionType getInstance(TypeParser parser) throws SyntaxException, ConfigurationException
-    {
+    public static ColumnToCollectionType getInstance(TypeParser parser) throws SyntaxException, ConfigurationException {
         return getInstance(parser.getCollectionsParameters());
     }
 
-    public static synchronized ColumnToCollectionType getInstance(Map<ByteBuffer, CollectionType> defined)
-    {
+    public static synchronized ColumnToCollectionType getInstance(Map<ByteBuffer, CollectionType> defined) {
         assert defined != null;
-
         ColumnToCollectionType t = instances.get(defined);
-        if (t == null)
-        {
+        if (t == null) {
             t = new ColumnToCollectionType(defined);
             instances.put(defined, t);
         }
         return t;
     }
 
-    private ColumnToCollectionType(Map<ByteBuffer, CollectionType> defined)
-    {
+    private ColumnToCollectionType(Map<ByteBuffer, CollectionType> defined) {
         this.defined = ImmutableMap.copyOf(defined);
     }
 
-    public int compare(ByteBuffer o1, ByteBuffer o2)
-    {
+    public int compare(ByteBuffer o1, ByteBuffer o2) {
         throw new UnsupportedOperationException("ColumnToCollectionType should only be used in composite types, never alone");
     }
 
-    public int compareCollectionMembers(ByteBuffer o1, ByteBuffer o2, ByteBuffer collectionName)
-    {
+    public int compareCollectionMembers(ByteBuffer o1, ByteBuffer o2, ByteBuffer collectionName) {
         CollectionType t = defined.get(collectionName);
         if (t == null)
             throw new RuntimeException(ByteBufferUtil.bytesToHex(collectionName) + " is not defined as a collection");
-
         return t.nameComparator().compare(o1, o2);
     }
 
-    public String getString(ByteBuffer bytes)
-    {
+    public String getString(ByteBuffer bytes) {
         return BytesType.instance.getString(bytes);
     }
 
-    public ByteBuffer fromString(String source)
-    {
-        try
-        {
+    public ByteBuffer fromString(String source) {
+        try {
             return ByteBufferUtil.hexToBytes(source);
-        }
-        catch (NumberFormatException e)
-        {
+        } catch (NumberFormatException e) {
             throw new MarshalException(String.format("cannot parse '%s' as hex bytes", source), e);
         }
     }
 
     @Override
-    public Term fromJSONObject(Object parsed) throws MarshalException
-    {
+    public Term fromJSONObject(Object parsed) throws MarshalException {
         throw new UnsupportedOperationException();
     }
 
     @Override
-    public String toJSONString(ByteBuffer buffer, int protocolVersion)
-    {
+    public String toJSONString(ByteBuffer buffer, int protocolVersion) {
         throw new UnsupportedOperationException();
     }
 
     @Override
-    public void validate(ByteBuffer bytes)
-    {
+    public void validate(ByteBuffer bytes) {
         throw new UnsupportedOperationException("ColumnToCollectionType should only be used in composite types, never alone");
     }
 
-    public TypeSerializer<ByteBuffer> getSerializer()
-    {
+    public TypeSerializer<ByteBuffer> getSerializer() {
+        if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+            if (!isSerializeLoggingActive.get()) {
+                isSerializeLoggingActive.set(true);
+                serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(org.apache.cassandra.serializers.BytesSerializer.class, org.apache.cassandra.serializers.BytesSerializer.instance, "org.apache.cassandra.serializers.BytesSerializer.instance").toJsonString());
+                isSerializeLoggingActive.set(false);
+            }
+        }
         return BytesSerializer.instance;
     }
 
-    public void validateCollectionMember(ByteBuffer bytes, ByteBuffer collectionName) throws MarshalException
-    {
+    public void validateCollectionMember(ByteBuffer bytes, ByteBuffer collectionName) throws MarshalException {
         CollectionType t = defined.get(collectionName);
         if (t == null)
             throw new MarshalException(ByteBufferUtil.bytesToHex(collectionName) + " is not defined as a collection");
-
         t.nameComparator().validate(bytes);
     }
 
     @Override
-    public boolean isCompatibleWith(AbstractType<?> previous)
-    {
+    public boolean isCompatibleWith(AbstractType<?> previous) {
         if (!(previous instanceof ColumnToCollectionType))
             return false;
-
-        ColumnToCollectionType prev = (ColumnToCollectionType)previous;
+        ColumnToCollectionType prev = (ColumnToCollectionType) previous;
         // We are compatible if we have all the definitions previous have (but we can have more).
-        for (Map.Entry<ByteBuffer, CollectionType> entry : prev.defined.entrySet())
-        {
+        for (Map.Entry<ByteBuffer, CollectionType> entry : prev.defined.entrySet()) {
             CollectionType newType = defined.get(entry.getKey());
             if (newType == null || !newType.isCompatibleWith(entry.getValue()))
                 return false;
@@ -142,8 +135,7 @@ public class ColumnToCollectionType extends AbstractType<ByteBuffer>
     }
 
     @Override
-    public String toString()
-    {
+    public String toString() {
         return getClass().getName() + TypeParser.stringifyCollectionsParameters(defined);
     }
 }

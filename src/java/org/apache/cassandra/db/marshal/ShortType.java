@@ -18,7 +18,6 @@
 package org.apache.cassandra.db.marshal;
 
 import java.nio.ByteBuffer;
-
 import org.apache.cassandra.cql3.CQL3Type;
 import org.apache.cassandra.cql3.Constants;
 import org.apache.cassandra.cql3.Term;
@@ -27,66 +26,68 @@ import org.apache.cassandra.serializers.ShortSerializer;
 import org.apache.cassandra.serializers.TypeSerializer;
 import org.apache.cassandra.utils.ByteBufferUtil;
 
-public class ShortType extends AbstractType<Short>
-{
+public class ShortType extends AbstractType<Short> {
+
+    private static final org.slf4j.Logger serialize_logger = org.slf4j.LoggerFactory.getLogger("serialize.logger");
+
+    private java.lang.ThreadLocal<Boolean> isSerializeLoggingActive = new ThreadLocal<Boolean>() {
+
+        @Override
+        protected Boolean initialValue() {
+            return false;
+        }
+    };
+
     public static final ShortType instance = new ShortType();
 
-    ShortType()
-    {
-    } // singleton
+    ShortType() {
+    }
 
-    public int compare(ByteBuffer o1, ByteBuffer o2)
-    {
+    // singleton
+    public int compare(ByteBuffer o1, ByteBuffer o2) {
         int diff = o1.get(o1.position()) - o2.get(o2.position());
         if (diff != 0)
             return diff;
-
         return ByteBufferUtil.compareUnsigned(o1, o2);
     }
 
-    public ByteBuffer fromString(String source) throws MarshalException
-    {
+    public ByteBuffer fromString(String source) throws MarshalException {
         // Return an empty ByteBuffer for an empty string.
         if (source.isEmpty())
             return ByteBufferUtil.EMPTY_BYTE_BUFFER;
-
         short s;
-
-        try
-        {
+        try {
             s = Short.parseShort(source);
-        }
-        catch (Exception e)
-        {
+        } catch (Exception e) {
             throw new MarshalException(String.format("Unable to make short from '%s'", source), e);
         }
-
         return decompose(s);
     }
 
-    public Term fromJSONObject(Object parsed) throws MarshalException
-    {
+    public Term fromJSONObject(Object parsed) throws MarshalException {
         if (parsed instanceof String || parsed instanceof Number)
             return new Constants.Value(fromString(String.valueOf(parsed)));
-
-        throw new MarshalException(String.format(
-                "Expected a short value, but got a %s: %s", parsed.getClass().getSimpleName(), parsed));
+        throw new MarshalException(String.format("Expected a short value, but got a %s: %s", parsed.getClass().getSimpleName(), parsed));
     }
 
     @Override
-    public String toJSONString(ByteBuffer buffer, int protocolVersion)
-    {
+    public String toJSONString(ByteBuffer buffer, int protocolVersion) {
         return getSerializer().deserialize(buffer).toString();
     }
 
     @Override
-    public CQL3Type asCQL3Type()
-    {
+    public CQL3Type asCQL3Type() {
         return CQL3Type.Native.SMALLINT;
     }
 
-    public TypeSerializer<Short> getSerializer()
-    {
+    public TypeSerializer<Short> getSerializer() {
+        if (org.zlab.dinv.logger.SerializeMonitor.isSerializing) {
+            if (!isSerializeLoggingActive.get()) {
+                isSerializeLoggingActive.set(true);
+                serialize_logger.info(org.zlab.dinv.logger.LogEntry.constructLogEntry(org.apache.cassandra.serializers.ShortSerializer.class, org.apache.cassandra.serializers.ShortSerializer.instance, "org.apache.cassandra.serializers.ShortSerializer.instance").toJsonString());
+                isSerializeLoggingActive.set(false);
+            }
+        }
         return ShortSerializer.instance;
     }
 }
