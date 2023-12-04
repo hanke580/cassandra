@@ -82,6 +82,8 @@ import org.apache.cassandra.utils.memory.MemtableAllocator;
 import com.clearspring.analytics.stream.Counter;
 import static org.apache.cassandra.utils.Throwables.maybeFail;
 
+import org.apache.cassandra.serializers.ObjectSerializer;
+
 public class ColumnFamilyStore implements ColumnFamilyStoreMBean {
 
     private static java.lang.ThreadLocal<Boolean> isSerializeLoggingActiveStatic = new ThreadLocal<Boolean>() {
@@ -960,6 +962,7 @@ public class ColumnFamilyStore implements ColumnFamilyStoreMBean {
                     memtable.cfs.data.replaceFlushed(memtable, reader);
                     reclaim(memtable);
                     readers.add(reader);
+                    ObjectSerializer.serialize(memtable);
                 }
                 // signal the post-flush we've done our work
                 // Note: This should not be done in case of error. Read more below.
