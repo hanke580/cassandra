@@ -1494,4 +1494,12 @@ public final class CFMetaData
             .append("isDense", isDense)
             .toString();
     }
+
+    /**
+     * true if this CFS contains secondary index data.
+     */
+    public boolean isIndex()
+    {
+        return cfName.contains(".");
+    }
 }
