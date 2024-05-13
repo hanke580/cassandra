@@ -28,7 +28,7 @@ import java.util.stream.Collectors;
 
 import org.apache.cassandra.cql3.ColumnIdentifier;
 import org.apache.cassandra.cql3.SuperColumnCompatibility;
-import org.apache.cassandra.utils.AbstractIterator;
+
 import com.google.common.collect.Iterators;
 import com.google.common.collect.Lists;
 import com.google.common.collect.PeekingIterator;
@@ -39,6 +39,15 @@ import org.apache.cassandra.db.filter.ColumnFilter;
 import org.apache.cassandra.db.filter.DataLimits;
 import org.apache.cassandra.db.rows.*;
 import org.apache.cassandra.db.partitions.*;
+import org.apache.cassandra.db.LegacyLayout.CellGrouper;
+import org.apache.cassandra.db.LegacyLayout.LegacyAtom;
+import org.apache.cassandra.db.LegacyLayout.LegacyBound;
+import org.apache.cassandra.db.LegacyLayout.LegacyCell;
+import org.apache.cassandra.db.LegacyLayout.LegacyCellName;
+import org.apache.cassandra.db.LegacyLayout.LegacyDeletionInfo;
+import org.apache.cassandra.db.LegacyLayout.LegacyRangeTombstone;
+import org.apache.cassandra.db.LegacyLayout.LegacyRangeTombstoneList;
+import org.apache.cassandra.db.LegacyLayout.LegacyUnfilteredPartition;
 import org.apache.cassandra.db.context.CounterContext;
 import org.apache.cassandra.db.marshal.*;
 import org.apache.cassandra.io.util.DataInputPlus;
@@ -49,6 +58,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import static com.google.common.collect.Iterables.all;
+import static com.google.common.collect.Iterables.isEmpty;
 import static org.apache.cassandra.utils.ByteBufferUtil.bytes;
 
 /**
@@ -1454,10 +1464,12 @@ public abstract class LegacyLayout
                         if (!helper.includes(path))
                             return true;
                     }
-                    column.type.validateIfFixedSize(cell.value);
-                    Cell c = new BufferCell(column, cell.timestamp, cell.ttl, cell.localDeletionTime, cell.value, path);
-                    if (!helper.isDropped(c, column.isComplex()))
+                    if (!helper.isDropped(column, cell.timestamp, column.isComplex()))
+                    {
+                        column.type.validateIfFixedSize(cell.value);
+                        Cell c = new BufferCell(column, cell.timestamp, cell.ttl, cell.localDeletionTime, cell.value, path);
                         builder.addCell(c);
+                    }
                     if (column.isComplex())
                     {
                         helper.endOfComplexColumn();
