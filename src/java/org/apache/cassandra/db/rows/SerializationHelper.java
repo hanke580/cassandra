@@ -119,6 +119,12 @@ public class SerializationHelper
         return currentDroppedComplex != null && complexDeletion.markedForDeleteAt() <= currentDroppedComplex.droppedTime;
     }
 
+    public boolean isDropped(ColumnDefinition column, long timestamp, boolean isComplex)
+    {
+        CFMetaData.DroppedColumn dropped = isComplex ? currentDroppedComplex : droppedColumns.get(column.name.bytes);
+        return dropped != null && timestamp <= dropped.droppedTime;
+    }
+
     public ByteBuffer maybeClearCounterValue(ByteBuffer value)
     {
         return flag == Flag.FROM_REMOTE || (flag == Flag.LOCAL && CounterContext.instance().shouldClearLocal(value))

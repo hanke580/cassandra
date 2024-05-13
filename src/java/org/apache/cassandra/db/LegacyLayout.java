@@ -25,7 +25,7 @@ import java.security.MessageDigest;
 import java.util.*;
 
 import org.apache.cassandra.cql3.SuperColumnCompatibility;
-import org.apache.cassandra.utils.AbstractIterator;
+
 import com.google.common.collect.Iterators;
 import com.google.common.collect.Lists;
 import com.google.common.collect.PeekingIterator;
@@ -1237,9 +1237,10 @@ public abstract class LegacyLayout
                         if (!helper.includes(path))
                             return true;
                     }
-                    Cell c = new BufferCell(column, cell.timestamp, cell.ttl, cell.localDeletionTime, cell.value, path);
-                    if (!helper.isDropped(c, column.isComplex()))
+                    if (!helper.isDropped(column, cell.timestamp, column.isComplex())) {
+                        Cell c = new BufferCell(column, cell.timestamp, cell.ttl, cell.localDeletionTime, cell.value, path);
                         builder.addCell(c);
+                    }
                     if (column.isComplex())
                     {
                         helper.endOfComplexColumn();
