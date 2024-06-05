@@ -20,10 +20,8 @@ package org.apache.cassandra.db.compaction.writers;
 import java.io.File;
 import java.util.Arrays;
 import java.util.Set;
-
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-
 import org.apache.cassandra.db.ColumnFamilyStore;
 import org.apache.cassandra.db.RowIndexEntry;
 import org.apache.cassandra.db.compaction.AbstractCompactedRow;
@@ -40,43 +38,42 @@ import org.apache.cassandra.io.sstable.metadata.MetadataCollector;
  * Biggest sstable will be total_compaction_size / 2, second biggest total_compaction_size / 4 etc until
  * the result would be sub 50MB, all those are put in the same
  */
-public class SplittingSizeTieredCompactionWriter extends CompactionAwareWriter
-{
+public class SplittingSizeTieredCompactionWriter extends CompactionAwareWriter {
+
     private static final Logger logger = LoggerFactory.getLogger(SplittingSizeTieredCompactionWriter.class);
 
     public static final long DEFAULT_SMALLEST_SSTABLE_BYTES = 50_000_000;
+
     private final double[] ratios;
+
     private final long totalSize;
+
     private final Set<SSTableReader> allSSTables;
+
     private long currentBytesToWrite;
+
     private int currentRatioIndex = 0;
 
-    public SplittingSizeTieredCompactionWriter(ColumnFamilyStore cfs, LifecycleTransaction txn, Set<SSTableReader> nonExpiredSSTables, OperationType compactionType)
-    {
+    public SplittingSizeTieredCompactionWriter(ColumnFamilyStore cfs, LifecycleTransaction txn, Set<SSTableReader> nonExpiredSSTables, OperationType compactionType) {
         this(cfs, txn, nonExpiredSSTables, compactionType, DEFAULT_SMALLEST_SSTABLE_BYTES);
     }
 
     @SuppressWarnings("resource")
-    public SplittingSizeTieredCompactionWriter(ColumnFamilyStore cfs, LifecycleTransaction txn, Set<SSTableReader> nonExpiredSSTables, OperationType compactionType, long smallestSSTable)
-    {
+    public SplittingSizeTieredCompactionWriter(ColumnFamilyStore cfs, LifecycleTransaction txn, Set<SSTableReader> nonExpiredSSTables, OperationType compactionType, long smallestSSTable) {
         super(cfs, txn, nonExpiredSSTables, false);
         this.allSSTables = txn.originals();
         totalSize = cfs.getExpectedCompactedFileSize(nonExpiredSSTables, compactionType);
         double[] potentialRatios = new double[20];
         double currentRatio = 1;
-        for (int i = 0; i < potentialRatios.length; i++)
-        {
+        for (int i = 0; i < potentialRatios.length; i++) {
             currentRatio /= 2;
             potentialRatios[i] = currentRatio;
         }
-
         int noPointIndex = 0;
         // find how many sstables we should create - 50MB min sstable size
-        for (double ratio : potentialRatios)
-        {
+        for (double ratio : potentialRatios) {
             noPointIndex++;
-            if (ratio * totalSize < smallestSSTable)
-            {
+            if (ratio * totalSize < smallestSSTable) {
                 break;
             }
         }
@@ -85,34 +82,22 @@ public class SplittingSizeTieredCompactionWriter extends CompactionAwareWriter
         long currentPartitionsToWrite = Math.round(estimatedTotalKeys * ratios[currentRatioIndex]);
         currentBytesToWrite = Math.round(totalSize * ratios[currentRatioIndex]);
         @SuppressWarnings("resource")
-        SSTableWriter writer = SSTableWriter.create(Descriptor.fromFilename(cfs.getTempSSTablePath(sstableDirectory)),
-                                                                            currentPartitionsToWrite,
-                                                                            minRepairedAt,
-                                                                            cfs.metadata,
-                                                                            cfs.partitioner,
-                                                                            new MetadataCollector(allSSTables, cfs.metadata.comparator, 0));
-
+        SSTableWriter writer = SSTableWriter.create(Descriptor.fromFilename(cfs.getTempSSTablePath(sstableDirectory)), currentPartitionsToWrite, minRepairedAt, cfs.metadata, cfs.partitioner, new MetadataCollector(allSSTables, cfs.metadata.comparator, 0));
         sstableWriter.switchWriter(writer);
         logger.trace("Ratios={}, expectedKeys = {}, totalSize = {}, currentPartitionsToWrite = {}, currentBytesToWrite = {}", ratios, estimatedTotalKeys, totalSize, currentPartitionsToWrite, currentBytesToWrite);
     }
 
     @Override
-    public boolean append(AbstractCompactedRow row)
-    {
+    public boolean append(AbstractCompactedRow row) {
         RowIndexEntry rie = sstableWriter.append(row);
-        if (sstableWriter.currentWriter().getOnDiskFilePointer() > currentBytesToWrite && currentRatioIndex < ratios.length - 1) // if we underestimate how many keys we have, the last sstable might get more than we expect
-        {
+        if (// if we underestimate how many keys we have, the last sstable might get more than we expect
+        sstableWriter.currentWriter().getOnDiskFilePointer() > currentBytesToWrite && currentRatioIndex < ratios.length - 1) {
             currentRatioIndex++;
             currentBytesToWrite = Math.round(totalSize * ratios[currentRatioIndex]);
             long currentPartitionsToWrite = Math.round(ratios[currentRatioIndex] * estimatedTotalKeys);
             File sstableDirectory = cfs.directories.getLocationForDisk(getWriteDirectory(Math.round(totalSize * ratios[currentRatioIndex])));
             @SuppressWarnings("resource")
-            SSTableWriter writer = SSTableWriter.create(Descriptor.fromFilename(cfs.getTempSSTablePath(sstableDirectory)),
-                                                                                currentPartitionsToWrite,
-                                                                                minRepairedAt,
-                                                                                cfs.metadata,
-                                                                                cfs.partitioner,
-                                                                                new MetadataCollector(allSSTables, cfs.metadata.comparator, 0));
+            SSTableWriter writer = SSTableWriter.create(Descriptor.fromFilename(cfs.getTempSSTablePath(sstableDirectory)), currentPartitionsToWrite, minRepairedAt, cfs.metadata, cfs.partitioner, new MetadataCollector(allSSTables, cfs.metadata.comparator, 0));
             sstableWriter.switchWriter(writer);
             logger.trace("Switching writer, currentPartitionsToWrite = {}", currentPartitionsToWrite);
         }

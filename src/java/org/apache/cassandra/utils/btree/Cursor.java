@@ -20,7 +20,6 @@ package org.apache.cassandra.utils.btree;
 
 import java.util.Comparator;
 import java.util.Iterator;
-
 import static org.apache.cassandra.utils.btree.BTree.NEGATIVE_INFINITY;
 import static org.apache.cassandra.utils.btree.BTree.POSITIVE_INFINITY;
 import static org.apache.cassandra.utils.btree.BTree.getLeafKeyEnd;
@@ -31,8 +30,8 @@ import static org.apache.cassandra.utils.btree.BTree.isLeaf;
  *
  * @param <V>
  */
-public final class Cursor<K, V extends K> extends Path implements Iterator<V>
-{
+public final class Cursor<K, V extends K> extends Path implements Iterator<V> {
+
     /*
      * Conceptually, a Cursor derives two Paths, one for the first object in the slice requested (inclusive),
      * and one for the last (exclusive).  Then hasNext just checks, have we reached the last yet, and next
@@ -42,9 +41,9 @@ public final class Cursor<K, V extends K> extends Path implements Iterator<V>
      *
      * the first one.
      */
-
     // the last node covered by the requested range
     private Object[] endNode;
+
     // the index within endNode that signals we're finished -- that is, endNode[endIndex] is NOT part of the Cursor
     private byte endIndex;
 
@@ -56,8 +55,7 @@ public final class Cursor<K, V extends K> extends Path implements Iterator<V>
      * @param btree    the tree to iterate over
      * @param forwards if false, the cursor will start at the end and move backwards
      */
-    public void reset(Object[] btree, boolean forwards)
-    {
+    public void reset(Object[] btree, boolean forwards) {
         _reset(btree, null, NEGATIVE_INFINITY, false, POSITIVE_INFINITY, false, forwards);
     }
 
@@ -70,8 +68,7 @@ public final class Cursor<K, V extends K> extends Path implements Iterator<V>
      * @param upperBound the last item to include, exclusive
      * @param forwards   if false, the cursor will start at the end and move backwards
      */
-    public void reset(Object[] btree, Comparator<K> comparator, K lowerBound, K upperBound, boolean forwards)
-    {
+    public void reset(Object[] btree, Comparator<K> comparator, K lowerBound, K upperBound, boolean forwards) {
         _reset(btree, comparator, lowerBound, true, upperBound, false, forwards);
     }
 
@@ -86,52 +83,40 @@ public final class Cursor<K, V extends K> extends Path implements Iterator<V>
      * @param inclusiveUpperBound should include end in the iterator, if present in the tree
      * @param forwards            if false, the cursor will start at the end and move backwards
      */
-    public void reset(Object[] btree, Comparator<K> comparator, K lowerBound, boolean inclusiveLowerBound, K upperBound, boolean inclusiveUpperBound, boolean forwards)
-    {
+    public void reset(Object[] btree, Comparator<K> comparator, K lowerBound, boolean inclusiveLowerBound, K upperBound, boolean inclusiveUpperBound, boolean forwards) {
         _reset(btree, comparator, lowerBound, inclusiveLowerBound, upperBound, inclusiveUpperBound, forwards);
     }
 
-    private void _reset(Object[] btree, Comparator<K> comparator, Object lowerBound, boolean inclusiveLowerBound, Object upperBound, boolean inclusiveUpperBound, boolean forwards)
-    {
+    private void _reset(Object[] btree, Comparator<K> comparator, Object lowerBound, boolean inclusiveLowerBound, Object upperBound, boolean inclusiveUpperBound, boolean forwards) {
         init(btree);
         if (lowerBound == null)
             lowerBound = NEGATIVE_INFINITY;
         if (upperBound == null)
             upperBound = POSITIVE_INFINITY;
-
         this.forwards = forwards;
-
         Path findLast = new Path(this.path.length, btree);
-        if (forwards)
-        {
+        if (forwards) {
             findLast.find(comparator, upperBound, inclusiveUpperBound ? Op.HIGHER : Op.CEIL, true);
             find(comparator, lowerBound, inclusiveLowerBound ? Op.CEIL : Op.HIGHER, true);
-        }
-        else
-        {
+        } else {
             findLast.find(comparator, lowerBound, inclusiveLowerBound ? Op.LOWER : Op.FLOOR, false);
             find(comparator, upperBound, inclusiveUpperBound ? Op.FLOOR : Op.LOWER, false);
         }
         int c = this.compareTo(findLast, forwards);
-        if (forwards ? c > 0 : c < 0)
-        {
+        if (forwards ? c > 0 : c < 0) {
             endNode = currentNode();
             endIndex = currentIndex();
-        }
-        else
-        {
+        } else {
             endNode = findLast.currentNode();
             endIndex = findLast.currentIndex();
         }
     }
 
-    public boolean hasNext()
-    {
+    public boolean hasNext() {
         return path[depth] != endNode || indexes[depth] != endIndex;
     }
 
-    public V next()
-    {
+    public V next() {
         Object r = currentKey();
         if (forwards)
             successor();
@@ -140,27 +125,22 @@ public final class Cursor<K, V extends K> extends Path implements Iterator<V>
         return (V) r;
     }
 
-    public int count()
-    {
+    public int count() {
         if (!forwards)
             throw new IllegalStateException("Count can only be run on forward cursors");
         int count = 0;
         int next;
-        while ((next = consumeNextLeaf()) >= 0)
-            count += next;
+        while ((next = consumeNextLeaf()) >= 0) count += next;
         return count;
     }
 
     /**
      * @return the number of objects consumed by moving out of the next (possibly current) leaf
      */
-    private int consumeNextLeaf()
-    {
+    private int consumeNextLeaf() {
         Object[] node = currentNode();
         int r = 0;
-
-        if (!isLeaf(node))
-        {
+        if (!isLeaf(node)) {
             // if we're not in a leaf, then calling successor once will take us to a leaf, since the next
             // key will be in the leftmost subtree of whichever branch is next.  For instance, if we
             // are in the root node of the tree depicted by http://cis.stvincent.edu/html/tutorials/swd/btree/btree1.gif,
@@ -172,9 +152,7 @@ public final class Cursor<K, V extends K> extends Path implements Iterator<V>
             successor();
             node = currentNode();
         }
-
-        if (node == endNode)
-        {
+        if (node == endNode) {
             // only count up to endIndex, and don't call successor()
             if (currentIndex() == endIndex)
                 return r > 0 ? r : -1;
@@ -182,7 +160,6 @@ public final class Cursor<K, V extends K> extends Path implements Iterator<V>
             setIndex(endIndex);
             return r;
         }
-
         // count the remaining objects in this leaf
         int keyEnd = getLeafKeyEnd(node);
         r += keyEnd - currentIndex();
@@ -191,8 +168,7 @@ public final class Cursor<K, V extends K> extends Path implements Iterator<V>
         return r;
     }
 
-    public void remove()
-    {
+    public void remove() {
         throw new UnsupportedOperationException();
     }
 }

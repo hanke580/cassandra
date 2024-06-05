@@ -20,7 +20,6 @@ package org.apache.cassandra.db;
 import java.io.DataInput;
 import java.io.IOException;
 import java.nio.ByteBuffer;
-
 import org.apache.cassandra.config.DatabaseDescriptor;
 import org.apache.cassandra.db.filter.IDiskAtomFilter;
 import org.apache.cassandra.db.filter.NamesQueryFilter;
@@ -33,42 +32,42 @@ import org.apache.cassandra.service.IReadCommand;
 import org.apache.cassandra.service.RowDataResolver;
 import org.apache.cassandra.service.pager.Pageable;
 
-public abstract class ReadCommand implements IReadCommand, Pageable
-{
-    public enum Type
-    {
-        GET_BY_NAMES((byte)1),
-        GET_SLICES((byte)2);
+public abstract class ReadCommand implements IReadCommand, Pageable {
+
+    public enum Type {
+
+        GET_BY_NAMES((byte) 1), GET_SLICES((byte) 2);
 
         public final byte serializedValue;
 
-        private Type(byte b)
-        {
+        private Type(byte b) {
             this.serializedValue = b;
         }
 
-        public static Type fromSerializedValue(byte b)
-        {
+        public static Type fromSerializedValue(byte b) {
             return b == 1 ? GET_BY_NAMES : GET_SLICES;
         }
     }
 
     public static final ReadCommandSerializer serializer = new ReadCommandSerializer();
 
-    public MessageOut<ReadCommand> createMessage()
-    {
+    public MessageOut<ReadCommand> createMessage() {
         return new MessageOut<>(MessagingService.Verb.READ, this, serializer);
     }
 
     public final String ksName;
+
     public final String cfName;
+
     public final ByteBuffer key;
+
     public final long timestamp;
+
     private boolean isDigestQuery = false;
+
     protected final Type commandType;
 
-    protected ReadCommand(String ksName, ByteBuffer key, String cfName, long timestamp, Type cmdType)
-    {
+    protected ReadCommand(String ksName, ByteBuffer key, String cfName, long timestamp, Type cmdType) {
         this.ksName = ksName;
         this.key = key;
         this.cfName = cfName;
@@ -76,27 +75,23 @@ public abstract class ReadCommand implements IReadCommand, Pageable
         this.commandType = cmdType;
     }
 
-    public static ReadCommand create(String ksName, ByteBuffer key, String cfName, long timestamp, IDiskAtomFilter filter)
-    {
-        if (filter instanceof SliceQueryFilter)
-            return new SliceFromReadCommand(ksName, key, cfName, timestamp, (SliceQueryFilter)filter);
-        else
-            return new SliceByNamesReadCommand(ksName, key, cfName, timestamp, (NamesQueryFilter)filter);
+    public static ReadCommand create(String ksName, ByteBuffer key, String cfName, long timestamp, IDiskAtomFilter filter) {
+        if (filter instanceof SliceQueryFilter) {
+            return ((SliceFromReadCommand) org.zlab.ocov.tracker.Runtime.monitorCreationContext(new SliceFromReadCommand(ksName, key, cfName, timestamp, (SliceQueryFilter) filter), 37));
+        } else
+            return new SliceByNamesReadCommand(ksName, key, cfName, timestamp, (NamesQueryFilter) filter);
     }
 
-    public boolean isDigestQuery()
-    {
+    public boolean isDigestQuery() {
         return isDigestQuery;
     }
 
-    public ReadCommand setIsDigestQuery(boolean isDigestQuery)
-    {
+    public ReadCommand setIsDigestQuery(boolean isDigestQuery) {
         this.isDigestQuery = isDigestQuery;
         return this;
     }
 
-    public String getColumnFamilyName()
-    {
+    public String getColumnFamilyName() {
         return cfName;
     }
 
@@ -106,36 +101,30 @@ public abstract class ReadCommand implements IReadCommand, Pageable
 
     public abstract IDiskAtomFilter filter();
 
-    public String getKeyspace()
-    {
+    public String getKeyspace() {
         return ksName;
     }
 
     // maybeGenerateRetryCommand is used to generate a retry for short reads
-    public ReadCommand maybeGenerateRetryCommand(RowDataResolver resolver, Row row)
-    {
+    public ReadCommand maybeGenerateRetryCommand(RowDataResolver resolver, Row row) {
         return null;
     }
 
     // maybeTrim removes columns from a response that is too long
-    public Row maybeTrim(Row row)
-    {
+    public Row maybeTrim(Row row) {
         return row;
     }
 
-    public long getTimeout()
-    {
+    public long getTimeout() {
         return DatabaseDescriptor.getReadRpcTimeout();
     }
 }
 
-class ReadCommandSerializer implements IVersionedSerializer<ReadCommand>
-{
-    public void serialize(ReadCommand command, DataOutputPlus out, int version) throws IOException
-    {
+class ReadCommandSerializer implements IVersionedSerializer<ReadCommand> {
+
+    public void serialize(ReadCommand command, DataOutputPlus out, int version) throws IOException {
         out.writeByte(command.commandType.serializedValue);
-        switch (command.commandType)
-        {
+        switch(command.commandType) {
             case GET_BY_NAMES:
                 SliceByNamesReadCommand.serializer.serialize(command, out, version);
                 break;
@@ -147,11 +136,9 @@ class ReadCommandSerializer implements IVersionedSerializer<ReadCommand>
         }
     }
 
-    public ReadCommand deserialize(DataInput in, int version) throws IOException
-    {
+    public ReadCommand deserialize(DataInput in, int version) throws IOException {
         ReadCommand.Type msgType = ReadCommand.Type.fromSerializedValue(in.readByte());
-        switch (msgType)
-        {
+        switch(msgType) {
             case GET_BY_NAMES:
                 return SliceByNamesReadCommand.serializer.deserialize(in, version);
             case GET_SLICES:
@@ -161,10 +148,8 @@ class ReadCommandSerializer implements IVersionedSerializer<ReadCommand>
         }
     }
 
-    public long serializedSize(ReadCommand command, int version)
-    {
-        switch (command.commandType)
-        {
+    public long serializedSize(ReadCommand command, int version) {
+        switch(command.commandType) {
             case GET_BY_NAMES:
                 return 1 + SliceByNamesReadCommand.serializer.serializedSize(command, version);
             case GET_SLICES:

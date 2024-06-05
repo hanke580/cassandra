@@ -38,82 +38,73 @@ import org.apache.cassandra.io.sstable.format.Version;
 import org.apache.cassandra.io.sstable.metadata.MetadataCollector;
 import org.apache.cassandra.io.sstable.metadata.StatsMetadata;
 import org.apache.cassandra.io.util.FileDataInput;
-
 import java.util.Iterator;
 import java.util.Set;
 
 /**
  * Legacy bigtable format
  */
-public class BigFormat implements SSTableFormat
-{
+public class BigFormat implements SSTableFormat {
+
     public static final BigFormat instance = new BigFormat();
+
     public static final BigVersion latestVersion = new BigVersion(BigVersion.current_version);
+
     private static final SSTableReader.Factory readerFactory = new ReaderFactory();
+
     private static final SSTableWriter.Factory writerFactory = new WriterFactory();
 
-    private BigFormat()
-    {
-
+    private BigFormat() {
     }
 
     @Override
-    public Version getLatestVersion()
-    {
+    public Version getLatestVersion() {
         return latestVersion;
     }
 
     @Override
-    public Version getVersion(String version)
-    {
+    public Version getVersion(String version) {
         return new BigVersion(version);
     }
 
     @Override
-    public SSTableWriter.Factory getWriterFactory()
-    {
+    public SSTableWriter.Factory getWriterFactory() {
         return writerFactory;
     }
 
     @Override
-    public SSTableReader.Factory getReaderFactory()
-    {
+    public SSTableReader.Factory getReaderFactory() {
         return readerFactory;
     }
 
     @Override
-    public Iterator<OnDiskAtom> getOnDiskIterator(FileDataInput in, ColumnSerializer.Flag flag, int expireBefore, CFMetaData cfm, Version version)
-    {
+    public Iterator<OnDiskAtom> getOnDiskIterator(FileDataInput in, ColumnSerializer.Flag flag, int expireBefore, CFMetaData cfm, Version version) {
         return AbstractCell.onDiskIterator(in, flag, expireBefore, version, cfm.comparator);
     }
 
     @Override
-    public AbstractCompactedRow getCompactedRowWriter(CompactionController controller, ImmutableList<OnDiskAtomIterator> onDiskAtomIterators)
-    {
+    public AbstractCompactedRow getCompactedRowWriter(CompactionController controller, ImmutableList<OnDiskAtomIterator> onDiskAtomIterators) {
         return new LazilyCompactedRow(controller, onDiskAtomIterators);
     }
 
     @Override
-    public RowIndexEntry.IndexSerializer getIndexSerializer(CFMetaData cfMetaData)
-    {
+    public RowIndexEntry.IndexSerializer getIndexSerializer(CFMetaData cfMetaData) {
         return new RowIndexEntry.Serializer(new IndexHelper.IndexInfo.Serializer(cfMetaData.comparator));
     }
 
-    static class WriterFactory extends SSTableWriter.Factory
-    {
+    static class WriterFactory extends SSTableWriter.Factory {
+
         @Override
-        public SSTableWriter open(Descriptor descriptor, long keyCount, long repairedAt, CFMetaData metadata, IPartitioner partitioner, MetadataCollector metadataCollector)
-        {
-            return new BigTableWriter(descriptor, keyCount, repairedAt, metadata, partitioner, metadataCollector);
+        public SSTableWriter open(Descriptor descriptor, long keyCount, long repairedAt, CFMetaData metadata, IPartitioner partitioner, MetadataCollector metadataCollector) {
+            return ((BigTableWriter) org.zlab.ocov.tracker.Runtime.monitorCreationContext(new BigTableWriter(descriptor, keyCount, repairedAt, metadata, partitioner, metadataCollector), 11));
         }
     }
 
-    static class ReaderFactory extends SSTableReader.Factory
-    {
+    static class ReaderFactory extends SSTableReader.Factory {
+
         @Override
-        public SSTableReader open(Descriptor descriptor, Set<Component> components, CFMetaData metadata, IPartitioner partitioner, Long maxDataAge, StatsMetadata sstableMetadata, SSTableReader.OpenReason openReason)
-        {
-            return new BigTableReader(descriptor, components, metadata, partitioner, maxDataAge, sstableMetadata, openReason);
+        public SSTableReader open(Descriptor descriptor, Set<Component> components, CFMetaData metadata, IPartitioner partitioner, Long maxDataAge, StatsMetadata sstableMetadata, SSTableReader.OpenReason openReason) {
+            return ((BigTableReader) org.zlab.ocov.tracker.Runtime.monitorCreationContext(new BigTableReader(descriptor, components, metadata, partitioner, maxDataAge, sstableMetadata, openReason), 12));
         }
     }
 
@@ -123,9 +114,10 @@ public class BigFormat implements SSTableFormat
     //
     // Minor versions were introduced with version "hb" for Cassandra 1.0.3; prior to that,
     // we always incremented the major version.
-    static class BigVersion extends Version
-    {
+    static class BigVersion extends Version {
+
         public static final String current_version = "lb";
+
         public static final String earliest_supported_version = "jb";
 
         // jb (2.0.1): switch from crc32 to adler32 for compression checksums
@@ -136,20 +128,24 @@ public class BigFormat implements SSTableFormat
         //             tracks presense of legacy (local and remote) counter shards
         // la (2.2.0): new file name format
         // lb (2.2.7): commit log lower bound included
-
         private final boolean isLatestVersion;
+
         private final boolean hasSamplingLevel;
+
         private final boolean newStatsFile;
+
         private final boolean hasAllAdlerChecksums;
+
         private final boolean hasRepairedAt;
+
         private final boolean tracksLegacyCounterShards;
+
         private final boolean newFileName;
+
         private final boolean hasCommitLogLowerBound;
 
-        public BigVersion(String version)
-        {
-            super(instance,version);
-
+        public BigVersion(String version) {
+            super(instance, version);
             isLatestVersion = version.compareTo(current_version) == 0;
             hasSamplingLevel = version.compareTo("ka") >= 0;
             newStatsFile = version.compareTo("ka") >= 0;
@@ -161,55 +157,46 @@ public class BigFormat implements SSTableFormat
         }
 
         @Override
-        public boolean isLatestVersion()
-        {
+        public boolean isLatestVersion() {
             return isLatestVersion;
         }
 
         @Override
-        public boolean hasSamplingLevel()
-        {
+        public boolean hasSamplingLevel() {
             return hasSamplingLevel;
         }
 
         @Override
-        public boolean hasNewStatsFile()
-        {
+        public boolean hasNewStatsFile() {
             return newStatsFile;
         }
 
         @Override
-        public boolean hasAllAdlerChecksums()
-        {
+        public boolean hasAllAdlerChecksums() {
             return hasAllAdlerChecksums;
         }
 
         @Override
-        public boolean hasRepairedAt()
-        {
+        public boolean hasRepairedAt() {
             return hasRepairedAt;
         }
 
         @Override
-        public boolean tracksLegacyCounterShards()
-        {
+        public boolean tracksLegacyCounterShards() {
             return tracksLegacyCounterShards;
         }
 
         @Override
-        public boolean hasNewFileName()
-        {
+        public boolean hasNewFileName() {
             return newFileName;
         }
 
-        public boolean hasCommitLogLowerBound()
-        {
+        public boolean hasCommitLogLowerBound() {
             return hasCommitLogLowerBound;
         }
 
         @Override
-        public boolean isCompatible()
-        {
+        public boolean isCompatible() {
             return version.compareTo(earliest_supported_version) >= 0 && version.charAt(0) <= current_version.charAt(0);
         }
     }

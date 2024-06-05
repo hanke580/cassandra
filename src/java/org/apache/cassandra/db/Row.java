@@ -19,68 +19,56 @@ package org.apache.cassandra.db;
 
 import java.io.*;
 import java.nio.ByteBuffer;
-
 import org.apache.cassandra.db.filter.IDiskAtomFilter;
 import org.apache.cassandra.io.IVersionedSerializer;
 import org.apache.cassandra.io.util.DataOutputPlus;
 import org.apache.cassandra.service.StorageService;
 import org.apache.cassandra.utils.ByteBufferUtil;
 
-public class Row
-{
+public class Row {
+
     public static final RowSerializer serializer = new RowSerializer();
 
     public final DecoratedKey key;
+
     public final ColumnFamily cf;
 
-    public Row(DecoratedKey key, ColumnFamily cf)
-    {
+    public Row(DecoratedKey key, ColumnFamily cf) {
         assert key != null;
         // cf may be null, indicating no data
         this.key = key;
         this.cf = cf;
     }
 
-    public Row(ByteBuffer key, ColumnFamily updates)
-    {
+    public Row(ByteBuffer key, ColumnFamily updates) {
         this(StorageService.getPartitioner().decorateKey(key), updates);
     }
 
     @Override
-    public String toString()
-    {
-        return "Row(" +
-               "key=" + key +
-               ", cf=" + cf +
-               ')';
+    public String toString() {
+        return "Row(" + "key=" + key + ", cf=" + cf + ')';
     }
 
-    public int getLiveCount(IDiskAtomFilter filter, long now)
-    {
+    public int getLiveCount(IDiskAtomFilter filter, long now) {
         return cf == null ? 0 : filter.getLiveCount(cf, now);
     }
 
-    public static class RowSerializer implements IVersionedSerializer<Row>
-    {
-        public void serialize(Row row, DataOutputPlus out, int version) throws IOException
-        {
+    public static class RowSerializer implements IVersionedSerializer<Row> {
+
+        public void serialize(Row row, DataOutputPlus out, int version) throws IOException {
             ByteBufferUtil.writeWithShortLength(row.key.getKey(), out);
             ColumnFamily.serializer.serialize(row.cf, out, version);
         }
 
-        public Row deserialize(DataInput in, int version, ColumnSerializer.Flag flag) throws IOException
-        {
-            return new Row(StorageService.getPartitioner().decorateKey(ByteBufferUtil.readWithShortLength(in)),
-                           ColumnFamily.serializer.deserialize(in, flag, version));
+        public Row deserialize(DataInput in, int version, ColumnSerializer.Flag flag) throws IOException {
+            return ((Row) org.zlab.ocov.tracker.Runtime.monitorCreationContext(new Row(StorageService.getPartitioner().decorateKey(ByteBufferUtil.readWithShortLength(in)), ColumnFamily.serializer.deserialize(in, flag, version)), 50));
         }
 
-        public Row deserialize(DataInput in, int version) throws IOException
-        {
+        public Row deserialize(DataInput in, int version) throws IOException {
             return deserialize(in, version, ColumnSerializer.Flag.LOCAL);
         }
 
-        public long serializedSize(Row row, int version)
-        {
+        public long serializedSize(Row row, int version) {
             int keySize = row.key.getKey().remaining();
             return TypeSizes.NATIVE.sizeof((short) keySize) + keySize + ColumnFamily.serializer.serializedSize(row.cf, TypeSizes.NATIVE, version);
         }

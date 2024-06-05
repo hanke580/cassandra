@@ -22,7 +22,6 @@ import java.util.Comparator;
 import java.util.Iterator;
 import java.util.List;
 import java.util.SortedSet;
-
 import org.apache.cassandra.db.Cell;
 import org.apache.cassandra.db.ColumnFamily;
 import org.apache.cassandra.db.DecoratedKey;
@@ -36,95 +35,70 @@ import org.apache.cassandra.db.composites.Composite;
 import org.apache.cassandra.io.sstable.format.SSTableReader;
 import org.apache.cassandra.utils.MergeIterator;
 
-public class QueryFilter
-{
+public class QueryFilter {
+
     public final DecoratedKey key;
+
     public final String cfName;
+
     public final IDiskAtomFilter filter;
+
     public final long timestamp;
 
-    public QueryFilter(DecoratedKey key, String cfName, IDiskAtomFilter filter, long timestamp)
-    {
+    public QueryFilter(DecoratedKey key, String cfName, IDiskAtomFilter filter, long timestamp) {
         this.key = key;
         this.cfName = cfName;
         this.filter = filter;
         this.timestamp = timestamp;
     }
 
-    public Iterator<Cell> getIterator(ColumnFamily cf)
-    {
+    public Iterator<Cell> getIterator(ColumnFamily cf) {
         assert cf != null;
         return filter.getColumnIterator(cf);
     }
 
-    public OnDiskAtomIterator getSSTableColumnIterator(SSTableReader sstable)
-    {
+    public OnDiskAtomIterator getSSTableColumnIterator(SSTableReader sstable) {
         return filter.getSSTableColumnIterator(sstable, key);
     }
 
-    public void collateOnDiskAtom(ColumnFamily returnCF,
-                                  List<? extends Iterator<? extends OnDiskAtom>> toCollate,
-                                  int gcBefore)
-    {
+    public void collateOnDiskAtom(ColumnFamily returnCF, List<? extends Iterator<? extends OnDiskAtom>> toCollate, int gcBefore) {
         collateOnDiskAtom(returnCF, toCollate, filter, this.key, gcBefore, timestamp);
     }
 
-    public static void collateOnDiskAtom(ColumnFamily returnCF,
-                                         List<? extends Iterator<? extends OnDiskAtom>> toCollate,
-                                         IDiskAtomFilter filter,
-                                         DecoratedKey key,
-                                         int gcBefore,
-                                         long timestamp)
-    {
+    public static void collateOnDiskAtom(ColumnFamily returnCF, List<? extends Iterator<? extends OnDiskAtom>> toCollate, IDiskAtomFilter filter, DecoratedKey key, int gcBefore, long timestamp) {
         List<Iterator<Cell>> filteredIterators = new ArrayList<>(toCollate.size());
-        for (Iterator<? extends OnDiskAtom> iter : toCollate)
-            filteredIterators.add(gatherTombstones(returnCF, iter));
+        for (Iterator<? extends OnDiskAtom> iter : toCollate) filteredIterators.add(gatherTombstones(returnCF, iter));
         collateColumns(returnCF, filteredIterators, filter, key, gcBefore, timestamp);
     }
 
     // When there is only a single source of atoms, we can skip the collate step
-    public void collateOnDiskAtom(ColumnFamily returnCF, Iterator<? extends OnDiskAtom> toCollate, int gcBefore)
-    {
+    public void collateOnDiskAtom(ColumnFamily returnCF, Iterator<? extends OnDiskAtom> toCollate, int gcBefore) {
         filter.collectReducedColumns(returnCF, gatherTombstones(returnCF, toCollate), this.key, gcBefore, timestamp);
     }
 
-    public void collateColumns(ColumnFamily returnCF, List<? extends Iterator<Cell>> toCollate, int gcBefore)
-    {
+    public void collateColumns(ColumnFamily returnCF, List<? extends Iterator<Cell>> toCollate, int gcBefore) {
         collateColumns(returnCF, toCollate, filter, this.key, gcBefore, timestamp);
     }
 
-    public static void collateColumns(ColumnFamily returnCF,
-                                      List<? extends Iterator<Cell>> toCollate,
-                                      IDiskAtomFilter filter,
-                                      DecoratedKey key,
-                                      int gcBefore,
-                                      long timestamp)
-    {
+    public static void collateColumns(ColumnFamily returnCF, List<? extends Iterator<Cell>> toCollate, IDiskAtomFilter filter, DecoratedKey key, int gcBefore, long timestamp) {
         Comparator<Cell> comparator = filter.getColumnComparator(returnCF.getComparator());
-
-        Iterator<Cell> reduced = toCollate.size() == 1
-                               ? toCollate.get(0)
-                               : MergeIterator.get(toCollate, comparator, getReducer(comparator));
-
+        Iterator<Cell> reduced = toCollate.size() == 1 ? toCollate.get(0) : MergeIterator.get(toCollate, comparator, getReducer(comparator));
         filter.collectReducedColumns(returnCF, reduced, key, gcBefore, timestamp);
     }
 
-    private static MergeIterator.Reducer<Cell, Cell> getReducer(final Comparator<Cell> comparator)
-    {
+    private static MergeIterator.Reducer<Cell, Cell> getReducer(final Comparator<Cell> comparator) {
         // define a 'reduced' iterator that merges columns w/ the same name, which
         // greatly simplifies computing liveColumns in the presence of tombstones.
-        return new MergeIterator.Reducer<Cell, Cell>()
-        {
+        return new MergeIterator.Reducer<Cell, Cell>() {
+
             Cell current;
 
-            public void reduce(Cell next)
-            {
+            public void reduce(Cell next) {
                 assert current == null || comparator.compare(current, next) == 0;
                 current = current == null ? next : current.reconcile(next);
             }
 
-            protected Cell getReduced()
-            {
+            protected Cell getReduced() {
                 assert current != null;
                 Cell toReturn = current;
                 current = null;
@@ -132,8 +106,7 @@ public class QueryFilter
             }
 
             @Override
-            public boolean trivialReduceIsTrivial()
-            {
+            public boolean trivialReduceIsTrivial() {
                 return true;
             }
         };
@@ -143,59 +116,46 @@ public class QueryFilter
      * Given an iterator of on disk atom, returns an iterator that filters the tombstone range
      * markers adding them to {@code returnCF} and returns the normal column.
      */
-    public static Iterator<Cell> gatherTombstones(final ColumnFamily returnCF, final Iterator<? extends OnDiskAtom> iter)
-    {
-        return new Iterator<Cell>()
-        {
+    public static Iterator<Cell> gatherTombstones(final ColumnFamily returnCF, final Iterator<? extends OnDiskAtom> iter) {
+        return new Iterator<Cell>() {
+
             private Cell next;
 
-            public boolean hasNext()
-            {
+            public boolean hasNext() {
                 if (next != null)
                     return true;
-
                 getNext();
                 return next != null;
             }
 
-            public Cell next()
-            {
+            public Cell next() {
                 if (next == null)
                     getNext();
-
                 assert next != null;
                 Cell toReturn = next;
                 next = null;
                 return toReturn;
             }
 
-            private void getNext()
-            {
-                while (iter.hasNext())
-                {
+            private void getNext() {
+                while (iter.hasNext()) {
                     OnDiskAtom atom = iter.next();
-
-                    if (atom instanceof Cell)
-                    {
-                        next = (Cell)atom;
+                    if (atom instanceof Cell) {
+                        next = (Cell) atom;
                         break;
-                    }
-                    else
-                    {
+                    } else {
                         returnCF.addAtom(atom);
                     }
                 }
             }
 
-            public void remove()
-            {
+            public void remove() {
                 throw new UnsupportedOperationException();
             }
         };
     }
 
-    public String getColumnFamilyName()
-    {
+    public String getColumnFamilyName() {
         return cfName;
     }
 
@@ -209,24 +169,16 @@ public class QueryFilter
      * @param limit maximum number of non-deleted columns to return
      * @param timestamp time to use for determining expiring columns' state
      */
-    public static QueryFilter getSliceFilter(DecoratedKey key,
-                                             String cfName,
-                                             Composite start,
-                                             Composite finish,
-                                             boolean reversed,
-                                             int limit,
-                                             long timestamp)
-    {
-        return new QueryFilter(key, cfName, new SliceQueryFilter(start, finish, reversed, limit), timestamp);
+    public static QueryFilter getSliceFilter(DecoratedKey key, String cfName, Composite start, Composite finish, boolean reversed, int limit, long timestamp) {
+        return ((QueryFilter) org.zlab.ocov.tracker.Runtime.monitorCreationContext(new QueryFilter(key, cfName, new SliceQueryFilter(start, finish, reversed, limit), timestamp), 79));
     }
 
     /**
      * return a QueryFilter object that includes every column in the row.
      * This is dangerous on large rows; avoid except for test code.
      */
-    public static QueryFilter getIdentityFilter(DecoratedKey key, String cfName, long timestamp)
-    {
-        return new QueryFilter(key, cfName, new IdentityQueryFilter(), timestamp);
+    public static QueryFilter getIdentityFilter(DecoratedKey key, String cfName, long timestamp) {
+        return ((QueryFilter) org.zlab.ocov.tracker.Runtime.monitorCreationContext(new QueryFilter(key, cfName, new IdentityQueryFilter(), timestamp), 80));
     }
 
     /**
@@ -235,28 +187,23 @@ public class QueryFilter
      * @param cfName column family to query
      * @param columns the column names to restrict the results to, sorted in comparator order
      */
-    public static QueryFilter getNamesFilter(DecoratedKey key, String cfName, SortedSet<CellName> columns, long timestamp)
-    {
-        return new QueryFilter(key, cfName, new NamesQueryFilter(columns), timestamp);
+    public static QueryFilter getNamesFilter(DecoratedKey key, String cfName, SortedSet<CellName> columns, long timestamp) {
+        return ((QueryFilter) org.zlab.ocov.tracker.Runtime.monitorCreationContext(new QueryFilter(key, cfName, new NamesQueryFilter(columns), timestamp), 81));
     }
 
     @Override
-    public String toString()
-    {
+    public String toString() {
         return getClass().getSimpleName() + "(key=" + key + ", cfName=" + cfName + (filter == null ? "" : ", filter=" + filter) + ")";
     }
 
-    public boolean shouldInclude(SSTableReader sstable)
-    {
+    public boolean shouldInclude(SSTableReader sstable) {
         return filter.shouldInclude(sstable);
     }
 
-    public void delete(DeletionInfo target, ColumnFamily source)
-    {
+    public void delete(DeletionInfo target, ColumnFamily source) {
         target.add(source.deletionInfo().getTopLevelDeletion());
         // source is the CF currently in the memtable, and it can be large compared to what the filter selects,
         // so only consider those range tombstones that the filter do select.
-        for (Iterator<RangeTombstone> iter = filter.getRangeTombstoneIterator(source); iter.hasNext(); )
-            target.add(iter.next(), source.getComparator());
+        for (Iterator<RangeTombstone> iter = filter.getRangeTombstoneIterator(source); iter.hasNext(); ) target.add(iter.next(), source.getComparator());
     }
 }

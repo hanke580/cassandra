@@ -23,7 +23,6 @@ import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.security.MessageDigest;
 import java.util.Iterator;
-
 import com.google.common.collect.AbstractIterator;
 import org.apache.cassandra.config.CFMetaData;
 import org.apache.cassandra.db.composites.CellName;
@@ -34,52 +33,38 @@ import org.apache.cassandra.io.sstable.format.Version;
 import org.apache.cassandra.serializers.MarshalException;
 import org.apache.cassandra.utils.FBUtilities;
 
-public abstract class AbstractCell implements Cell
-{
-    public static Iterator<OnDiskAtom> onDiskIterator(final DataInput in,
-                                                      final ColumnSerializer.Flag flag,
-                                                      final int expireBefore,
-                                                      final Version version,
-                                                      final CellNameType type)
-    {
-        return new AbstractIterator<OnDiskAtom>()
-        {
-            protected OnDiskAtom computeNext()
-            {
+public abstract class AbstractCell implements Cell {
+
+    public static Iterator<OnDiskAtom> onDiskIterator(final DataInput in, final ColumnSerializer.Flag flag, final int expireBefore, final Version version, final CellNameType type) {
+        return new AbstractIterator<OnDiskAtom>() {
+
+            protected OnDiskAtom computeNext() {
                 OnDiskAtom atom;
-                try
-                {
+                try {
                     atom = type.onDiskAtomSerializer().deserializeFromSSTable(in, flag, expireBefore, version);
-                }
-                catch (IOException e)
-                {
+                } catch (IOException e) {
                     throw new IOError(e);
                 }
                 if (atom == null)
                     return endOfData();
-
                 return atom;
             }
         };
     }
 
-    public boolean isLive()
-    {
+    public boolean isLive() {
         return true;
     }
 
-    public boolean isLive(long now)
-    {
+    public boolean isLive(long now) {
         return true;
     }
 
-    public int cellDataSize()
-    {
+    public int cellDataSize() {
         return name().dataSize() + value().remaining() + TypeSizes.NATIVE.sizeof(timestamp());
     }
 
-    public int serializedSize(CellNameType type, TypeSizes typeSizes)
-    {
+    public int serializedSize(CellNameType type, TypeSizes typeSizes) {
         /*
          * Size of a column is =
          *   size of a name (short + length of the string)
@@ -89,37 +74,31 @@ public abstract class AbstractCell implements Cell
          * + entire byte array.
         */
         int valueSize = value().remaining();
-        return ((int)type.cellSerializer().serializedSize(name(), typeSizes)) + 1 + typeSizes.sizeof(timestamp()) + typeSizes.sizeof(valueSize) + valueSize;
+        return ((int) type.cellSerializer().serializedSize(name(), typeSizes)) + 1 + typeSizes.sizeof(timestamp()) + typeSizes.sizeof(valueSize) + valueSize;
     }
 
-    public int serializationFlags()
-    {
+    public int serializationFlags() {
         return 0;
     }
 
-    public Cell diff(Cell cell)
-    {
+    public Cell diff(Cell cell) {
         if (timestamp() < cell.timestamp())
             return cell;
         return null;
     }
 
-    public void updateDigest(MessageDigest digest)
-    {
+    public void updateDigest(MessageDigest digest) {
         digest.update(name().toByteBuffer().duplicate());
         digest.update(value().duplicate());
-
         FBUtilities.updateWithLong(digest, timestamp());
         FBUtilities.updateWithByte(digest, serializationFlags());
     }
 
-    public int getLocalDeletionTime()
-    {
+    public int getLocalDeletionTime() {
         return Integer.MAX_VALUE;
     }
 
-    public Cell reconcile(Cell cell)
-    {
+    public Cell reconcile(Cell cell) {
         long ts1 = timestamp(), ts2 = cell.timestamp();
         if (ts1 != ts2)
             return ts1 < ts2 ? cell : this;
@@ -129,108 +108,80 @@ public abstract class AbstractCell implements Cell
     }
 
     @Override
-    public boolean equals(Object o)
-    {
+    public boolean equals(Object o) {
         return this == o || (o instanceof Cell && equals((Cell) o));
     }
 
-    public boolean equals(Cell cell)
-    {
-        return timestamp() == cell.timestamp() && name().equals(cell.name()) && value().equals(cell.value())
-               && serializationFlags() == cell.serializationFlags();
+    public boolean equals(Cell cell) {
+        return timestamp() == cell.timestamp() && name().equals(cell.name()) && value().equals(cell.value()) && serializationFlags() == cell.serializationFlags();
     }
 
-    public int hashCode()
-    {
+    public int hashCode() {
         throw new UnsupportedOperationException();
     }
 
-    public String getString(CellNameType comparator)
-    {
-        return String.format("%s:%b:%d@%d",
-                             comparator.getString(name()),
-                             !isLive(),
-                             value().remaining(),
-                             timestamp());
+    public String getString(CellNameType comparator) {
+        return String.format("%s:%b:%d@%d", comparator.getString(name()), !isLive(), value().remaining(), timestamp());
     }
 
-    public void validateName(CFMetaData metadata) throws MarshalException
-    {
+    public void validateName(CFMetaData metadata) throws MarshalException {
         metadata.comparator.validate(name());
     }
 
-    public void validateFields(CFMetaData metadata) throws MarshalException
-    {
+    public void validateFields(CFMetaData metadata) throws MarshalException {
         validateName(metadata);
-
         AbstractType<?> valueValidator = metadata.getValueValidator(name());
         if (valueValidator != null)
             valueValidator.validateCellValue(value());
     }
 
-    public static Cell create(CellName name, ByteBuffer value, long timestamp, int ttl, CFMetaData metadata)
-    {
+    public static Cell create(CellName name, ByteBuffer value, long timestamp, int ttl, CFMetaData metadata) {
         if (ttl <= 0)
             ttl = metadata.getDefaultTimeToLive();
-
-        return ttl > 0
-                ? new BufferExpiringCell(name, value, timestamp, ttl)
-                : new BufferCell(name, value, timestamp);
+        return ttl > 0 ? new BufferExpiringCell(name, value, timestamp, ttl) : new BufferCell(name, value, timestamp);
     }
 
-    public Cell diffCounter(Cell cell)
-    {
+    public Cell diffCounter(Cell cell) {
         assert this instanceof CounterCell : "Wrong class type: " + getClass();
-
         if (timestamp() < cell.timestamp())
             return cell;
-
         // Note that if at that point, cell can't be a tombstone. Indeed,
         // cell is the result of merging us with other nodes results, and
         // merging a CounterCell with a tombstone never return a tombstone
         // unless that tombstone timestamp is greater that the CounterCell
         // one.
         assert cell instanceof CounterCell : "Wrong class type: " + cell.getClass();
-
         if (((CounterCell) this).timestampOfLastDelete() < ((CounterCell) cell).timestampOfLastDelete())
             return cell;
-
         CounterContext.Relationship rel = CounterCell.contextManager.diff(cell.value(), value());
         return (rel == CounterContext.Relationship.GREATER_THAN || rel == CounterContext.Relationship.DISJOINT) ? cell : null;
     }
 
-    /** This is temporary until we start creating Cells of the different type (buffer vs. native) */
-    public Cell reconcileCounter(Cell cell)
-    {
+    /**
+     * This is temporary until we start creating Cells of the different type (buffer vs. native)
+     */
+    public Cell reconcileCounter(Cell cell) {
         assert this instanceof CounterCell : "Wrong class type: " + getClass();
-
         // No matter what the counter cell's timestamp is, a tombstone always takes precedence. See CASSANDRA-7346.
         if (cell instanceof DeletedCell)
             return cell;
-
         assert (cell instanceof CounterCell) : "Wrong class type: " + cell.getClass();
-
         // live < live last delete
         if (timestamp() < ((CounterCell) cell).timestampOfLastDelete())
             return cell;
-
         long timestampOfLastDelete = ((CounterCell) this).timestampOfLastDelete();
-
         // live last delete > live
         if (timestampOfLastDelete > cell.timestamp())
             return this;
-
         // live + live. return one of the cells if its context is a superset of the other's, or merge them otherwise
         ByteBuffer context = CounterCell.contextManager.merge(value(), cell.value());
         if (context == value() && timestamp() >= cell.timestamp() && timestampOfLastDelete >= ((CounterCell) cell).timestampOfLastDelete())
             return this;
         else if (context == cell.value() && cell.timestamp() >= timestamp() && ((CounterCell) cell).timestampOfLastDelete() >= timestampOfLastDelete)
             return cell;
-        else // merge clocks and timestamps.
-            return new BufferCounterCell(name(),
-                                         context,
-                                         Math.max(timestamp(), cell.timestamp()),
-                                         Math.max(timestampOfLastDelete, ((CounterCell) cell).timestampOfLastDelete()));
+        else {
+            // merge clocks and timestamps.
+            return ((BufferCounterCell) org.zlab.ocov.tracker.Runtime.monitorCreationContext(new BufferCounterCell(name(), context, Math.max(timestamp(), cell.timestamp()), Math.max(timestampOfLastDelete, ((CounterCell) cell).timestampOfLastDelete())), 75));
+        }
     }
-
 }

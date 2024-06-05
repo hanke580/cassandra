@@ -18,7 +18,6 @@
 package org.apache.cassandra.db;
 
 import java.security.MessageDigest;
-
 import org.apache.cassandra.config.CFMetaData;
 import org.apache.cassandra.db.composites.CellNameType;
 import org.apache.cassandra.serializers.MarshalException;
@@ -29,95 +28,81 @@ import org.apache.cassandra.utils.memory.AbstractAllocator;
 import org.apache.cassandra.utils.memory.MemtableAllocator;
 import org.apache.cassandra.utils.memory.NativeAllocator;
 
-public class NativeCounterCell extends NativeCell implements CounterCell
-{
+public class NativeCounterCell extends NativeCell implements CounterCell {
+
     private static final long SIZE = ObjectSizes.measure(new NativeCounterCell());
 
-    private NativeCounterCell()
-    {}
+    private NativeCounterCell() {
+    }
 
-    public NativeCounterCell(NativeAllocator allocator, OpOrder.Group writeOp, CounterCell copyOf)
-    {
+    public NativeCounterCell(NativeAllocator allocator, OpOrder.Group writeOp, CounterCell copyOf) {
         super(allocator, writeOp, copyOf);
     }
 
     @Override
-    protected void construct(Cell from)
-    {
+    protected void construct(Cell from) {
         super.construct(from);
         setLong(internalSize() - 8, ((CounterCell) from).timestampOfLastDelete());
     }
 
     @Override
-    protected int postfixSize()
-    {
+    protected int postfixSize() {
         return 8;
     }
 
     @Override
-    protected int sizeOf(Cell cell)
-    {
+    protected int sizeOf(Cell cell) {
         return 8 + super.sizeOf(cell);
     }
 
     @Override
-    public long timestampOfLastDelete()
-    {
+    public long timestampOfLastDelete() {
         return getLong(internalSize() - 8);
     }
 
     @Override
-    public long total()
-    {
+    public long total() {
         return contextManager.total(value());
     }
 
     @Override
-    public boolean hasLegacyShards()
-    {
+    public boolean hasLegacyShards() {
         return contextManager.hasLegacyShards(value());
     }
 
     @Override
-    public Cell markLocalToBeCleared()
-    {
+    public Cell markLocalToBeCleared() {
         throw new UnsupportedOperationException();
     }
 
     @Override
-    public Cell diff(Cell cell)
-    {
+    public Cell diff(Cell cell) {
         return diffCounter(cell);
     }
 
     @Override
-    public Cell reconcile(Cell cell)
-    {
+    public Cell reconcile(Cell cell) {
         return reconcileCounter(cell);
     }
 
     @Override
-    public int serializationFlags()
-    {
+    public int serializationFlags() {
         return ColumnSerializer.COUNTER_MASK;
     }
 
     @Override
-    public int cellDataSize()
-    {
+    public int cellDataSize() {
         // A counter column adds 8 bytes for timestampOfLastDelete to Cell.
         return super.cellDataSize() + TypeSizes.NATIVE.sizeof(timestampOfLastDelete());
     }
 
     @Override
-    public int serializedSize(CellNameType type, TypeSizes typeSizes)
-    {
+    public int serializedSize(CellNameType type, TypeSizes typeSizes) {
         return super.serializedSize(type, typeSizes) + typeSizes.sizeof(timestampOfLastDelete());
     }
 
     @Override
-    public void validateFields(CFMetaData metadata) throws MarshalException
-    {
+    public void validateFields(CFMetaData metadata) throws MarshalException {
         validateName(metadata);
         // We cannot use the value validator as for other columns as the CounterColumnType validate a long,
         // which is not the internal representation of counters
@@ -131,56 +116,42 @@ public class NativeCounterCell extends NativeCell implements CounterCell
      * node.
      */
     @Override
-    public void updateDigest(MessageDigest digest)
-    {
+    public void updateDigest(MessageDigest digest) {
         updateWithName(digest);
-
         // We don't take the deltas into account in a digest
         contextManager.updateDigest(digest, value());
-
         FBUtilities.updateWithLong(digest, timestamp());
         FBUtilities.updateWithByte(digest, serializationFlags());
         FBUtilities.updateWithLong(digest, timestampOfLastDelete());
     }
 
     @Override
-    public String getString(CellNameType comparator)
-    {
-        return String.format("%s(%s:false:%s@%d!%d)",
-                             getClass().getSimpleName(),
-                             comparator.getString(name()),
-                             contextManager.toString(value()),
-                             timestamp(),
-                             timestampOfLastDelete());
+    public String getString(CellNameType comparator) {
+        return String.format("%s(%s:false:%s@%d!%d)", getClass().getSimpleName(), comparator.getString(name()), contextManager.toString(value()), timestamp(), timestampOfLastDelete());
     }
 
     @Override
-    public CounterCell localCopy(CFMetaData metadata, AbstractAllocator allocator)
-    {
-        return new BufferCounterCell(copy(metadata, allocator), allocator.clone(value()), timestamp(), timestampOfLastDelete());
+    public CounterCell localCopy(CFMetaData metadata, AbstractAllocator allocator) {
+        return ((BufferCounterCell) org.zlab.ocov.tracker.Runtime.monitorCreationContext(new BufferCounterCell(copy(metadata, allocator), allocator.clone(value()), timestamp(), timestampOfLastDelete()), 76));
     }
 
     @Override
-    public CounterCell localCopy(CFMetaData metadata, MemtableAllocator allocator, OpOrder.Group opGroup)
-    {
+    public CounterCell localCopy(CFMetaData metadata, MemtableAllocator allocator, OpOrder.Group opGroup) {
         return allocator.clone(this, metadata, opGroup);
     }
 
     @Override
-    public long unsharedHeapSizeExcludingData()
-    {
+    public long unsharedHeapSizeExcludingData() {
         return SIZE;
     }
 
     @Override
-    public long unsharedHeapSize()
-    {
+    public long unsharedHeapSize() {
         return SIZE;
     }
 
     @Override
-    public boolean equals(Cell cell)
-    {
+    public boolean equals(Cell cell) {
         return super.equals(cell) && timestampOfLastDelete() == ((CounterCell) cell).timestampOfLastDelete();
     }
 }

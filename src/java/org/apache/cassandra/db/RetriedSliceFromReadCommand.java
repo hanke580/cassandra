@@ -18,39 +18,33 @@
 package org.apache.cassandra.db;
 
 import java.nio.ByteBuffer;
-
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-
 import org.apache.cassandra.db.filter.SliceQueryFilter;
 
-public class RetriedSliceFromReadCommand extends SliceFromReadCommand
-{
+public class RetriedSliceFromReadCommand extends SliceFromReadCommand {
+
     static final Logger logger = LoggerFactory.getLogger(RetriedSliceFromReadCommand.class);
+
     public final int originalCount;
 
-    public RetriedSliceFromReadCommand(String keyspaceName, ByteBuffer key, String cfName, long timestamp, SliceQueryFilter filter, int originalCount)
-    {
+    public RetriedSliceFromReadCommand(String keyspaceName, ByteBuffer key, String cfName, long timestamp, SliceQueryFilter filter, int originalCount) {
         super(keyspaceName, key, cfName, timestamp, filter);
         this.originalCount = originalCount;
     }
 
     @Override
-    public ReadCommand copy()
-    {
-        return new RetriedSliceFromReadCommand(ksName, key, cfName, timestamp, filter, originalCount).setIsDigestQuery(isDigestQuery());
+    public ReadCommand copy() {
+        return ((RetriedSliceFromReadCommand) org.zlab.ocov.tracker.Runtime.monitorCreationContext(new RetriedSliceFromReadCommand(ksName, key, cfName, timestamp, filter, originalCount), 65)).setIsDigestQuery(isDigestQuery());
     }
 
     @Override
-    public int getOriginalRequestedCount()
-    {
+    public int getOriginalRequestedCount() {
         return originalCount;
     }
 
     @Override
-    public String toString()
-    {
+    public String toString() {
         return "RetriedSliceFromReadCommand(" + "cmd=" + super.toString() + ", originalCount=" + originalCount + ")";
     }
-
 }
