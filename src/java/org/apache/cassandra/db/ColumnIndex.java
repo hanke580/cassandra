@@ -19,9 +19,7 @@ package org.apache.cassandra.db;
 
 import java.io.IOException;
 import java.util.*;
-
 import com.google.common.annotations.VisibleForTesting;
-
 import org.apache.cassandra.config.DatabaseDescriptor;
 import org.apache.cassandra.db.rows.*;
 import org.apache.cassandra.io.sstable.IndexHelper;
@@ -29,32 +27,28 @@ import org.apache.cassandra.io.sstable.format.Version;
 import org.apache.cassandra.io.util.SequentialWriter;
 import org.apache.cassandra.utils.ByteBufferUtil;
 
-public class ColumnIndex
-{
+public class ColumnIndex {
+
     public final long partitionHeaderLength;
+
     public final List<IndexHelper.IndexInfo> columnsIndex;
 
     private static final ColumnIndex EMPTY = new ColumnIndex(-1, Collections.<IndexHelper.IndexInfo>emptyList());
 
-    private ColumnIndex(long partitionHeaderLength, List<IndexHelper.IndexInfo> columnsIndex)
-    {
+    private ColumnIndex(long partitionHeaderLength, List<IndexHelper.IndexInfo> columnsIndex) {
         assert columnsIndex != null;
-
         this.partitionHeaderLength = partitionHeaderLength;
         this.columnsIndex = columnsIndex;
     }
 
-    public static ColumnIndex writeAndBuildIndex(UnfilteredRowIterator iterator, SequentialWriter output, SerializationHeader header, Version version) throws IOException
-    {
+    public static ColumnIndex writeAndBuildIndex(UnfilteredRowIterator iterator, SequentialWriter output, SerializationHeader header, Version version) throws IOException {
         assert !iterator.isEmpty() && version.storeRows();
-
-        Builder builder = new Builder(iterator, output, header, version.correspondingMessagingVersion());
+        Builder builder = ((Builder) org.zlab.ocov.tracker.Runtime.update(new Builder(iterator, output, header, version.correspondingMessagingVersion()), 62, iterator, output, header, version));
         return builder.build();
     }
 
     @VisibleForTesting
-    public static ColumnIndex nothing()
-    {
+    public static ColumnIndex nothing() {
         return EMPTY;
     }
 
@@ -62,32 +56,35 @@ public class ColumnIndex
      * Help to create an index for a column family based on size of columns,
      * and write said columns to disk.
      */
-    private static class Builder
-    {
+    private static class Builder {
+
         private final UnfilteredRowIterator iterator;
+
         private final SequentialWriter writer;
+
         private final SerializationHeader header;
+
         private final int version;
 
         private final List<IndexHelper.IndexInfo> columnsIndex = new ArrayList<>();
+
         private final long initialPosition;
+
         private long headerLength = -1;
 
         private long startPosition = -1;
 
         private int written;
+
         private long previousRowStart;
 
         private ClusteringPrefix firstClustering;
+
         private ClusteringPrefix lastClustering;
 
         private DeletionTime openMarker;
 
-        public Builder(UnfilteredRowIterator iterator,
-                       SequentialWriter writer,
-                       SerializationHeader header,
-                       int version)
-        {
+        public Builder(UnfilteredRowIterator iterator, SequentialWriter writer, SerializationHeader header, int version) {
             this.iterator = iterator;
             this.writer = writer;
             this.header = header;
@@ -95,84 +92,65 @@ public class ColumnIndex
             this.initialPosition = writer.position();
         }
 
-        private void writePartitionHeader(UnfilteredRowIterator iterator) throws IOException
-        {
+        private void writePartitionHeader(UnfilteredRowIterator iterator) throws IOException {
             ByteBufferUtil.writeWithShortLength(iterator.partitionKey().getKey(), writer);
             DeletionTime.serializer.serialize(iterator.partitionLevelDeletion(), writer);
             if (header.hasStatic())
                 UnfilteredSerializer.serializer.serializeStaticRow(iterator.staticRow(), header, writer, version);
         }
 
-        public ColumnIndex build() throws IOException
-        {
+        public ColumnIndex build() throws IOException {
             writePartitionHeader(iterator);
             this.headerLength = writer.position() - initialPosition;
-
-            while (iterator.hasNext())
+            org.zlab.ocov.tracker.Runtime.update(this, 63);
+            while (iterator.hasNext()) {
                 add(iterator.next());
-
+            }
             return close();
         }
 
-        private long currentPosition()
-        {
+        private long currentPosition() {
             return writer.position() - initialPosition;
         }
 
-        private void addIndexBlock()
-        {
-            IndexHelper.IndexInfo cIndexInfo = new IndexHelper.IndexInfo(firstClustering,
-                                                                         lastClustering,
-                                                                         startPosition,
-                                                                         currentPosition() - startPosition,
-                                                                         openMarker);
+        private void addIndexBlock() {
+            IndexHelper.IndexInfo cIndexInfo = new IndexHelper.IndexInfo(firstClustering, lastClustering, startPosition, currentPosition() - startPosition, openMarker);
             columnsIndex.add(cIndexInfo);
             firstClustering = null;
         }
 
-        private void add(Unfiltered unfiltered) throws IOException
-        {
+        private void add(Unfiltered unfiltered) throws IOException {
             long pos = currentPosition();
-
-            if (firstClustering == null)
-            {
+            if (firstClustering == null) {
                 // Beginning of an index block. Remember the start and position
                 firstClustering = unfiltered.clustering();
                 startPosition = pos;
             }
-
             UnfilteredSerializer.serializer.serialize(unfiltered, header, writer, pos - previousRowStart, version);
             lastClustering = unfiltered.clustering();
             previousRowStart = pos;
             ++written;
-
-            if (unfiltered.kind() == Unfiltered.Kind.RANGE_TOMBSTONE_MARKER)
-            {
-                RangeTombstoneMarker marker = (RangeTombstoneMarker)unfiltered;
+            if (unfiltered.kind() == Unfiltered.Kind.RANGE_TOMBSTONE_MARKER) {
+                RangeTombstoneMarker marker = (RangeTombstoneMarker) unfiltered;
                 openMarker = marker.isOpen(false) ? marker.openDeletionTime(false) : null;
             }
-
             // if we hit the column index size that we have to index after, go ahead and index it.
-            if (currentPosition() - startPosition >= DatabaseDescriptor.getColumnIndexSize())
+            if ((org.zlab.ocov.tracker.Runtime.updateBranch(currentPosition() - startPosition, DatabaseDescriptor.getColumnIndexSize(), ">=", 14)))
                 addIndexBlock();
-
         }
 
-        private ColumnIndex close() throws IOException
-        {
+        private ColumnIndex close() throws IOException {
             UnfilteredSerializer.serializer.writeEndOfPartition(writer);
-
             // It's possible we add no rows, just a top level deletion
             if (written == 0)
                 return ColumnIndex.EMPTY;
-
             // the last column may have fallen on an index boundary already.  if not, index it explicitly.
-            if (firstClustering != null)
+            if (firstClustering != null) {
                 addIndexBlock();
-
+            }
             // we should always have at least one computed index block, but we only write it out if there is more than that.
             assert columnsIndex.size() > 0 && headerLength >= 0;
-            return new ColumnIndex(headerLength, columnsIndex);
+            return ((ColumnIndex) org.zlab.ocov.tracker.Runtime.monitorCreationContext(new ColumnIndex(headerLength, columnsIndex), 145));
         }
     }
 }

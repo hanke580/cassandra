@@ -23,7 +23,6 @@ import java.util.*;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.atomic.AtomicLong;
-
 import com.google.common.base.Throwables;
 import com.google.common.util.concurrent.Uninterruptibles;
 import org.apache.commons.lang3.StringUtils;
@@ -43,12 +42,14 @@ import org.slf4j.LoggerFactory;
 
 // TODO convert this to a Builder pattern instead of encouraging M.add directly,
 // which is less-efficient since we have to keep a mutable HashMap around
-public class Mutation implements IMutation
-{
+public class Mutation implements IMutation {
+
     public static final MutationSerializer serializer = new MutationSerializer();
+
     private static final Logger logger = LoggerFactory.getLogger(Mutation.class);
 
     public static final String FORWARD_TO = "FWD_TO";
+
     public static final String FORWARD_FROM = "FWD_FRM";
 
     // todo this is redundant
@@ -56,78 +57,67 @@ public class Mutation implements IMutation
     private final String keyspaceName;
 
     private final DecoratedKey key;
+
     // map of column family id to mutations for that column family.
     private final Map<UUID, PartitionUpdate> modifications;
 
     // Time at which this mutation was instantiated
     public final long createdAt = System.currentTimeMillis();
+
     // keep track of when mutation has started waiting for a MV partition lock
     public final AtomicLong viewLockAcquireStart = new AtomicLong(0);
 
-    public Mutation(String keyspaceName, DecoratedKey key)
-    {
+    public Mutation(String keyspaceName, DecoratedKey key) {
         this(keyspaceName, key, new HashMap<>());
     }
 
-    public Mutation(PartitionUpdate update)
-    {
+    public Mutation(PartitionUpdate update) {
         this(update.metadata().ksName, update.partitionKey(), Collections.singletonMap(update.metadata().cfId, update));
     }
 
-    protected Mutation(String keyspaceName, DecoratedKey key, Map<UUID, PartitionUpdate> modifications)
-    {
+    protected Mutation(String keyspaceName, DecoratedKey key, Map<UUID, PartitionUpdate> modifications) {
         this.keyspaceName = keyspaceName;
         this.key = key;
         this.modifications = modifications;
     }
 
-    public Mutation copy()
-    {
-        return new Mutation(keyspaceName, key, new HashMap<>(modifications));
+    public Mutation copy() {
+        return ((Mutation) org.zlab.ocov.tracker.Runtime.monitorCreationContext(new Mutation(keyspaceName, key, new HashMap<>(modifications)), 243));
     }
 
-    public Mutation without(Set<UUID> cfIds)
-    {
+    public Mutation without(Set<UUID> cfIds) {
         if (cfIds.isEmpty())
             return this;
-
         Mutation copy = copy();
         copy.modifications.keySet().removeAll(cfIds);
         return copy;
     }
 
-    public Mutation without(UUID cfId)
-    {
+    public Mutation without(UUID cfId) {
         return without(Collections.singleton(cfId));
     }
 
-    public String getKeyspaceName()
-    {
+    public String getKeyspaceName() {
         return keyspaceName;
     }
 
-    public Collection<UUID> getColumnFamilyIds()
-    {
+    public Collection<UUID> getColumnFamilyIds() {
         return modifications.keySet();
     }
 
-    public DecoratedKey key()
-    {
+    public DecoratedKey key() {
         return key;
     }
 
-    public Collection<PartitionUpdate> getPartitionUpdates()
-    {
+    public Collection<PartitionUpdate> getPartitionUpdates() {
         return modifications.values();
     }
 
-    public PartitionUpdate getPartitionUpdate(UUID cfId)
-    {
+    public PartitionUpdate getPartitionUpdate(UUID cfId) {
         return modifications.get(cfId);
     }
 
-    public Mutation add(PartitionUpdate update)
-    {
+    public Mutation add(PartitionUpdate update) {
         assert update != null;
         assert update.partitionKey().getPartitioner() == key.getPartitioner();
         PartitionUpdate prev = modifications.put(update.metadata().cfId, update);
@@ -137,13 +127,11 @@ public class Mutation implements IMutation
         return this;
     }
 
-    public PartitionUpdate get(CFMetaData cfm)
-    {
+    public PartitionUpdate get(CFMetaData cfm) {
         return modifications.get(cfm.cfId);
     }
 
-    public boolean isEmpty()
-    {
+    public boolean isEmpty() {
         return modifications.isEmpty();
     }
 
@@ -158,18 +146,14 @@ public class Mutation implements IMutation
      * @throws IllegalArgumentException if not all the mutations are on the same
      * keyspace and key.
      */
-    public static Mutation merge(List<Mutation> mutations)
-    {
+    public static Mutation merge(List<Mutation> mutations) {
         assert !mutations.isEmpty();
-
         if (mutations.size() == 1)
             return mutations.get(0);
-
         Set<UUID> updatedTables = new HashSet<>();
         String ks = null;
         DecoratedKey key = null;
-        for (Mutation mutation : mutations)
-        {
+        for (Mutation mutation : mutations) {
             updatedTables.addAll(mutation.modifications.keySet());
             if (ks != null && !ks.equals(mutation.keyspaceName))
                 throw new IllegalArgumentException();
@@ -178,40 +162,32 @@ public class Mutation implements IMutation
             ks = mutation.keyspaceName;
             key = mutation.key;
         }
-
         List<PartitionUpdate> updates = new ArrayList<>(mutations.size());
         Map<UUID, PartitionUpdate> modifications = new HashMap<>(updatedTables.size());
-        for (UUID table : updatedTables)
-        {
-            for (Mutation mutation : mutations)
-            {
+        for (UUID table : updatedTables) {
+            for (Mutation mutation : mutations) {
                 PartitionUpdate upd = mutation.modifications.get(table);
                 if (upd != null)
                     updates.add(upd);
             }
-
             if (updates.isEmpty())
                 continue;
-
             modifications.put(table, updates.size() == 1 ? updates.get(0) : PartitionUpdate.merge(updates));
             updates.clear();
         }
-        return new Mutation(ks, key, modifications);
+        return ((Mutation) org.zlab.ocov.tracker.Runtime.monitorCreationContext(new Mutation(ks, key, modifications), 244));
     }
 
-    public CompletableFuture<?> applyFuture()
-    {
+    public CompletableFuture<?> applyFuture() {
         Keyspace ks = Keyspace.open(keyspaceName);
         return ks.applyFuture(this, Keyspace.open(keyspaceName).getMetadata().params.durableWrites, true);
     }
 
-    public void apply(boolean durableWrites, boolean isDroppable)
-    {
-        Keyspace.open(keyspaceName).apply(this, durableWrites, true, isDroppable);
+    public void apply(boolean durableWrites, boolean isDroppable) {
+        ((org.apache.cassandra.db.Keyspace) org.zlab.ocov.tracker.Runtime.update(Keyspace.open(keyspaceName), 120, durableWrites, isDroppable)).apply(this, durableWrites, true, isDroppable);
     }
 
-    public void apply(boolean durableWrites)
-    {
+    public void apply(boolean durableWrites) {
         apply(durableWrites, true);
     }
 
@@ -219,154 +195,114 @@ public class Mutation implements IMutation
      * This is equivalent to calling commit. Applies the changes to
      * to the keyspace that is obtained by calling Keyspace.open().
      */
-    public void apply()
-    {
+    public void apply() {
         apply(Keyspace.open(keyspaceName).getMetadata().params.durableWrites);
     }
 
-    public void applyUnsafe()
-    {
+    public void applyUnsafe() {
         apply(false);
     }
 
-    public MessageOut<Mutation> createMessage()
-    {
+    public MessageOut<Mutation> createMessage() {
         return createMessage(MessagingService.Verb.MUTATION);
     }
 
-    public MessageOut<Mutation> createMessage(MessagingService.Verb verb)
-    {
+    public MessageOut<Mutation> createMessage(MessagingService.Verb verb) {
         return new MessageOut<>(verb, this, serializer);
     }
 
-    public long getTimeout()
-    {
+    public long getTimeout() {
         return DatabaseDescriptor.getWriteRpcTimeout();
     }
 
-    public int smallestGCGS()
-    {
+    public int smallestGCGS() {
         int gcgs = Integer.MAX_VALUE;
-        for (PartitionUpdate update : getPartitionUpdates())
-            gcgs = Math.min(gcgs, update.metadata().params.gcGraceSeconds);
+        for (PartitionUpdate update : getPartitionUpdates()) gcgs = Math.min(gcgs, update.metadata().params.gcGraceSeconds);
         return gcgs;
     }
 
-    public String toString()
-    {
+    public String toString() {
         return toString(false);
     }
 
-    public String toString(boolean shallow)
-    {
+    public String toString(boolean shallow) {
         StringBuilder buff = new StringBuilder("Mutation(");
         buff.append("keyspace='").append(keyspaceName).append('\'');
         buff.append(", key='").append(ByteBufferUtil.bytesToHex(key.getKey())).append('\'');
         buff.append(", modifications=[");
-        if (shallow)
-        {
+        if (shallow) {
             List<String> cfnames = new ArrayList<String>(modifications.size());
-            for (UUID cfid : modifications.keySet())
-            {
+            for (UUID cfid : modifications.keySet()) {
                 CFMetaData cfm = Schema.instance.getCFMetaData(cfid);
                 cfnames.add(cfm == null ? "-dropped-" : cfm.cfName);
             }
             buff.append(StringUtils.join(cfnames, ", "));
-        }
-        else
-        {
+        } else {
             buff.append("\n  ").append(StringUtils.join(modifications.values(), "\n  ")).append("\n");
         }
         return buff.append("])").toString();
     }
 
-    public static class MutationSerializer implements IVersionedSerializer<Mutation>
-    {
-        public void serialize(Mutation mutation, DataOutputPlus out, int version) throws IOException
-        {
+    public static class MutationSerializer implements IVersionedSerializer<Mutation> {
+
+        public void serialize(Mutation mutation, DataOutputPlus out, int version) throws IOException {
             if (version < MessagingService.VERSION_20)
                 out.writeUTF(mutation.getKeyspaceName());
-
             /* serialize the modifications in the mutation */
             int size = mutation.modifications.size();
-
-            if (version < MessagingService.VERSION_30)
-            {
+            if (version < MessagingService.VERSION_30) {
                 ByteBufferUtil.writeWithShortLength(mutation.key().getKey(), out);
                 out.writeInt(size);
-            }
-            else
-            {
+            } else {
                 out.writeUnsignedVInt(size);
             }
-
             assert size > 0;
-            for (Map.Entry<UUID, PartitionUpdate> entry : mutation.modifications.entrySet())
-                PartitionUpdate.serializer.serialize(entry.getValue(), out, version);
+            for (Map.Entry<UUID, PartitionUpdate> entry : mutation.modifications.entrySet()) PartitionUpdate.serializer.serialize(entry.getValue(), out, version);
         }
 
-        public Mutation deserialize(DataInputPlus in, int version, SerializationHelper.Flag flag) throws IOException
-        {
+        public Mutation deserialize(DataInputPlus in, int version, SerializationHelper.Flag flag) throws IOException {
             if (version < MessagingService.VERSION_20)
-                in.readUTF(); // read pre-2.0 keyspace name
-
+                // read pre-2.0 keyspace name
+                in.readUTF();
             ByteBuffer key = null;
             int size;
-            if (version < MessagingService.VERSION_30)
-            {
+            if (version < MessagingService.VERSION_30) {
                 key = ByteBufferUtil.readWithShortLength(in);
                 size = in.readInt();
+            } else {
+                size = (int) in.readUnsignedVInt();
             }
-            else
-            {
-                size = (int)in.readUnsignedVInt();
-            }
-
             assert size > 0;
-
             PartitionUpdate update = PartitionUpdate.serializer.deserialize(in, version, flag, key);
-            if (size == 1)
-                return new Mutation(update);
-
+            if (size == 1) {
+                return ((Mutation) org.zlab.ocov.tracker.Runtime.update(new Mutation(update), 121, in, version, flag));
+            }
             Map<UUID, PartitionUpdate> modifications = new HashMap<>(size);
             DecoratedKey dk = update.partitionKey();
-
             modifications.put(update.metadata().cfId, update);
-            for (int i = 1; i < size; ++i)
-            {
+            for (int i = 1; i < size; ++i) {
                 update = PartitionUpdate.serializer.deserialize(in, version, flag, dk);
                 modifications.put(update.metadata().cfId, update);
             }
-
-            return new Mutation(update.metadata().ksName, dk, modifications);
+            return ((Mutation) org.zlab.ocov.tracker.Runtime.monitorCreationContext(new Mutation(update.metadata().ksName, dk, modifications), 245));
         }
 
-        public Mutation deserialize(DataInputPlus in, int version) throws IOException
-        {
+        public Mutation deserialize(DataInputPlus in, int version) throws IOException {
             return deserialize(in, version, SerializationHelper.Flag.FROM_REMOTE);
         }
 
-        public long serializedSize(Mutation mutation, int version)
-        {
+        public long serializedSize(Mutation mutation, int version) {
             int size = 0;
-
             if (version < MessagingService.VERSION_20)
                 size += TypeSizes.sizeof(mutation.getKeyspaceName());
-
-            if (version < MessagingService.VERSION_30)
-            {
+            if (version < MessagingService.VERSION_30) {
                 int keySize = mutation.key().getKey().remaining();
                 size += TypeSizes.sizeof((short) keySize) + keySize;
                 size += TypeSizes.sizeof(mutation.modifications.size());
-            }
-            else
-            {
+            } else {
                 size += TypeSizes.sizeofUnsignedVInt(mutation.modifications.size());
             }
-
-            for (Map.Entry<UUID, PartitionUpdate> entry : mutation.modifications.entrySet())
-                size += PartitionUpdate.serializer.serializedSize(entry.getValue(), version);
-
+            for (Map.Entry<UUID, PartitionUpdate> entry : mutation.modifications.entrySet()) size += PartitionUpdate.serializer.serializedSize(entry.getValue(), version);
             return size;
         }
     }

@@ -18,7 +18,6 @@
 package org.apache.cassandra.io.sstable.format.big;
 
 import java.util.Set;
-
 import org.apache.cassandra.config.CFMetaData;
 import org.apache.cassandra.db.RowIndexEntry;
 import org.apache.cassandra.db.SerializationHeader;
@@ -37,68 +36,56 @@ import org.apache.cassandra.utils.ChecksumType;
 /**
  * Legacy bigtable format
  */
-public class BigFormat implements SSTableFormat
-{
+public class BigFormat implements SSTableFormat {
+
     public static final BigFormat instance = new BigFormat();
+
     public static final Version latestVersion = new BigVersion(BigVersion.current_version);
+
     private static final SSTableReader.Factory readerFactory = new ReaderFactory();
+
     private static final SSTableWriter.Factory writerFactory = new WriterFactory();
 
-    private BigFormat()
-    {
-
+    private BigFormat() {
     }
 
     @Override
-    public Version getLatestVersion()
-    {
+    public Version getLatestVersion() {
         return latestVersion;
     }
 
     @Override
-    public Version getVersion(String version)
-    {
+    public Version getVersion(String version) {
         return new BigVersion(version);
     }
 
     @Override
-    public SSTableWriter.Factory getWriterFactory()
-    {
+    public SSTableWriter.Factory getWriterFactory() {
         return writerFactory;
     }
 
     @Override
-    public SSTableReader.Factory getReaderFactory()
-    {
+    public SSTableReader.Factory getReaderFactory() {
         return readerFactory;
     }
 
     @Override
-    public RowIndexEntry.IndexSerializer getIndexSerializer(CFMetaData metadata, Version version, SerializationHeader header)
-    {
+    public RowIndexEntry.IndexSerializer getIndexSerializer(CFMetaData metadata, Version version, SerializationHeader header) {
         return new RowIndexEntry.Serializer(metadata, version, header);
     }
 
-    static class WriterFactory extends SSTableWriter.Factory
-    {
+    static class WriterFactory extends SSTableWriter.Factory {
+
         @Override
-        public SSTableWriter open(Descriptor descriptor,
-                                  long keyCount,
-                                  long repairedAt,
-                                  CFMetaData metadata,
-                                  MetadataCollector metadataCollector,
-                                  SerializationHeader header,
-                                  LifecycleTransaction txn)
-        {
-            return new BigTableWriter(descriptor, keyCount, repairedAt, metadata, metadataCollector, header, txn);
+        public SSTableWriter open(Descriptor descriptor, long keyCount, long repairedAt, CFMetaData metadata, MetadataCollector metadataCollector, SerializationHeader header, LifecycleTransaction txn) {
+            return ((BigTableWriter) org.zlab.ocov.tracker.Runtime.monitorCreationContext(new BigTableWriter(descriptor, keyCount, repairedAt, metadata, metadataCollector, header, txn), 284));
         }
     }
 
-    static class ReaderFactory extends SSTableReader.Factory
-    {
+    static class ReaderFactory extends SSTableReader.Factory {
+
         @Override
-        public SSTableReader open(Descriptor descriptor, Set<Component> components, CFMetaData metadata, Long maxDataAge, StatsMetadata sstableMetadata, SSTableReader.OpenReason openReason, SerializationHeader header)
-        {
+        public SSTableReader open(Descriptor descriptor, Set<Component> components, CFMetaData metadata, Long maxDataAge, StatsMetadata sstableMetadata, SSTableReader.OpenReason openReason, SerializationHeader header) {
             return new BigTableReader(descriptor, components, metadata, maxDataAge, sstableMetadata, openReason, header);
         }
     }
@@ -109,9 +96,10 @@ public class BigFormat implements SSTableFormat
     //
     // Minor versions were introduced with version "hb" for Cassandra 1.0.3; prior to that,
     // we always incremented the major version.
-    static class BigVersion extends Version
-    {
+    static class BigVersion extends Version {
+
         public static final String current_version = "mc";
+
         public static final String earliest_supported_version = "jb";
 
         // jb (2.0.1): switch from crc32 to adler32 for compression checksums
@@ -128,24 +116,37 @@ public class BigFormat implements SSTableFormat
         // mc (3.0.8, 3.9): commit log intervals included
         //
         // NOTE: when adding a new version, please add that to LegacySSTableTest, too.
-
         private final boolean isLatestVersion;
+
         private final boolean hasSamplingLevel;
+
         private final boolean newStatsFile;
+
         private final ChecksumType compressedChecksumType;
+
         private final ChecksumType uncompressedChecksumType;
+
         private final boolean hasRepairedAt;
+
         private final boolean tracksLegacyCounterShards;
+
         private final boolean newFileName;
+
         public final boolean storeRows;
-        public final int correspondingMessagingVersion; // Only use by storage that 'storeRows' so far
+
+        // Only use by storage that 'storeRows' so far
+        public final int correspondingMessagingVersion;
+
         public final boolean hasBoundaries;
+
         /**
          * CASSANDRA-8413: 3.0 bloom filter representation changed (two longs just swapped)
          * have no 'static' bits caused by using the same upper bits for both bloom filter and token distribution.
          */
         private final boolean hasOldBfHashOrder;
+
         private final boolean hasCommitLogLowerBound;
+
         private final boolean hasCommitLogIntervals;
 
         /**
@@ -153,143 +154,115 @@ public class BigFormat implements SSTableFormat
          */
         private final boolean hasCompactionAncestors;
 
-        BigVersion(String version)
-        {
+        BigVersion(String version) {
             super(instance, version);
-
             isLatestVersion = version.compareTo(current_version) == 0;
             hasSamplingLevel = version.compareTo("ka") >= 0;
             newStatsFile = version.compareTo("ka") >= 0;
-
             //For a while Adler32 was in use, now the CRC32 instrinsic is very good especially after Haswell
             //PureJavaCRC32 was always faster than Adler32. See CASSANDRA-8684
             ChecksumType checksumType = ChecksumType.CRC32;
             if (version.compareTo("ka") >= 0 && version.compareTo("ma") < 0)
                 checksumType = ChecksumType.Adler32;
             this.uncompressedChecksumType = checksumType;
-
             checksumType = ChecksumType.CRC32;
             if (version.compareTo("jb") >= 0 && version.compareTo("ma") < 0)
                 checksumType = ChecksumType.Adler32;
             this.compressedChecksumType = checksumType;
-
             hasRepairedAt = version.compareTo("ka") >= 0;
             tracksLegacyCounterShards = version.compareTo("ka") >= 0;
-
             newFileName = version.compareTo("la") >= 0;
-
             hasOldBfHashOrder = version.compareTo("ma") < 0;
             hasCompactionAncestors = version.compareTo("ma") < 0;
             storeRows = version.compareTo("ma") >= 0;
-            correspondingMessagingVersion = storeRows
-                                          ? MessagingService.VERSION_30
-                                          : MessagingService.VERSION_21;
-
+            correspondingMessagingVersion = storeRows ? MessagingService.VERSION_30 : MessagingService.VERSION_21;
             hasBoundaries = version.compareTo("ma") < 0;
-            hasCommitLogLowerBound = (version.compareTo("lb") >= 0 && version.compareTo("ma") < 0)
-                                     || version.compareTo("mb") >= 0;
+            hasCommitLogLowerBound = (version.compareTo("lb") >= 0 && version.compareTo("ma") < 0) || version.compareTo("mb") >= 0;
             hasCommitLogIntervals = version.compareTo("mc") >= 0;
         }
 
         @Override
-        public boolean isLatestVersion()
-        {
+        public boolean isLatestVersion() {
             return isLatestVersion;
         }
 
         @Override
-        public boolean hasSamplingLevel()
-        {
+        public boolean hasSamplingLevel() {
             return hasSamplingLevel;
         }
 
         @Override
-        public boolean hasNewStatsFile()
-        {
+        public boolean hasNewStatsFile() {
             return newStatsFile;
         }
 
         @Override
-        public ChecksumType compressedChecksumType()
-        {
+        public ChecksumType compressedChecksumType() {
             return compressedChecksumType;
         }
 
         @Override
-        public ChecksumType uncompressedChecksumType()
-        {
+        public ChecksumType uncompressedChecksumType() {
             return uncompressedChecksumType;
         }
 
         @Override
-        public boolean hasRepairedAt()
-        {
+        public boolean hasRepairedAt() {
             return hasRepairedAt;
         }
 
         @Override
-        public boolean tracksLegacyCounterShards()
-        {
+        public boolean tracksLegacyCounterShards() {
             return tracksLegacyCounterShards;
         }
 
         @Override
-        public boolean hasOldBfHashOrder()
-        {
+        public boolean hasOldBfHashOrder() {
             return hasOldBfHashOrder;
         }
 
         @Override
-        public boolean hasCompactionAncestors()
-        {
+        public boolean hasCompactionAncestors() {
             return hasCompactionAncestors;
         }
 
         @Override
-        public boolean hasNewFileName()
-        {
+        public boolean hasNewFileName() {
             return newFileName;
         }
 
         @Override
-        public boolean hasCommitLogLowerBound()
-        {
+        public boolean hasCommitLogLowerBound() {
             return hasCommitLogLowerBound;
         }
 
         @Override
-        public boolean hasCommitLogIntervals()
-        {
+        public boolean hasCommitLogIntervals() {
             return hasCommitLogIntervals;
         }
 
         @Override
-        public boolean storeRows()
-        {
+        public boolean storeRows() {
             return storeRows;
         }
 
         @Override
-        public int correspondingMessagingVersion()
-        {
+        public int correspondingMessagingVersion() {
             return correspondingMessagingVersion;
         }
 
         @Override
-        public boolean hasBoundaries()
-        {
+        public boolean hasBoundaries() {
             return hasBoundaries;
         }
 
         @Override
-        public boolean isCompatible()
-        {
+        public boolean isCompatible() {
             return version.compareTo(earliest_supported_version) >= 0 && version.charAt(0) <= current_version.charAt(0);
         }
 
         @Override
-        public boolean isCompatibleForStreaming()
-        {
+        public boolean isCompatibleForStreaming() {
             return isCompatible() && version.charAt(0) == current_version.charAt(0);
         }
     }

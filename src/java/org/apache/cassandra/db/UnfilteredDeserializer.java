@@ -21,11 +21,9 @@ import java.io.IOException;
 import java.io.IOError;
 import java.util.*;
 import java.util.function.Supplier;
-
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.collect.Iterables;
 import com.google.common.collect.PeekingIterator;
-
 import org.apache.cassandra.config.CFMetaData;
 import org.apache.cassandra.db.rows.*;
 import org.apache.cassandra.io.util.DataInputPlus;
@@ -39,28 +37,21 @@ import org.apache.cassandra.net.MessagingService;
  * we don't do more work than necessary (i.e. we don't allocate/deserialize
  * objects for things we don't care about).
  */
-public abstract class UnfilteredDeserializer
-{
+public abstract class UnfilteredDeserializer {
+
     protected final CFMetaData metadata;
+
     protected final DataInputPlus in;
+
     protected final SerializationHelper helper;
 
-    protected UnfilteredDeserializer(CFMetaData metadata,
-                                     DataInputPlus in,
-                                     SerializationHelper helper)
-    {
+    protected UnfilteredDeserializer(CFMetaData metadata, DataInputPlus in, SerializationHelper helper) {
         this.metadata = metadata;
         this.in = in;
         this.helper = helper;
     }
 
-    public static UnfilteredDeserializer create(CFMetaData metadata,
-                                                DataInputPlus in,
-                                                SerializationHeader header,
-                                                SerializationHelper helper,
-                                                DeletionTime partitionDeletion,
-                                                boolean readAllAsDynamic)
-    {
+    public static UnfilteredDeserializer create(CFMetaData metadata, DataInputPlus in, SerializationHeader header, SerializationHelper helper, DeletionTime partitionDeletion, boolean readAllAsDynamic) {
         if (helper.version >= MessagingService.VERSION_30)
             return new CurrentDeserializer(metadata, in, header, helper);
         else
@@ -106,7 +97,6 @@ public abstract class UnfilteredDeserializer
      */
     public abstract void skipNext() throws IOException;
 
-
     /**
      * For the legacy layout deserializer, we have to deal with the fact that a row can span multiple index blocks and that
      * the call to hasNext() reads the next element upfront. We must take that into account when we check in AbstractSSTableIterator if
@@ -120,131 +110,110 @@ public abstract class UnfilteredDeserializer
      */
     public abstract long bytesReadForUnconsumedData();
 
-    private static class CurrentDeserializer extends UnfilteredDeserializer
-    {
+    private static class CurrentDeserializer extends UnfilteredDeserializer {
+
         private final ClusteringPrefix.Deserializer clusteringDeserializer;
+
         private final SerializationHeader header;
 
         private int nextFlags;
+
         private int nextExtendedFlags;
+
         private boolean isReady;
+
         private boolean isDone;
 
         private final Row.Builder builder;
 
-        private CurrentDeserializer(CFMetaData metadata,
-                                    DataInputPlus in,
-                                    SerializationHeader header,
-                                    SerializationHelper helper)
-        {
+        private CurrentDeserializer(CFMetaData metadata, DataInputPlus in, SerializationHeader header, SerializationHelper helper) {
             super(metadata, in, helper);
             this.header = header;
             this.clusteringDeserializer = new ClusteringPrefix.Deserializer(metadata.comparator, in, header);
             this.builder = BTreeRow.sortedBuilder();
         }
 
-        public boolean hasNext() throws IOException
-        {
+        public boolean hasNext() throws IOException {
             if (isReady)
                 return true;
-
             prepareNext();
             return !isDone;
         }
 
-        private void prepareNext() throws IOException
-        {
+        private void prepareNext() throws IOException {
             if (isDone)
                 return;
-
             nextFlags = in.readUnsignedByte();
-            if (UnfilteredSerializer.isEndOfPartition(nextFlags))
-            {
+            if (UnfilteredSerializer.isEndOfPartition(nextFlags)) {
                 isDone = true;
                 isReady = false;
                 return;
             }
-
             nextExtendedFlags = UnfilteredSerializer.readExtendedFlags(in, nextFlags);
-
             clusteringDeserializer.prepare(nextFlags, nextExtendedFlags);
             isReady = true;
         }
 
-        public int compareNextTo(Slice.Bound bound) throws IOException
-        {
+        public int compareNextTo(Slice.Bound bound) throws IOException {
             if (!isReady)
                 prepareNext();
-
             assert !isDone;
-
             return clusteringDeserializer.compareNextTo(bound);
         }
 
-        public boolean nextIsRow() throws IOException
-        {
+        public boolean nextIsRow() throws IOException {
             if (!isReady)
                 prepareNext();
-
             return UnfilteredSerializer.kind(nextFlags) == Unfiltered.Kind.ROW;
         }
 
-        public boolean nextIsStatic() throws IOException
-        {
+        public boolean nextIsStatic() throws IOException {
             // This exists only for the sake of the OldFormatDeserializer
             throw new UnsupportedOperationException();
         }
 
-        public Unfiltered readNext() throws IOException
-        {
+        public Unfiltered readNext() throws IOException {
             isReady = false;
-            if (UnfilteredSerializer.kind(nextFlags) == Unfiltered.Kind.RANGE_TOMBSTONE_MARKER)
-            {
+            if (UnfilteredSerializer.kind(nextFlags) == Unfiltered.Kind.RANGE_TOMBSTONE_MARKER) {
                 RangeTombstone.Bound bound = clusteringDeserializer.deserializeNextBound();
                 return UnfilteredSerializer.serializer.deserializeMarkerBody(in, header, bound);
-            }
-            else
-            {
+            } else {
                 builder.newRow(clusteringDeserializer.deserializeNextClustering());
                 return UnfilteredSerializer.serializer.deserializeRowBody(in, header, helper, nextFlags, nextExtendedFlags, builder);
             }
         }
 
-        public void skipNext() throws IOException
-        {
+        public void skipNext() throws IOException {
             isReady = false;
             clusteringDeserializer.skipNext();
-            if (UnfilteredSerializer.kind(nextFlags) == Unfiltered.Kind.RANGE_TOMBSTONE_MARKER)
-            {
+            if (UnfilteredSerializer.kind(nextFlags) == Unfiltered.Kind.RANGE_TOMBSTONE_MARKER) {
                 UnfilteredSerializer.serializer.skipMarkerBody(in);
-            }
-            else
-            {
+            } else {
                 UnfilteredSerializer.serializer.skipRowBody(in);
             }
         }
 
-        public void clearState()
-        {
+        public void clearState() {
             isReady = false;
             isDone = false;
         }
 
-        public long bytesReadForUnconsumedData()
-        {
+        public long bytesReadForUnconsumedData() {
             // In theory, hasNext() does consume 2-3 bytes, but we don't care about this for the current file format so returning
             // 0 to mean "do nothing".
             return 0;
         }
     }
 
-    public static class OldFormatDeserializer extends UnfilteredDeserializer
-    {
+    public static class OldFormatDeserializer extends UnfilteredDeserializer {
+
         private final boolean readAllAsDynamic;
+
         private boolean skipStatic;
 
         // The next Unfiltered to return, computed by hasNext()
         private Unfiltered next;
+
         // A temporary storage for an unfiltered that isn't returned next but should be looked at just afterwards
         private Unfiltered saved;
 
@@ -260,108 +229,83 @@ public abstract class UnfilteredDeserializer
         // for when marking lastConsumedPosition after readNext/skipNext
         private long bytesReadForNextAtom;
 
-        private OldFormatDeserializer(CFMetaData metadata,
-                                      DataInputPlus in,
-                                      SerializationHelper helper,
-                                      DeletionTime partitionDeletion,
-                                      boolean readAllAsDynamic)
-        {
+        private OldFormatDeserializer(CFMetaData metadata, DataInputPlus in, SerializationHelper helper, DeletionTime partitionDeletion, boolean readAllAsDynamic) {
             super(metadata, in, helper);
             this.iterator = new UnfilteredIterator(metadata, partitionDeletion, helper, this::readAtom);
             this.readAllAsDynamic = readAllAsDynamic;
             this.lastConsumedPosition = currentPosition();
         }
 
-        private LegacyLayout.LegacyAtom readAtom()
-        {
-            try
-            {
+        private LegacyLayout.LegacyAtom readAtom() {
+            try {
                 long pos = currentPosition();
-                LegacyLayout.LegacyAtom atom =  LegacyLayout.readLegacyAtom(metadata, in, readAllAsDynamic);
+                LegacyLayout.LegacyAtom atom = LegacyLayout.readLegacyAtom(metadata, in, readAllAsDynamic);
                 bytesReadForNextAtom = currentPosition() - pos;
                 return atom;
-            }
-            catch (IOException e)
-            {
+            } catch (IOException e) {
                 throw new IOError(e);
             }
         }
 
-        public void setSkipStatic()
-        {
+        public void setSkipStatic() {
             this.skipStatic = true;
         }
 
-        private boolean isStatic(Unfiltered unfiltered)
-        {
-            return unfiltered.isRow() && ((Row)unfiltered).isStatic();
+        private boolean isStatic(Unfiltered unfiltered) {
+            return unfiltered.isRow() && ((Row) unfiltered).isStatic();
         }
 
-        public boolean hasNext() throws IOException
-        {
-            try
-            {
-                while (next == null)
-                {
+        public boolean hasNext() throws IOException {
+            try {
+                while (next == null) {
                     if (saved == null && !iterator.hasNext())
                         return false;
-
                     next = saved == null ? iterator.next() : saved;
                     saved = null;
-
                     // The sstable iterators assume that if there is one, the static row is the first thing this deserializer will return.
                     // However, in the old format, a range tombstone with an empty start would sort before any static cell. So we should
                     // detect that case and return the static parts first if necessary.
-                    if (isFirst && iterator.hasNext() && isStatic(iterator.peek()))
-                    {
+                    if (isFirst && iterator.hasNext() && isStatic(iterator.peek())) {
                         saved = next;
                         next = iterator.next();
                     }
                     isFirst = false;
-
                     // When reading old tables, we sometimes want to skip static data (due to how staticly defined column of compact
                     // tables are handled).
                     if (skipStatic && isStatic(next))
                         next = null;
                 }
                 return true;
-            }
-            catch (IOError e)
-            {
+            } catch (IOError e) {
                 if (e.getCause() != null && e.getCause() instanceof IOException)
-                    throw (IOException)e.getCause();
+                    throw (IOException) e.getCause();
                 throw e;
             }
         }
 
-        public int compareNextTo(Slice.Bound bound) throws IOException
-        {
+        public int compareNextTo(Slice.Bound bound) throws IOException {
             if (!hasNext())
                 throw new IllegalStateException();
             return metadata.comparator.compare(next.clustering(), bound);
         }
 
-        public boolean nextIsRow() throws IOException
-        {
+        public boolean nextIsRow() throws IOException {
             if (!hasNext())
                 throw new IllegalStateException();
             return next.isRow();
         }
 
-        public boolean nextIsStatic() throws IOException
-        {
-            return nextIsRow() && ((Row)next).isStatic();
+        public boolean nextIsStatic() throws IOException {
+            return nextIsRow() && ((Row) next).isStatic();
         }
 
-        private long currentPosition()
-        {
+        private long currentPosition() {
             // We return a bogus value if the input is not file based, but check we never rely
             // on that value in that case in bytesReadForUnconsumedData
-            return in instanceof FileDataInput ? ((FileDataInput)in).getFilePointer() : 0;
+            return in instanceof FileDataInput ? ((FileDataInput) in).getFilePointer() : 0;
         }
 
-        public Unfiltered readNext() throws IOException
-        {
+        public Unfiltered readNext() throws IOException {
             if (!hasNext())
                 throw new IllegalStateException();
             Unfiltered toReturn = next;
@@ -370,19 +314,16 @@ public abstract class UnfilteredDeserializer
             return toReturn;
         }
 
-        public void skipNext() throws IOException
-        {
+        public void skipNext() throws IOException {
             if (!hasNext())
                 throw new UnsupportedOperationException();
             next = null;
             lastConsumedPosition = currentPosition() - bytesReadForNextAtom();
         }
 
-        public long bytesReadForUnconsumedData()
-        {
+        public long bytesReadForUnconsumedData() {
             if (!(in instanceof FileDataInput))
                 throw new AssertionError();
-
             return currentPosition() - lastConsumedPosition;
         }
 
@@ -394,15 +335,13 @@ public abstract class UnfilteredDeserializer
         // the last LegacyAtom read and subtract it from the current position when we calculate lastConsumedPosition.
         // If we don't, then when reading an indexed block, we can over correct and may think that we've
         // exhausted the block before we actually have.
-        private long bytesReadForNextAtom()
-        {
+        private long bytesReadForNextAtom() {
             // If we've read anything at all then we will have recorded this in bytesReadForNextAtom,
             // but being extra careful here just incase this method is called before any reads happen.
             return iterator.atoms.next == null ? 0 : bytesReadForNextAtom;
         }
 
-        public void clearState()
-        {
+        public void clearState() {
             next = null;
             saved = null;
             iterator.clearState();
@@ -413,21 +352,21 @@ public abstract class UnfilteredDeserializer
         // Note: this could use guava AbstractIterator except that we want to be able to clear
         // the internal state of the iterator so it's cleaner to do it ourselves.
         @VisibleForTesting
-        static class UnfilteredIterator implements PeekingIterator<Unfiltered>
-        {
+        static class UnfilteredIterator implements PeekingIterator<Unfiltered> {
+
             private final AtomIterator atoms;
+
             private final LegacyLayout.CellGrouper grouper;
+
             private final TombstoneTracker tombstoneTracker;
+
             private final CFMetaData metadata;
+
             private final SerializationHelper helper;
 
             private Unfiltered next;
 
-            UnfilteredIterator(CFMetaData metadata,
-                               DeletionTime partitionDeletion,
-                               SerializationHelper helper,
-                               Supplier<LegacyLayout.LegacyAtom> atomReader)
-            {
+            UnfilteredIterator(CFMetaData metadata, DeletionTime partitionDeletion, SerializationHelper helper, Supplier<LegacyLayout.LegacyAtom> atomReader) {
                 this.metadata = metadata;
                 this.helper = helper;
                 this.grouper = new LegacyLayout.CellGrouper(metadata, helper);
@@ -435,74 +374,54 @@ public abstract class UnfilteredDeserializer
                 this.atoms = new AtomIterator(atomReader);
             }
 
-            private boolean isRow(LegacyLayout.LegacyAtom atom)
-            {
+            private boolean isRow(LegacyLayout.LegacyAtom atom) {
                 if (atom.isCell())
                     return true;
-
                 LegacyLayout.LegacyRangeTombstone tombstone = atom.asRangeTombstone();
                 return tombstone.isCollectionTombstone() || tombstone.isRowDeletion(metadata);
             }
 
-            public boolean hasNext()
-            {
+            public boolean hasNext() {
                 // Note that we loop on next == null because TombstoneTracker.openNew() could return null below or the atom might be shadowed.
-                while (next == null)
-                {
-                    if (atoms.hasNext())
-                    {
+                while (next == null) {
+                    if (atoms.hasNext()) {
                         // If there is a range tombstone to open strictly before the next row/RT, we need to return that open (or boundary) marker first.
-                        if (tombstoneTracker.hasOpeningMarkerBefore(atoms.peek()))
-                        {
+                        if (tombstoneTracker.hasOpeningMarkerBefore(atoms.peek())) {
                             next = tombstoneTracker.popOpeningMarker();
-                        }
-                        // If a range tombstone closes strictly before the next row/RT, we need to return that close (or boundary) marker first.
-                        else if (tombstoneTracker.hasClosingMarkerBefore(atoms.peek()))
-                        {
+                        } else // If a range tombstone closes strictly before the next row/RT, we need to return that close (or boundary) marker first.
+                        if (tombstoneTracker.hasClosingMarkerBefore(atoms.peek())) {
                             next = tombstoneTracker.popClosingMarker();
-                        }
-                        else
-                        {
+                        } else {
                             LegacyLayout.LegacyAtom atom = atoms.next();
                             if (tombstoneTracker.isShadowed(atom))
                                 continue;
-
                             if (isRow(atom))
                                 next = readRow(atom);
                             else
                                 tombstoneTracker.openNew(atom.asRangeTombstone());
                         }
-                    }
-                    else if (tombstoneTracker.hasOpenTombstones())
-                    {
+                    } else if (tombstoneTracker.hasOpenTombstones()) {
                         next = tombstoneTracker.popMarker();
-                    }
-                    else
-                    {
+                    } else {
                         return false;
                     }
                 }
                 return next != null;
             }
 
-            private Unfiltered readRow(LegacyLayout.LegacyAtom first)
-            {
-                LegacyLayout.CellGrouper grouper = first.isStatic()
-                                                 ? LegacyLayout.CellGrouper.staticGrouper(metadata, helper)
-                                                 : this.grouper;
+            private Unfiltered readRow(LegacyLayout.LegacyAtom first) {
+                LegacyLayout.CellGrouper grouper = first.isStatic() ? LegacyLayout.CellGrouper.staticGrouper(metadata, helper) : this.grouper;
                 grouper.reset();
                 grouper.addAtom(first);
                 // As long as atoms are part of the same row, consume them. Note that the call to addAtom() uses
                 // atoms.peek() so that the atom is only consumed (by next) if it's part of the row (addAtom returns true)
-                while (atoms.hasNext() && grouper.addAtom(atoms.peek()))
-                {
+                while (atoms.hasNext() && grouper.addAtom(atoms.peek())) {
                     atoms.next();
                 }
                 return grouper.getRow();
             }
 
-            public Unfiltered next()
-            {
+            public Unfiltered next() {
                 if (!hasNext())
                     throw new UnsupportedOperationException();
                 Unfiltered toReturn = next;
@@ -510,49 +429,43 @@ public abstract class UnfilteredDeserializer
                 return toReturn;
             }
 
-            public Unfiltered peek()
-            {
+            public Unfiltered peek() {
                 if (!hasNext())
                     throw new UnsupportedOperationException();
                 return next;
             }
 
-            public void clearState()
-            {
+            public void clearState() {
                 atoms.clearState();
                 tombstoneTracker.clearState();
                 next = null;
             }
 
-            public void remove()
-            {
+            public void remove() {
                 throw new UnsupportedOperationException();
             }
 
             // Wraps the input of the deserializer to provide an iterator (and skip shadowed atoms).
             // Note: this could use guava AbstractIterator except that we want to be able to clear
             // the internal state of the iterator so it's cleaner to do it ourselves.
-            private class AtomIterator implements PeekingIterator<LegacyLayout.LegacyAtom>
-            {
+            private class AtomIterator implements PeekingIterator<LegacyLayout.LegacyAtom> {
+
                 private final Supplier<LegacyLayout.LegacyAtom> atomReader;
+
                 private boolean isDone;
+
                 private LegacyLayout.LegacyAtom next;
 
-                private AtomIterator(Supplier<LegacyLayout.LegacyAtom> atomReader)
-                {
+                private AtomIterator(Supplier<LegacyLayout.LegacyAtom> atomReader) {
                     this.atomReader = atomReader;
                 }
 
-                public boolean hasNext()
-                {
+                public boolean hasNext() {
                     if (isDone)
                         return false;
-
-                    if (next == null)
-                    {
+                    if (next == null) {
                         next = atomReader.get();
-                        if (next == null)
-                        {
+                        if (next == null) {
                             isDone = true;
                             return false;
                         }
@@ -560,8 +473,7 @@ public abstract class UnfilteredDeserializer
                     return true;
                 }
 
-                public LegacyLayout.LegacyAtom next()
-                {
+                public LegacyLayout.LegacyAtom next() {
                     if (!hasNext())
                         throw new UnsupportedOperationException();
                     LegacyLayout.LegacyAtom toReturn = next;
@@ -569,21 +481,18 @@ public abstract class UnfilteredDeserializer
                     return toReturn;
                 }
 
-                public LegacyLayout.LegacyAtom peek()
-                {
+                public LegacyLayout.LegacyAtom peek() {
                     if (!hasNext())
                         throw new UnsupportedOperationException();
                     return next;
                 }
 
-                public void clearState()
-                {
+                public void clearState() {
                     this.next = null;
                     this.isDone = false;
                 }
 
-                public void remove()
-                {
+                public void remove() {
                     throw new UnsupportedOperationException();
                 }
             }
@@ -606,8 +515,8 @@ public abstract class UnfilteredDeserializer
              * For closing marker, we also have a {@link #hasClosingMarkerBefore} because in the old format the closing
              * markers comes with the opening one, but we should generate them "in order" in the new format.
              */
-            private class TombstoneTracker
-            {
+            private class TombstoneTracker {
+
                 private final DeletionTime partitionDeletion;
 
                 // As explained in the javadoc, we need to wait to generate an opening marker until we're sure we have
@@ -620,8 +529,7 @@ public abstract class UnfilteredDeserializer
                 // open tombstone (the one with the higher timestamp).
                 private final SortedSet<LegacyLayout.LegacyRangeTombstone> openTombstones;
 
-                public TombstoneTracker(DeletionTime partitionDeletion)
-                {
+                public TombstoneTracker(DeletionTime partitionDeletion) {
                     this.partitionDeletion = partitionDeletion;
                     this.openTombstones = new TreeSet<>((rt1, rt2) -> metadata.comparator.compare(rt1.stop.bound, rt2.stop.bound));
                 }
@@ -629,14 +537,11 @@ public abstract class UnfilteredDeserializer
                 /**
                  * Checks if the provided atom is fully shadowed by the open tombstones of this tracker (or the partition deletion).
                  */
-                public boolean isShadowed(LegacyLayout.LegacyAtom atom)
-                {
+                public boolean isShadowed(LegacyLayout.LegacyAtom atom) {
                     assert !hasClosingMarkerBefore(atom);
                     long timestamp = atom.isCell() ? atom.asCell().timestamp : atom.asRangeTombstone().deletionTime.markedForDeleteAt();
-
                     if (partitionDeletion.deletes(timestamp))
                         return true;
-
                     SortedSet<LegacyLayout.LegacyRangeTombstone> coveringTombstones = isRow(atom) ? openTombstones : openTombstones.tailSet(atom.asRangeTombstone());
                     return Iterables.any(coveringTombstones, tombstone -> tombstone.deletionTime.deletes(timestamp));
                 }
@@ -644,14 +549,11 @@ public abstract class UnfilteredDeserializer
                 /**
                  * Whether there is an outstanding opening marker that should be returned before we process the provided row/RT.
                  */
-                public boolean hasOpeningMarkerBefore(LegacyLayout.LegacyAtom atom)
-                {
-                    return openMarkerToReturn != null
-                           && metadata.comparator.compare(openMarkerToReturn.openBound(false), atom.clustering()) < 0;
+                public boolean hasOpeningMarkerBefore(LegacyLayout.LegacyAtom atom) {
+                    return openMarkerToReturn != null && metadata.comparator.compare(openMarkerToReturn.openBound(false), atom.clustering()) < 0;
                 }
 
-                public Unfiltered popOpeningMarker()
-                {
+                public Unfiltered popOpeningMarker() {
                     assert openMarkerToReturn != null;
                     Unfiltered toReturn = openMarkerToReturn;
                     openMarkerToReturn = null;
@@ -661,71 +563,59 @@ public abstract class UnfilteredDeserializer
                 /**
                  * Whether the currently open marker closes stricly before the provided row/RT.
                  */
-                public boolean hasClosingMarkerBefore(LegacyLayout.LegacyAtom atom)
-                {
-                    return !openTombstones.isEmpty()
-                           && metadata.comparator.compare(openTombstones.first().stop.bound, atom.clustering()) < 0;
+                public boolean hasClosingMarkerBefore(LegacyLayout.LegacyAtom atom) {
+                    return !openTombstones.isEmpty() && metadata.comparator.compare(openTombstones.first().stop.bound, atom.clustering()) < 0;
                 }
 
                 /**
                  * Returns the unfiltered corresponding to closing the currently open marker (and update the tracker accordingly).
                  */
-                public Unfiltered popClosingMarker()
-                {
+                public Unfiltered popClosingMarker() {
                     assert !openTombstones.isEmpty();
-
                     Iterator<LegacyLayout.LegacyRangeTombstone> iter = openTombstones.iterator();
                     LegacyLayout.LegacyRangeTombstone first = iter.next();
                     iter.remove();
-
                     // If that was the last open tombstone, we just want to close it. Otherwise, we have a boundary with the
                     // next tombstone
-                    if (!iter.hasNext())
-                        return new RangeTombstoneBoundMarker(first.stop.bound, first.deletionTime);
-
+                    if (!iter.hasNext()) {
+                        return ((RangeTombstoneBoundMarker) org.zlab.ocov.tracker.Runtime.monitorCreationContext(new RangeTombstoneBoundMarker(first.stop.bound, first.deletionTime), 182));
+                    }
                     LegacyLayout.LegacyRangeTombstone next = iter.next();
                     return RangeTombstoneBoundaryMarker.makeBoundary(false, first.stop.bound, first.stop.bound.invert(), first.deletionTime, next.deletionTime);
                 }
 
-                 /**
-                  * Pop whatever next marker needs to be popped. This should be called as many time as necessary (until
-                  * {@link #hasOpenTombstones} returns {@false}) when all atoms have been consumed to "empty" the tracker.
-                  */
-                 public Unfiltered popMarker()
-                 {
-                     assert hasOpenTombstones();
-                     return openMarkerToReturn == null ? popClosingMarker() : popOpeningMarker();
-                 }
+                /**
+                 * Pop whatever next marker needs to be popped. This should be called as many time as necessary (until
+                 * {@link #hasOpenTombstones} returns {@false}) when all atoms have been consumed to "empty" the tracker.
+                 */
+                public Unfiltered popMarker() {
+                    assert hasOpenTombstones();
+                    return openMarkerToReturn == null ? popClosingMarker() : popOpeningMarker();
+                }
 
                 /**
                  * Update the tracker given the provided newly open tombstone. This potentially update openMarkerToReturn
                  * to account for th new opening.
                  *
                  * Note that this method assumes that:
-                 +  1) the added tombstone is not fully shadowed: !isShadowed(tombstone).
-                 +  2) there is no marker to open that open strictly before this new tombstone: !hasOpeningMarkerBefore(tombstone).
-                 +  3) no opened tombstone closes before that tombstone: !hasClosingMarkerBefore(tombstone).
-                 + One can check that this is only called after the condition above have been checked in UnfilteredIterator.hasNext above.
+                 *                 +  1) the added tombstone is not fully shadowed: !isShadowed(tombstone).
+                 *                 +  2) there is no marker to open that open strictly before this new tombstone: !hasOpeningMarkerBefore(tombstone).
+                 *                 +  3) no opened tombstone closes before that tombstone: !hasClosingMarkerBefore(tombstone).
+                 *                 + One can check that this is only called after the condition above have been checked in UnfilteredIterator.hasNext above.
                  */
-                public void openNew(LegacyLayout.LegacyRangeTombstone tombstone)
-                {
-                    if (openTombstones.isEmpty())
-                    {
+                public void openNew(LegacyLayout.LegacyRangeTombstone tombstone) {
+                    if (openTombstones.isEmpty()) {
                         // If we have an openMarkerToReturn, the corresponding RT must be in openTombstones (or we wouldn't know when to close it)
                         assert openMarkerToReturn == null;
                         openTombstones.add(tombstone);
-                        openMarkerToReturn = new RangeTombstoneBoundMarker(tombstone.start.bound, tombstone.deletionTime);
+                        openMarkerToReturn = ((RangeTombstoneBoundMarker) org.zlab.ocov.tracker.Runtime.monitorCreationContext(new RangeTombstoneBoundMarker(tombstone.start.bound, tombstone.deletionTime), 183));
                         return;
                     }
-
-                    if (openMarkerToReturn != null)
-                    {
+                    if (openMarkerToReturn != null) {
                         // If the new opening supersedes the one we're about to return, we need to update the one to return.
                         if (tombstone.deletionTime.supersedes(openMarkerToReturn.openDeletionTime(false)))
                             openMarkerToReturn = openMarkerToReturn.withNewOpeningDeletionTime(false, tombstone.deletionTime);
-                    }
-                    else
-                    {
+                    } else {
                         // We have no openMarkerToReturn set yet so set it now if needs be.
                         // Since openTombstones isn't empty, it means we have a currently ongoing deletion. And if the new tombstone
                         // supersedes that ongoing deletion, we need to close the opening  deletion and open with the new one.
@@ -733,7 +623,6 @@ public abstract class UnfilteredDeserializer
                         if (tombstone.deletionTime.supersedes(currentOpenDeletion))
                             openMarkerToReturn = RangeTombstoneBoundaryMarker.makeBoundary(false, tombstone.start.bound.invert(), tombstone.start.bound, currentOpenDeletion, tombstone.deletionTime);
                     }
-
                     // In all cases, we know !isShadowed(tombstone) so we need to add the tombstone (note however that we may not have set openMarkerToReturn if the
                     // new tombstone doesn't supersedes the current deletion _but_ extend past the marker currently open)
                     add(tombstone);
@@ -742,19 +631,15 @@ public abstract class UnfilteredDeserializer
                 /**
                  * Adds a new tombstone to openTombstones, removing anything that would be shadowed by this new tombstone.
                  */
-                private void add(LegacyLayout.LegacyRangeTombstone tombstone)
-                {
+                private void add(LegacyLayout.LegacyRangeTombstone tombstone) {
                     // First, remove existing tombstone that is shadowed by this tombstone.
                     Iterator<LegacyLayout.LegacyRangeTombstone> iter = openTombstones.iterator();
-                    while (iter.hasNext())
-                    {
-
+                    while (iter.hasNext()) {
                         LegacyLayout.LegacyRangeTombstone existing = iter.next();
                         // openTombstones is ordered by stop bound and the new tombstone can't be shadowing anything that
                         // stop after it.
                         if (metadata.comparator.compare(tombstone.stop.bound, existing.stop.bound) < 0)
                             break;
-
                         // Note that we remove an existing tombstone even if it is equal to the new one because in that case,
                         // either the existing strictly stops before the new one and we don't want it, or it stops exactly
                         // like the new one but we're going to inconditionally add the new one anyway.
@@ -764,13 +649,11 @@ public abstract class UnfilteredDeserializer
                     openTombstones.add(tombstone);
                 }
 
-                public boolean hasOpenTombstones()
-                {
+                public boolean hasOpenTombstones() {
                     return openMarkerToReturn != null || !openTombstones.isEmpty();
                 }
 
-                public void clearState()
-                {
+                public void clearState() {
                     openMarkerToReturn = null;
                     openTombstones.clear();
                 }

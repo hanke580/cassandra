@@ -18,10 +18,8 @@
 package org.apache.cassandra.db;
 
 import java.util.Iterator;
-
 import com.google.common.base.Objects;
 import com.google.common.collect.Iterators;
-
 import org.apache.cassandra.db.rows.*;
 import org.apache.cassandra.db.rows.EncodingStats;
 import org.apache.cassandra.utils.ObjectSizes;
@@ -30,8 +28,8 @@ import org.apache.cassandra.utils.memory.AbstractAllocator;
 /**
  * A mutable implementation of {@code DeletionInfo}.
  */
-public class MutableDeletionInfo implements DeletionInfo
-{
+public class MutableDeletionInfo implements DeletionInfo {
+
     private static final long EMPTY_SIZE = ObjectSizes.measure(new MutableDeletionInfo(0, 0));
 
     /**
@@ -52,20 +50,17 @@ public class MutableDeletionInfo implements DeletionInfo
      * @param localDeletionTime what time the deletion write was applied locally (for purposes of
      *                          purging the tombstone after gc_grace_seconds).
      */
-    public MutableDeletionInfo(long markedForDeleteAt, int localDeletionTime)
-    {
+    public MutableDeletionInfo(long markedForDeleteAt, int localDeletionTime) {
         // Pre-1.1 node may return MIN_VALUE for non-deleted container, but the new default is MAX_VALUE
         // (see CASSANDRA-3872)
         this(new DeletionTime(markedForDeleteAt, localDeletionTime == Integer.MIN_VALUE ? Integer.MAX_VALUE : localDeletionTime));
     }
 
-    public MutableDeletionInfo(DeletionTime partitionDeletion)
-    {
+    public MutableDeletionInfo(DeletionTime partitionDeletion) {
         this(partitionDeletion, null);
     }
 
-    public MutableDeletionInfo(DeletionTime partitionDeletion, RangeTombstoneList ranges)
-    {
+    public MutableDeletionInfo(DeletionTime partitionDeletion, RangeTombstoneList ranges) {
         this.partitionDeletion = partitionDeletion;
         this.ranges = ranges;
     }
@@ -73,30 +68,25 @@ public class MutableDeletionInfo implements DeletionInfo
     /**
      * Returns a new DeletionInfo that has no top-level tombstone or any range tombstones.
      */
-    public static MutableDeletionInfo live()
-    {
-        return new MutableDeletionInfo(DeletionTime.LIVE);
+    public static MutableDeletionInfo live() {
+        return ((MutableDeletionInfo) org.zlab.ocov.tracker.Runtime.monitorCreationContext(new MutableDeletionInfo(DeletionTime.LIVE), 101));
     }
 
-    public MutableDeletionInfo mutableCopy()
-    {
-        return new MutableDeletionInfo(partitionDeletion, ranges == null ? null : ranges.copy());
+    public MutableDeletionInfo mutableCopy() {
+        return ((MutableDeletionInfo) org.zlab.ocov.tracker.Runtime.monitorCreationContext(new MutableDeletionInfo(partitionDeletion, ranges == null ? null : ranges.copy()), 102));
     }
 
-    public MutableDeletionInfo copy(AbstractAllocator allocator)
-    {
+    public MutableDeletionInfo copy(AbstractAllocator allocator) {
         RangeTombstoneList rangesCopy = null;
         if (ranges != null)
-             rangesCopy = ranges.copy(allocator);
-
-        return new MutableDeletionInfo(partitionDeletion, rangesCopy);
+            rangesCopy = ranges.copy(allocator);
+        return ((MutableDeletionInfo) org.zlab.ocov.tracker.Runtime.monitorCreationContext(new MutableDeletionInfo(partitionDeletion, rangesCopy), 103));
     }
 
     /**
      * Returns whether this DeletionInfo is live, that is deletes no columns.
      */
-    public boolean isLive()
-    {
+    public boolean isLive() {
         return partitionDeletion.isLive() && (ranges == null || ranges.isEmpty());
     }
 
@@ -105,17 +95,14 @@ public class MutableDeletionInfo implements DeletionInfo
      * timestamp.
      * @param newInfo the deletion time to add to this deletion info.
      */
-    public void add(DeletionTime newInfo)
-    {
+    public void add(DeletionTime newInfo) {
         if (newInfo.supersedes(partitionDeletion))
             partitionDeletion = newInfo;
     }
 
-    public void add(RangeTombstone tombstone, ClusteringComparator comparator)
-    {
+    public void add(RangeTombstone tombstone, ClusteringComparator comparator) {
         if (ranges == null)
             ranges = new RangeTombstoneList(comparator, 1);
-
         ranges.add(tombstone);
     }
 
@@ -126,90 +113,74 @@ public class MutableDeletionInfo implements DeletionInfo
      *
      * @return this object.
      */
-    public DeletionInfo add(DeletionInfo newInfo)
-    {
+    public DeletionInfo add(DeletionInfo newInfo) {
         add(newInfo.getPartitionDeletion());
-
         // We know MutableDeletionInfo is the only impelementation and we're not mutating it, it's just to get access to the
         // RangeTombstoneList directly.
         assert newInfo instanceof MutableDeletionInfo;
-        RangeTombstoneList newRanges = ((MutableDeletionInfo)newInfo).ranges;
-
+        RangeTombstoneList newRanges = ((MutableDeletionInfo) newInfo).ranges;
         if (ranges == null)
             ranges = newRanges == null ? null : newRanges.copy();
         else if (newRanges != null)
             ranges.addAll(newRanges);
-
         return this;
     }
 
-    public DeletionTime getPartitionDeletion()
-    {
+    public DeletionTime getPartitionDeletion() {
         return partitionDeletion;
     }
 
     // Use sparingly, not the most efficient thing
-    public Iterator<RangeTombstone> rangeIterator(boolean reversed)
-    {
+    public Iterator<RangeTombstone> rangeIterator(boolean reversed) {
         return ranges == null ? Iterators.<RangeTombstone>emptyIterator() : ranges.iterator(reversed);
     }
 
-    public Iterator<RangeTombstone> rangeIterator(Slice slice, boolean reversed)
-    {
+    public Iterator<RangeTombstone> rangeIterator(Slice slice, boolean reversed) {
         return ranges == null ? Iterators.<RangeTombstone>emptyIterator() : ranges.iterator(slice, reversed);
     }
 
-    public RangeTombstone rangeCovering(Clustering name)
-    {
+    public RangeTombstone rangeCovering(Clustering name) {
         return ranges == null ? null : ranges.search(name);
     }
 
-    public int dataSize()
-    {
+    public int dataSize() {
         int size = TypeSizes.sizeof(partitionDeletion.markedForDeleteAt());
         return size + (ranges == null ? 0 : ranges.dataSize());
     }
 
-    public boolean hasRanges()
-    {
+    public boolean hasRanges() {
         return ranges != null && !ranges.isEmpty();
     }
 
-    public int rangeCount()
-    {
+    public int rangeCount() {
         return hasRanges() ? ranges.size() : 0;
     }
 
-    public long maxTimestamp()
-    {
+    public long maxTimestamp() {
         return ranges == null ? partitionDeletion.markedForDeleteAt() : Math.max(partitionDeletion.markedForDeleteAt(), ranges.maxMarkedAt());
     }
 
     /**
      * Whether this deletion info may modify the provided one if added to it.
      */
-    public boolean mayModify(DeletionInfo delInfo)
-    {
+    public boolean mayModify(DeletionInfo delInfo) {
         return partitionDeletion.compareTo(delInfo.getPartitionDeletion()) > 0 || hasRanges();
     }
 
     @Override
-    public String toString()
-    {
+    public String toString() {
         if (ranges == null || ranges.isEmpty())
             return String.format("{%s}", partitionDeletion);
         else
             return String.format("{%s, ranges=%s}", partitionDeletion, rangesAsString());
     }
 
-    private String rangesAsString()
-    {
+    private String rangesAsString() {
         assert !ranges.isEmpty();
         StringBuilder sb = new StringBuilder();
         ClusteringComparator cc = ranges.comparator();
         Iterator<RangeTombstone> iter = rangeIterator(false);
-        while (iter.hasNext())
-        {
+        while (iter.hasNext()) {
             RangeTombstone i = iter.next();
             sb.append(i.deletedSlice().toString(cc));
             sb.append('@');
@@ -219,92 +190,78 @@ public class MutableDeletionInfo implements DeletionInfo
     }
 
     // Updates all the timestamp of the deletion contained in this DeletionInfo to be {@code timestamp}.
-    public DeletionInfo updateAllTimestamp(long timestamp)
-    {
-        if (partitionDeletion.markedForDeleteAt() != Long.MIN_VALUE)
-            partitionDeletion = new DeletionTime(timestamp, partitionDeletion.localDeletionTime());
-
+    public DeletionInfo updateAllTimestamp(long timestamp) {
+        if (partitionDeletion.markedForDeleteAt() != Long.MIN_VALUE) {
+            partitionDeletion = ((DeletionTime) org.zlab.ocov.tracker.Runtime.monitorCreationContext(new DeletionTime(timestamp, partitionDeletion.localDeletionTime()), 104));
+        }
         if (ranges != null)
             ranges.updateAllTimestamp(timestamp);
         return this;
     }
 
     @Override
-    public boolean equals(Object o)
-    {
-        if(!(o instanceof MutableDeletionInfo))
+    public boolean equals(Object o) {
+        if (!(o instanceof MutableDeletionInfo))
             return false;
-        MutableDeletionInfo that = (MutableDeletionInfo)o;
+        MutableDeletionInfo that = (MutableDeletionInfo) o;
         return partitionDeletion.equals(that.partitionDeletion) && Objects.equal(ranges, that.ranges);
     }
 
     @Override
-    public final int hashCode()
-    {
+    public final int hashCode() {
         return Objects.hashCode(partitionDeletion, ranges);
     }
 
     @Override
-    public long unsharedHeapSize()
-    {
+    public long unsharedHeapSize() {
         return EMPTY_SIZE + partitionDeletion.unsharedHeapSize() + (ranges == null ? 0 : ranges.unsharedHeapSize());
     }
 
-    public void collectStats(EncodingStats.Collector collector)
-    {
+    public void collectStats(EncodingStats.Collector collector) {
         collector.update(partitionDeletion);
         if (ranges != null)
             ranges.collectStats(collector);
     }
 
-    public static Builder builder(DeletionTime partitionLevelDeletion, ClusteringComparator comparator, boolean reversed)
-    {
-        return new Builder(partitionLevelDeletion, comparator, reversed);
+    public static Builder builder(DeletionTime partitionLevelDeletion, ClusteringComparator comparator, boolean reversed) {
+        return ((Builder) org.zlab.ocov.tracker.Runtime.monitorCreationContext(new Builder(partitionLevelDeletion, comparator, reversed), 105));
     }
 
     /**
      * Builds DeletionInfo object from (in order) range tombstone markers.
      */
-    public static class Builder
-    {
+    public static class Builder {
+
         private final MutableDeletionInfo deletion;
+
         private final ClusteringComparator comparator;
 
         private final boolean reversed;
 
         private RangeTombstoneMarker openMarker;
 
-        private Builder(DeletionTime partitionLevelDeletion, ClusteringComparator comparator, boolean reversed)
-        {
+        private Builder(DeletionTime partitionLevelDeletion, ClusteringComparator comparator, boolean reversed) {
             this.deletion = new MutableDeletionInfo(partitionLevelDeletion);
             this.comparator = comparator;
             this.reversed = reversed;
         }
 
-        public void add(RangeTombstoneMarker marker)
-        {
+        public void add(RangeTombstoneMarker marker) {
             // We need to start by the close case in case that's a boundary
-
-            if (marker.isClose(reversed))
-            {
+            if (marker.isClose(reversed)) {
                 DeletionTime openDeletion = openMarker.openDeletionTime(reversed);
                 assert marker.closeDeletionTime(reversed).equals(openDeletion);
-
                 Slice.Bound open = openMarker.openBound(reversed);
                 Slice.Bound close = marker.closeBound(reversed);
-
                 Slice slice = reversed ? Slice.make(close, open) : Slice.make(open, close);
-                deletion.add(new RangeTombstone(slice, openDeletion), comparator);
+                deletion.add(((RangeTombstone) org.zlab.ocov.tracker.Runtime.monitorCreationContext(new RangeTombstone(slice, openDeletion), 106)), comparator);
             }
-
-            if (marker.isOpen(reversed))
-            {
+            if (marker.isOpen(reversed)) {
                 openMarker = marker;
             }
         }
 
-        public MutableDeletionInfo build()
-        {
+        public MutableDeletionInfo build() {
             return deletion;
         }
     }

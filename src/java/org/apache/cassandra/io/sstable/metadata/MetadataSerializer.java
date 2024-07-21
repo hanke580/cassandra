@@ -19,10 +19,8 @@ package org.apache.cassandra.io.sstable.metadata;
 
 import java.io.*;
 import java.util.*;
-
 import com.google.common.collect.Lists;
 import com.google.common.collect.Maps;
-
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.apache.cassandra.io.sstable.Component;
@@ -46,22 +44,19 @@ import org.apache.cassandra.utils.FBUtilities;
  *
  * IMetadataComponent.Type's ordinal() defines the order of serialization.
  */
-public class MetadataSerializer implements IMetadataSerializer
-{
+public class MetadataSerializer implements IMetadataSerializer {
+
     private static final Logger logger = LoggerFactory.getLogger(MetadataSerializer.class);
 
-    public void serialize(Map<MetadataType, MetadataComponent> components, DataOutputPlus out, Version version) throws IOException
-    {
+    public void serialize(Map<MetadataType, MetadataComponent> components, DataOutputPlus out, Version version) throws IOException {
         // sort components by type
         List<MetadataComponent> sortedComponents = Lists.newArrayList(components.values());
         Collections.sort(sortedComponents);
-
         // write number of component
         out.writeInt(components.size());
         // build and write toc
         int lastPosition = 4 + (8 * sortedComponents.size());
-        for (MetadataComponent component : sortedComponents)
-        {
+        for (MetadataComponent component : sortedComponents) {
             MetadataType type = component.getType();
             // serialize type
             out.writeInt(type.ordinal());
@@ -70,55 +65,44 @@ public class MetadataSerializer implements IMetadataSerializer
             lastPosition += type.serializer.serializedSize(version, component);
         }
         // serialize components
-        for (MetadataComponent component : sortedComponents)
-        {
+        for (MetadataComponent component : sortedComponents) {
             component.getType().serializer.serialize(version, component, out);
         }
     }
 
-    public Map<MetadataType, MetadataComponent> deserialize( Descriptor descriptor, EnumSet<MetadataType> types) throws IOException
-    {
+    public Map<MetadataType, MetadataComponent> deserialize(Descriptor descriptor, EnumSet<MetadataType> types) throws IOException {
         Map<MetadataType, MetadataComponent> components;
         logger.trace("Load metadata for {}", descriptor);
         File statsFile = new File(descriptor.filenameFor(Component.STATS));
-        if (!statsFile.exists())
-        {
+        if (!statsFile.exists()) {
             logger.trace("No sstable stats for {}", descriptor);
             components = Maps.newHashMap();
             components.put(MetadataType.STATS, MetadataCollector.defaultStatsMetadata());
-        }
-        else
-        {
-            try (RandomAccessReader r = RandomAccessReader.open(statsFile))
-            {
+        } else {
+            try (RandomAccessReader r = RandomAccessReader.open(statsFile)) {
                 components = deserialize(descriptor, r, types);
             }
         }
         return components;
     }
 
-    public MetadataComponent deserialize(Descriptor descriptor, MetadataType type) throws IOException
-    {
+    public MetadataComponent deserialize(Descriptor descriptor, MetadataType type) throws IOException {
         return deserialize(descriptor, EnumSet.of(type)).get(type);
     }
 
-    public Map<MetadataType, MetadataComponent> deserialize(Descriptor descriptor, FileDataInput in, EnumSet<MetadataType> types) throws IOException
-    {
+    public Map<MetadataType, MetadataComponent> deserialize(Descriptor descriptor, FileDataInput in, EnumSet<MetadataType> types) throws IOException {
         Map<MetadataType, MetadataComponent> components = Maps.newHashMap();
         // read number of components
         int numComponents = in.readInt();
         // read toc
         Map<MetadataType, Integer> toc = new HashMap<>(numComponents);
         MetadataType[] values = MetadataType.values();
-        for (int i = 0; i < numComponents; i++)
-        {
+        for (int i = 0; i < numComponents; i++) {
             toc.put(values[in.readInt()], in.readInt());
         }
-        for (MetadataType type : types)
-        {
+        for (MetadataType type : types) {
             Integer offset = toc.get(type);
-            if (offset != null)
-            {
+            if (offset != null) {
                 in.seek(offset);
                 MetadataComponent component = type.serializer.deserialize(descriptor.version, in);
                 components.put(type, component);
@@ -127,8 +111,7 @@ public class MetadataSerializer implements IMetadataSerializer
         return components;
     }
 
-    public void mutateLevel(Descriptor descriptor, int newLevel) throws IOException
-    {
+    public void mutateLevel(Descriptor descriptor, int newLevel) throws IOException {
         logger.trace("Mutating {} to level {}", descriptor.filenameFor(Component.STATS), newLevel);
         Map<MetadataType, MetadataComponent> currentComponents = deserialize(descriptor, EnumSet.allOf(MetadataType.class));
         StatsMetadata stats = (StatsMetadata) currentComponents.remove(MetadataType.STATS);
@@ -137,8 +120,7 @@ public class MetadataSerializer implements IMetadataSerializer
         rewriteSSTableMetadata(descriptor, currentComponents);
     }
 
-    public void mutateRepairedAt(Descriptor descriptor, long newRepairedAt) throws IOException
-    {
+    public void mutateRepairedAt(Descriptor descriptor, long newRepairedAt) throws IOException {
         logger.trace("Mutating {} to repairedAt time {}", descriptor.filenameFor(Component.STATS), newRepairedAt);
         Map<MetadataType, MetadataComponent> currentComponents = deserialize(descriptor, EnumSet.allOf(MetadataType.class));
         StatsMetadata stats = (StatsMetadata) currentComponents.remove(MetadataType.STATS);
@@ -147,11 +129,9 @@ public class MetadataSerializer implements IMetadataSerializer
         rewriteSSTableMetadata(descriptor, currentComponents);
     }
 
-    private void rewriteSSTableMetadata(Descriptor descriptor, Map<MetadataType, MetadataComponent> currentComponents) throws IOException
-    {
+    private void rewriteSSTableMetadata(Descriptor descriptor, Map<MetadataType, MetadataComponent> currentComponents) throws IOException {
         String filePath = descriptor.tmpFilenameFor(Component.STATS);
-        try (DataOutputStreamPlus out = new BufferedDataOutputStreamPlus(new FileOutputStream(filePath)))
-        {
+        try (DataOutputStreamPlus out = ((BufferedDataOutputStreamPlus) org.zlab.ocov.tracker.Runtime.monitorCreationContext(new BufferedDataOutputStreamPlus(new FileOutputStream(filePath)), 280))) {
             serialize(currentComponents, out, descriptor.version);
             out.flush();
         }
@@ -159,6 +139,5 @@ public class MetadataSerializer implements IMetadataSerializer
         if (FBUtilities.isWindows())
             FileUtils.delete(descriptor.filenameFor(Component.STATS));
         FileUtils.renameWithConfirm(filePath, descriptor.filenameFor(Component.STATS));
-
     }
 }

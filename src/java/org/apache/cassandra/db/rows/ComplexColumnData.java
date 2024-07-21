@@ -21,10 +21,8 @@ import java.nio.ByteBuffer;
 import java.security.MessageDigest;
 import java.util.*;
 import java.util.function.BiFunction;
-
 import com.google.common.base.Function;
 import com.google.common.collect.Iterables;
-
 import org.apache.cassandra.config.CFMetaData;
 import org.apache.cassandra.config.ColumnDefinition;
 import org.apache.cassandra.db.DeletionTime;
@@ -40,8 +38,8 @@ import org.apache.cassandra.utils.btree.UpdateFunction;
  * The data for a complex column, that is it's cells and potential complex
  * deletion time.
  */
-public class ComplexColumnData extends ColumnData implements Iterable<Cell>
-{
+public class ComplexColumnData extends ColumnData implements Iterable<Cell> {
+
     static final Cell[] NO_CELLS = new Cell[0];
 
     private static final long EMPTY_SIZE = ObjectSizes.measure(new ComplexColumnData(ColumnDefinition.regularDef("", "", "", SetType.getInstance(ByteType.instance, true)), NO_CELLS, new DeletionTime(0, 0)));
@@ -52,8 +50,7 @@ public class ComplexColumnData extends ColumnData implements Iterable<Cell>
     private final DeletionTime complexDeletion;
 
     // Only ArrayBackedRow should call this.
-    ComplexColumnData(ColumnDefinition column, Object[] cells, DeletionTime complexDeletion)
-    {
+    ComplexColumnData(ColumnDefinition column, Object[] cells, DeletionTime complexDeletion) {
         super(column);
         assert column.isComplex();
         assert cells.length > 0 || !complexDeletion.isLive();
@@ -61,23 +58,19 @@ public class ComplexColumnData extends ColumnData implements Iterable<Cell>
         this.complexDeletion = complexDeletion;
     }
 
-    public boolean hasCells()
-    {
+    public boolean hasCells() {
         return !BTree.isEmpty(cells);
     }
 
-    public int cellsCount()
-    {
+    public int cellsCount() {
         return BTree.size(cells);
     }
 
-    public Cell getCell(CellPath path)
-    {
+    public Cell getCell(CellPath path) {
         return (Cell) BTree.<Object>find(cells, column.asymmetricCellPathComparator(), path);
     }
 
-    public Cell getCellByIndex(int idx)
-    {
+    public Cell getCellByIndex(int idx) {
         return BTree.findByIndex(cells, idx);
     }
 
@@ -92,174 +85,138 @@ public class ComplexColumnData extends ColumnData implements Iterable<Cell>
      * @return the complex deletion time for the column this is the data of or {@code DeletionTime.LIVE}
      * if the column is not deleted.
      */
-    public DeletionTime complexDeletion()
-    {
+    public DeletionTime complexDeletion() {
         return complexDeletion;
     }
 
-    public Iterator<Cell> iterator()
-    {
+    public Iterator<Cell> iterator() {
         return BTree.iterator(cells);
     }
 
-    public Iterator<Cell> reverseIterator()
-    {
+    public Iterator<Cell> reverseIterator() {
         return BTree.iterator(cells, BTree.Dir.DESC);
     }
 
-    public int dataSize()
-    {
+    public int dataSize() {
         int size = complexDeletion.dataSize();
-        for (Cell cell : this)
-            size += cell.dataSize();
+        for (Cell cell : this) size += cell.dataSize();
         return size;
     }
 
-    public long unsharedHeapSizeExcludingData()
-    {
+    public long unsharedHeapSizeExcludingData() {
         long heapSize = EMPTY_SIZE + ObjectSizes.sizeOfArray(cells);
         // TODO: this can be turned into a simple multiplication, at least while we have only one Cell implementation
-        for (Cell cell : this)
-            heapSize += cell.unsharedHeapSizeExcludingData();
+        for (Cell cell : this) heapSize += cell.unsharedHeapSizeExcludingData();
         return heapSize;
     }
 
-    public void validate()
-    {
-        for (Cell cell : this)
-            cell.validate();
+    public void validate() {
+        for (Cell cell : this) cell.validate();
     }
 
-    public void digest(MessageDigest digest)
-    {
+    public void digest(MessageDigest digest) {
         if (!complexDeletion.isLive())
             complexDeletion.digest(digest);
-
-        for (Cell cell : this)
-            cell.digest(digest);
+        for (Cell cell : this) cell.digest(digest);
     }
 
-    public ComplexColumnData markCounterLocalToBeCleared()
-    {
+    public ComplexColumnData markCounterLocalToBeCleared() {
         return transformAndFilter(complexDeletion, Cell::markCounterLocalToBeCleared);
     }
 
-    public ComplexColumnData filter(ColumnFilter filter, DeletionTime activeDeletion, CFMetaData.DroppedColumn dropped)
-    {
+    public ComplexColumnData filter(ColumnFilter filter, DeletionTime activeDeletion, CFMetaData.DroppedColumn dropped) {
         ColumnFilter.Tester cellTester = filter.newTester(column);
         if (cellTester == null && activeDeletion.isLive() && dropped == null)
             return this;
-
         DeletionTime newDeletion = activeDeletion.supersedes(complexDeletion) ? DeletionTime.LIVE : complexDeletion;
-        return transformAndFilter(newDeletion,
-                                  (cell) ->
-                                           (cellTester == null || cellTester.includes(cell.path()))
-                                        && !activeDeletion.deletes(cell)
-                                        && (dropped == null || cell.timestamp() > dropped.droppedTime)
-                                           ? cell : null);
+        return transformAndFilter(newDeletion, (cell) -> (cellTester == null || cellTester.includes(cell.path())) && !activeDeletion.deletes(cell) && (dropped == null || cell.timestamp() > dropped.droppedTime) ? cell : null);
     }
 
-    public ComplexColumnData purge(DeletionPurger purger, int nowInSec)
-    {
+    public ComplexColumnData purge(DeletionPurger purger, int nowInSec) {
         DeletionTime newDeletion = complexDeletion.isLive() || purger.shouldPurge(complexDeletion) ? DeletionTime.LIVE : complexDeletion;
         return transformAndFilter(newDeletion, (cell) -> cell.purge(purger, nowInSec));
     }
 
-    private ComplexColumnData transformAndFilter(DeletionTime newDeletion, Function<? super Cell, ? extends Cell> function)
-    {
+    private ComplexColumnData transformAndFilter(DeletionTime newDeletion, Function<? super Cell, ? extends Cell> function) {
         Object[] transformed = BTree.transformAndFilter(cells, function);
-
         if (cells == transformed && newDeletion == complexDeletion)
             return this;
-
         if (newDeletion == DeletionTime.LIVE && BTree.isEmpty(transformed))
             return null;
-
-        return new ComplexColumnData(column, transformed, newDeletion);
+        return ((ComplexColumnData) org.zlab.ocov.tracker.Runtime.update(new ComplexColumnData(column, transformed, newDeletion), 28, newDeletion, function));
     }
 
-    public ComplexColumnData updateAllTimestamp(long newTimestamp)
-    {
-        DeletionTime newDeletion = complexDeletion.isLive() ? complexDeletion : new DeletionTime(newTimestamp - 1, complexDeletion.localDeletionTime());
+    public ComplexColumnData updateAllTimestamp(long newTimestamp) {
+        DeletionTime newDeletion = complexDeletion.isLive() ? complexDeletion : ((DeletionTime) org.zlab.ocov.tracker.Runtime.update(new DeletionTime(newTimestamp - 1, complexDeletion.localDeletionTime()), 29, newTimestamp));
         return transformAndFilter(newDeletion, (cell) -> (Cell) cell.updateAllTimestamp(newTimestamp));
     }
 
-    public long maxTimestamp()
-    {
+    public long maxTimestamp() {
         long timestamp = complexDeletion.markedForDeleteAt();
-        for (Cell cell : this)
-            timestamp = Math.max(timestamp, cell.timestamp());
+        for (Cell cell : this) timestamp = Math.max(timestamp, cell.timestamp());
         return timestamp;
     }
 
     // This is the partner in crime of ArrayBackedRow.setValue. The exact warning apply. The short
     // version is: "don't use that method".
-    void setValue(CellPath path, ByteBuffer value)
-    {
+    void setValue(CellPath path, ByteBuffer value) {
         Cell current = (Cell) BTree.<Object>find(cells, column.asymmetricCellPathComparator(), path);
         BTree.replaceInSitu(cells, column.cellComparator(), current, current.withUpdatedValue(value));
     }
 
     @Override
-    public boolean equals(Object other)
-    {
+    public boolean equals(Object other) {
         if (this == other)
             return true;
-
-        if(!(other instanceof ComplexColumnData))
+        if (!(other instanceof ComplexColumnData))
             return false;
-
-        ComplexColumnData that = (ComplexColumnData)other;
-        return this.column().equals(that.column())
-            && this.complexDeletion().equals(that.complexDeletion)
-            && BTree.equals(this.cells, that.cells);
+        ComplexColumnData that = (ComplexColumnData) other;
+        return this.column().equals(that.column()) && this.complexDeletion().equals(that.complexDeletion) && BTree.equals(this.cells, that.cells);
     }
 
     @Override
-    public int hashCode()
-    {
+    public int hashCode() {
         return Objects.hash(column(), complexDeletion(), BTree.hashCode(cells));
     }
 
-    public static Builder builder()
-    {
+    public static Builder builder() {
         return new Builder();
     }
 
-    public static class Builder
-    {
+    public static class Builder {
+
         private static BiFunction<Cell, Cell, Cell> noResolve = (a, b) -> {
             throw new IllegalStateException();
         };
 
         private DeletionTime complexDeletion;
+
         private ColumnDefinition column;
+
         private BTree.Builder<Cell> builder;
 
-        public void newColumn(ColumnDefinition column)
-        {
+        public void newColumn(ColumnDefinition column) {
             this.column = column;
-            this.complexDeletion = DeletionTime.LIVE; // default if writeComplexDeletion is not called
-            if (builder == null) builder = BTree.builder(column.cellComparator());
-            else builder.reuse(column.cellComparator());
+            // default if writeComplexDeletion is not called
+            this.complexDeletion = DeletionTime.LIVE;
+            if (builder == null)
+                builder = BTree.builder(column.cellComparator());
+            else
+                builder.reuse(column.cellComparator());
         }
 
-        public void addComplexDeletion(DeletionTime complexDeletion)
-        {
+        public void addComplexDeletion(DeletionTime complexDeletion) {
             this.complexDeletion = complexDeletion;
         }
 
-        public void addCell(Cell cell)
-        {
+        public void addCell(Cell cell) {
             builder.add(cell);
         }
 
-        public ComplexColumnData build()
-        {
+        public ComplexColumnData build() {
             if (complexDeletion.isLive() && builder.isEmpty())
                 return null;
-
-            return new ComplexColumnData(column, builder.build(), complexDeletion);
+            return ((ComplexColumnData) org.zlab.ocov.tracker.Runtime.monitorCreationContext(new ComplexColumnData(column, builder.build(), complexDeletion), 74));
         }
     }
 }

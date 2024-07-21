@@ -24,27 +24,16 @@ import org.apache.cassandra.db.DeletionInfo;
 import org.apache.cassandra.db.PartitionColumns;
 import org.apache.cassandra.db.rows.*;
 
-public class ImmutableBTreePartition extends AbstractBTreePartition
-{
+public class ImmutableBTreePartition extends AbstractBTreePartition {
 
     protected final Holder holder;
 
-    public ImmutableBTreePartition(CFMetaData metadata,
-                                      DecoratedKey partitionKey,
-                                      PartitionColumns columns,
-                                      Row staticRow,
-                                      Object[] tree,
-                                      DeletionInfo deletionInfo,
-                                      EncodingStats stats)
-    {
+    public ImmutableBTreePartition(CFMetaData metadata, DecoratedKey partitionKey, PartitionColumns columns, Row staticRow, Object[] tree, DeletionInfo deletionInfo, EncodingStats stats) {
         super(metadata, partitionKey);
         this.holder = new Holder(columns, tree, deletionInfo, staticRow, stats);
     }
 
-    protected ImmutableBTreePartition(CFMetaData metadata,
-                                      DecoratedKey partitionKey,
-                                      Holder holder)
-    {
+    protected ImmutableBTreePartition(CFMetaData metadata, DecoratedKey partitionKey, Holder holder) {
         super(metadata, partitionKey);
         this.holder = holder;
     }
@@ -58,8 +47,7 @@ public class ImmutableBTreePartition extends AbstractBTreePartition
      * @param iterator the iterator to gather in memory.
      * @return the created partition.
      */
-    public static ImmutableBTreePartition create(UnfilteredRowIterator iterator)
-    {
+    public static ImmutableBTreePartition create(UnfilteredRowIterator iterator) {
         return create(iterator, 16);
     }
 
@@ -73,8 +61,7 @@ public class ImmutableBTreePartition extends AbstractBTreePartition
      * @param ordered {@code true} if the iterator will return the rows in order, {@code false} otherwise.
      * @return the created partition.
      */
-    public static ImmutableBTreePartition create(UnfilteredRowIterator iterator, boolean ordered)
-    {
+    public static ImmutableBTreePartition create(UnfilteredRowIterator iterator, boolean ordered) {
         return create(iterator, 16, ordered);
     }
 
@@ -89,8 +76,7 @@ public class ImmutableBTreePartition extends AbstractBTreePartition
      * correspond or be a good estimation of the number or rows in {@code iterator}.
      * @return the created partition.
      */
-    public static ImmutableBTreePartition create(UnfilteredRowIterator iterator, int initialRowCapacity)
-    {
+    public static ImmutableBTreePartition create(UnfilteredRowIterator iterator, int initialRowCapacity) {
         return create(iterator, initialRowCapacity, true);
     }
 
@@ -106,18 +92,15 @@ public class ImmutableBTreePartition extends AbstractBTreePartition
      * @param ordered {@code true} if the iterator will return the rows in order, {@code false} otherwise.
      * @return the created partition.
      */
-    public static ImmutableBTreePartition create(UnfilteredRowIterator iterator, int initialRowCapacity, boolean ordered)
-    {
+    public static ImmutableBTreePartition create(UnfilteredRowIterator iterator, int initialRowCapacity, boolean ordered) {
         return new ImmutableBTreePartition(iterator.metadata(), iterator.partitionKey(), build(iterator, initialRowCapacity, ordered));
     }
 
-    protected Holder holder()
-    {
+    protected Holder holder() {
         return holder;
     }
 
-    protected boolean canHaveShadowedData()
-    {
+    protected boolean canHaveShadowedData() {
         return false;
     }
 }

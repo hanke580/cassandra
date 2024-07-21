@@ -25,12 +25,10 @@ import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
-
 import com.google.common.base.Stopwatch;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.slf4j.helpers.MessageFormatter;
-
 import org.apache.cassandra.concurrent.Stage;
 import org.apache.cassandra.concurrent.StageManager;
 import org.apache.cassandra.db.ConsistencyLevel;
@@ -48,28 +46,33 @@ import org.apache.cassandra.utils.progress.ProgressListener;
  * ThreadLocal state for a tracing session. The presence of an instance of this class as a ThreadLocal denotes that an
  * operation is being traced.
  */
-public class TraceState implements ProgressEventNotifier
-{
+public class TraceState implements ProgressEventNotifier {
+
     private static final Logger logger = LoggerFactory.getLogger(TraceState.class);
-    private static final int WAIT_FOR_PENDING_EVENTS_TIMEOUT_SECS =
-    Integer.valueOf(System.getProperty("cassandra.wait_for_tracing_events_timeout_secs", "0"));
+
+    private static final int WAIT_FOR_PENDING_EVENTS_TIMEOUT_SECS = Integer.valueOf(System.getProperty("cassandra.wait_for_tracing_events_timeout_secs", "0"));
 
     public final UUID sessionId;
+
     public final InetAddress coordinator;
+
     public final Stopwatch watch;
+
     public final ByteBuffer sessionIdBytes;
+
     public final Tracing.TraceType traceType;
+
     public final int ttl;
 
     private boolean notify;
+
     private final List<ProgressListener> listeners = new CopyOnWriteArrayList<>();
+
     private String tag;
 
-    public enum Status
-    {
-        IDLE,
-        ACTIVE,
-        STOPPED
+    public enum Status {
+
+        IDLE, ACTIVE, STOPPED
     }
 
     private volatile Status status;
@@ -78,11 +81,9 @@ public class TraceState implements ProgressEventNotifier
     // See CASSANDRA-7626 for more details.
     private final AtomicInteger references = new AtomicInteger(1);
 
-    public TraceState(InetAddress coordinator, UUID sessionId, Tracing.TraceType traceType)
-    {
+    public TraceState(InetAddress coordinator, UUID sessionId, Tracing.TraceType traceType) {
         assert coordinator != null;
         assert sessionId != null;
-
         this.coordinator = coordinator;
         this.sessionId = sessionId;
         sessionIdBytes = ByteBufferUtil.bytes(sessionId);
@@ -90,44 +91,38 @@ public class TraceState implements ProgressEventNotifier
         this.ttl = traceType.getTTL();
         watch = Stopwatch.createStarted();
         this.status = Status.IDLE;
-}
+    }
 
     /**
      * Activate notification with provided {@code tag} name.
      *
      * @param tag Tag name to add when emitting notification
      */
-    public void enableActivityNotification(String tag)
-    {
+    public void enableActivityNotification(String tag) {
         assert traceType == Tracing.TraceType.REPAIR;
         notify = true;
         this.tag = tag;
     }
 
     @Override
-    public void addProgressListener(ProgressListener listener)
-    {
+    public void addProgressListener(ProgressListener listener) {
         assert traceType == Tracing.TraceType.REPAIR;
         listeners.add(listener);
     }
 
     @Override
-    public void removeProgressListener(ProgressListener listener)
-    {
+    public void removeProgressListener(ProgressListener listener) {
         assert traceType == Tracing.TraceType.REPAIR;
         listeners.remove(listener);
     }
 
-    public int elapsed()
-    {
+    public int elapsed() {
         long elapsed = watch.elapsed(TimeUnit.MICROSECONDS);
         return elapsed < Integer.MAX_VALUE ? (int) elapsed : Integer.MAX_VALUE;
     }
 
-    public synchronized void stop()
-    {
+    public synchronized void stop() {
         waitForPendingEvents();
-
         status = Status.STOPPED;
         notifyAll();
     }
@@ -139,72 +134,55 @@ public class TraceState implements ProgressEventNotifier
      * @param timeout timeout in milliseconds
      * @return activity status
      */
-    public synchronized Status waitActivity(long timeout)
-    {
-        if (status == Status.IDLE)
-        {
-            try
-            {
+    public synchronized Status waitActivity(long timeout) {
+        if (status == Status.IDLE) {
+            try {
                 wait(timeout);
-            }
-            catch (InterruptedException e)
-            {
+            } catch (InterruptedException e) {
                 throw new RuntimeException();
             }
         }
-        if (status == Status.ACTIVE)
-        {
+        if (status == Status.ACTIVE) {
             status = Status.IDLE;
             return Status.ACTIVE;
         }
         return status;
     }
 
-    private synchronized void notifyActivity()
-    {
+    private synchronized void notifyActivity() {
         status = Status.ACTIVE;
         notifyAll();
     }
 
-    public void trace(String format, Object arg)
-    {
+    public void trace(String format, Object arg) {
         trace(MessageFormatter.format(format, arg).getMessage());
     }
 
-    public void trace(String format, Object arg1, Object arg2)
-    {
+    public void trace(String format, Object arg1, Object arg2) {
         trace(MessageFormatter.format(format, arg1, arg2).getMessage());
     }
 
-    public void trace(String format, Object[] args)
-    {
+    public void trace(String format, Object[] args) {
         trace(MessageFormatter.arrayFormat(format, args).getMessage());
     }
 
-    public void trace(String message)
-    {
+    public void trace(String message) {
         if (notify)
             notifyActivity();
-
         final String threadName = Thread.currentThread().getName();
         final int elapsed = elapsed();
-
         executeMutation(TraceKeyspace.makeEventMutation(sessionIdBytes, message, elapsed, threadName, ttl));
         if (logger.isTraceEnabled())
             logger.trace("Adding <{}> to trace events", message);
-
-        for (ProgressListener listener : listeners)
-        {
+        for (ProgressListener listener : listeners) {
             listener.progress(tag, ProgressEvent.createNotification(message));
         }
     }
 
-    static void executeMutation(final Mutation mutation)
-    {
-        StageManager.getStage(Stage.TRACING).execute(new WrappedRunnable()
-        {
-            protected void runMayThrow() throws Exception
-            {
+    static void executeMutation(final Mutation mutation) {
+        StageManager.getStage(Stage.TRACING).execute(new WrappedRunnable() {
+
+            protected void runMayThrow() throws Exception {
                 mutateWithCatch(mutation);
             }
         });
@@ -214,27 +192,20 @@ public class TraceState implements ProgressEventNotifier
      * Called from {@link org.apache.cassandra.net.OutboundTcpConnection} for non-local traces (traces
      * that are not initiated by local node == coordinator).
      */
-    public static void mutateWithTracing(final ByteBuffer sessionId, final String message, final int elapsed, final int ttl)
-    {
+    public static void mutateWithTracing(final ByteBuffer sessionId, final String message, final int elapsed, final int ttl) {
         final String threadName = Thread.currentThread().getName();
+        StageManager.getStage(Stage.TRACING).execute(new WrappedRunnable() {
 
-        StageManager.getStage(Stage.TRACING).execute(new WrappedRunnable()
-        {
-            public void runMayThrow()
-            {
+            public void runMayThrow() {
                 mutateWithCatch(TraceKeyspace.makeEventMutation(sessionId, message, elapsed, threadName, ttl));
             }
         });
     }
 
-    static void mutateWithCatch(Mutation mutation)
-    {
-        try
-        {
+    static void mutateWithCatch(Mutation mutation) {
+        try {
             StorageProxy.mutate(Collections.singletonList(mutation), ConsistencyLevel.ANY);
-        }
-        catch (OverloadedException e)
-        {
+        } catch (OverloadedException e) {
             Tracing.logger.warn("Too many nodes are overloaded to save trace events");
         }
     }
@@ -244,32 +215,21 @@ public class TraceState implements ProgressEventNotifier
      * have at least been applied to one replica. This works because the tracking executor only
      * has one thread in its pool, see {@link StageManager#tracingExecutor()}.
      */
-    protected void waitForPendingEvents()
-    {
+    protected void waitForPendingEvents() {
         if (WAIT_FOR_PENDING_EVENTS_TIMEOUT_SECS <= 0)
             return;
-
-        try
-        {
+        try {
             if (logger.isTraceEnabled())
-                logger.trace("Waiting for up to {} seconds for trace events to complete",
-                             +WAIT_FOR_PENDING_EVENTS_TIMEOUT_SECS);
-
-            StageManager.getStage(Stage.TRACING).submit(StageManager.NO_OP_TASK)
-                        .get(WAIT_FOR_PENDING_EVENTS_TIMEOUT_SECS, TimeUnit.SECONDS);
-        }
-        catch (Throwable t)
-        {
+                logger.trace("Waiting for up to {} seconds for trace events to complete", +WAIT_FOR_PENDING_EVENTS_TIMEOUT_SECS);
+            StageManager.getStage(Stage.TRACING).submit(StageManager.NO_OP_TASK).get(WAIT_FOR_PENDING_EVENTS_TIMEOUT_SECS, TimeUnit.SECONDS);
+        } catch (Throwable t) {
             JVMStabilityInspector.inspectThrowable(t);
             logger.debug("Failed to wait for tracing events to complete: {}", t);
         }
     }
 
-
-    public boolean acquireReference()
-    {
-        while (true)
-        {
+    public boolean acquireReference() {
+        while (true) {
             int n = references.get();
             if (n <= 0)
                 return false;
@@ -278,8 +238,7 @@ public class TraceState implements ProgressEventNotifier
         }
     }
 
-    public int releaseReference()
-    {
+    public int releaseReference() {
         waitForPendingEvents();
         return references.decrementAndGet();
     }

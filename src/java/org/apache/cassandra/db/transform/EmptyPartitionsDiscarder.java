@@ -19,17 +19,15 @@ package org.apache.cassandra.db.transform;
 
 import org.apache.cassandra.db.rows.BaseRowIterator;
 
-public final class EmptyPartitionsDiscarder extends Transformation<BaseRowIterator<?>>
-{
+public final class EmptyPartitionsDiscarder extends Transformation<BaseRowIterator<?>> {
+
     @Override
-    protected BaseRowIterator applyToPartition(BaseRowIterator iterator)
-    {
-        if (iterator.isEmpty())
-        {
+    protected BaseRowIterator applyToPartition(BaseRowIterator iterator) {
+        if (iterator.isEmpty()) {
             iterator.close();
             return null;
         }
-
+        org.zlab.ocov.tracker.Runtime.update(iterator, 104, iterator);
         return iterator;
     }
 }

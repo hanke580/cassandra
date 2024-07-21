@@ -22,12 +22,10 @@ import java.nio.ByteBuffer;
 import java.util.ArrayList;
 import java.util.Iterator;
 import java.util.List;
-
 import com.google.common.collect.Iterables;
 import com.google.common.collect.Lists;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-
 import org.apache.cassandra.config.CFMetaData;
 import org.apache.cassandra.config.ColumnDefinition;
 import org.apache.cassandra.db.*;
@@ -53,8 +51,8 @@ import org.apache.cassandra.utils.btree.UpdateFunction;
  * is also a few static helper constructor methods for special cases ({@code emptyUpdate()},
  * {@code fullPartitionDelete} and {@code singleRowUpdate}).
  */
-public class PartitionUpdate extends AbstractBTreePartition
-{
+public class PartitionUpdate extends AbstractBTreePartition {
+
     protected static final Logger logger = LoggerFactory.getLogger(PartitionUpdate.class);
 
     public static final PartitionUpdateSerializer serializer = new PartitionUpdateSerializer();
@@ -66,21 +64,18 @@ public class PartitionUpdate extends AbstractBTreePartition
     // to allowNewUpdates() allow new writes. We could make that more implicit but only triggers
     // really requires that so we keep it simple for now).
     private volatile boolean isBuilt;
+
     private boolean canReOpen = true;
 
     private Holder holder;
+
     private BTree.Builder<Row> rowBuilder;
+
     private MutableDeletionInfo deletionInfo;
 
     private final boolean canHaveShadowedData;
 
-    private PartitionUpdate(CFMetaData metadata,
-                            DecoratedKey key,
-                            PartitionColumns columns,
-                            MutableDeletionInfo deletionInfo,
-                            int initialRowCapacity,
-                            boolean canHaveShadowedData)
-    {
+    private PartitionUpdate(CFMetaData metadata, DecoratedKey key, PartitionColumns columns, MutableDeletionInfo deletionInfo, int initialRowCapacity, boolean canHaveShadowedData) {
         super(metadata, key);
         this.deletionInfo = deletionInfo;
         this.holder = new Holder(columns, BTree.empty(), deletionInfo, Rows.EMPTY_STATIC_ROW, EncodingStats.NO_STATS);
@@ -88,12 +83,7 @@ public class PartitionUpdate extends AbstractBTreePartition
         rowBuilder = builder(initialRowCapacity);
     }
 
-    private PartitionUpdate(CFMetaData metadata,
-                            DecoratedKey key,
-                            Holder holder,
-                            MutableDeletionInfo deletionInfo,
-                            boolean canHaveShadowedData)
-    {
+    private PartitionUpdate(CFMetaData metadata, DecoratedKey key, Holder holder, MutableDeletionInfo deletionInfo, boolean canHaveShadowedData) {
         super(metadata, key);
         this.holder = holder;
         this.deletionInfo = deletionInfo;
@@ -101,23 +91,12 @@ public class PartitionUpdate extends AbstractBTreePartition
         this.canHaveShadowedData = canHaveShadowedData;
     }
 
-    public PartitionUpdate(CFMetaData metadata,
-                           DecoratedKey key,
-                           PartitionColumns columns,
-                           int initialRowCapacity)
-    {
+    public PartitionUpdate(CFMetaData metadata, DecoratedKey key, PartitionColumns columns, int initialRowCapacity) {
         this(metadata, key, columns, MutableDeletionInfo.live(), initialRowCapacity, true);
     }
 
-    public PartitionUpdate(CFMetaData metadata,
-                           ByteBuffer key,
-                           PartitionColumns columns,
-                           int initialRowCapacity)
-    {
-        this(metadata,
-             metadata.decorateKey(key),
-             columns,
-             initialRowCapacity);
+    public PartitionUpdate(CFMetaData metadata, ByteBuffer key, PartitionColumns columns, int initialRowCapacity) {
+        this(metadata, metadata.decorateKey(key), columns, initialRowCapacity);
     }
 
     /**
@@ -128,11 +107,11 @@ public class PartitionUpdate extends AbstractBTreePartition
      *
      * @return the newly created empty (and immutable) update.
      */
-    public static PartitionUpdate emptyUpdate(CFMetaData metadata, DecoratedKey key)
-    {
+    public static PartitionUpdate emptyUpdate(CFMetaData metadata, DecoratedKey key) {
         MutableDeletionInfo deletionInfo = MutableDeletionInfo.live();
-        Holder holder = new Holder(PartitionColumns.NONE, BTree.empty(), deletionInfo, Rows.EMPTY_STATIC_ROW, EncodingStats.NO_STATS);
-        return new PartitionUpdate(metadata, key, holder, deletionInfo, false);
+        org.zlab.ocov.tracker.Runtime.update(deletionInfo, 75, metadata, key);
+        Holder holder = ((Holder) org.zlab.ocov.tracker.Runtime.update(new Holder(PartitionColumns.NONE, BTree.empty(), deletionInfo, Rows.EMPTY_STATIC_ROW, EncodingStats.NO_STATS), 76, metadata, key));
+        return ((PartitionUpdate) org.zlab.ocov.tracker.Runtime.monitorCreationContext(new PartitionUpdate(metadata, key, holder, deletionInfo, false), 157));
     }
 
     /**
@@ -145,11 +124,10 @@ public class PartitionUpdate extends AbstractBTreePartition
      *
      * @return the newly created partition deletion update.
      */
-    public static PartitionUpdate fullPartitionDelete(CFMetaData metadata, DecoratedKey key, long timestamp, int nowInSec)
-    {
-        MutableDeletionInfo deletionInfo = new MutableDeletionInfo(timestamp, nowInSec);
-        Holder holder = new Holder(PartitionColumns.NONE, BTree.empty(), deletionInfo, Rows.EMPTY_STATIC_ROW, EncodingStats.NO_STATS);
-        return new PartitionUpdate(metadata, key, holder, deletionInfo, false);
+    public static PartitionUpdate fullPartitionDelete(CFMetaData metadata, DecoratedKey key, long timestamp, int nowInSec) {
+        MutableDeletionInfo deletionInfo = ((MutableDeletionInfo) org.zlab.ocov.tracker.Runtime.update(new MutableDeletionInfo(timestamp, nowInSec), 77, metadata, key, timestamp, nowInSec));
+        Holder holder = ((Holder) org.zlab.ocov.tracker.Runtime.update(new Holder(PartitionColumns.NONE, BTree.empty(), deletionInfo, Rows.EMPTY_STATIC_ROW, EncodingStats.NO_STATS), 78, metadata, key, timestamp, nowInSec));
+        return ((PartitionUpdate) org.zlab.ocov.tracker.Runtime.monitorCreationContext(new PartitionUpdate(metadata, key, holder, deletionInfo, false), 158));
     }
 
     /**
@@ -161,18 +139,14 @@ public class PartitionUpdate extends AbstractBTreePartition
      *
      * @return the newly created partition update containing only {@code row}.
      */
-    public static PartitionUpdate singleRowUpdate(CFMetaData metadata, DecoratedKey key, Row row)
-    {
+    public static PartitionUpdate singleRowUpdate(CFMetaData metadata, DecoratedKey key, Row row) {
         MutableDeletionInfo deletionInfo = MutableDeletionInfo.live();
-        if (row.isStatic())
-        {
-            Holder holder = new Holder(new PartitionColumns(Columns.from(row.columns()), Columns.NONE), BTree.empty(), deletionInfo, row, EncodingStats.NO_STATS);
-            return new PartitionUpdate(metadata, key, holder, deletionInfo, false);
-        }
-        else
-        {
-            Holder holder = new Holder(new PartitionColumns(Columns.NONE, Columns.from(row.columns())), BTree.singleton(row), deletionInfo, Rows.EMPTY_STATIC_ROW, EncodingStats.NO_STATS);
-            return new PartitionUpdate(metadata, key, holder, deletionInfo, false);
+        if (row.isStatic()) {
+            Holder holder = ((Holder) org.zlab.ocov.tracker.Runtime.monitorCreationContext(new Holder(((PartitionColumns) org.zlab.ocov.tracker.Runtime.monitorCreationContext(new PartitionColumns(Columns.from(row.columns()), Columns.NONE), 159)), BTree.empty(), deletionInfo, row, EncodingStats.NO_STATS), 160));
+            return ((PartitionUpdate) org.zlab.ocov.tracker.Runtime.monitorCreationContext(new PartitionUpdate(metadata, key, holder, deletionInfo, false), 161));
+        } else {
+            Holder holder = ((Holder) org.zlab.ocov.tracker.Runtime.monitorCreationContext(new Holder(((PartitionColumns) org.zlab.ocov.tracker.Runtime.monitorCreationContext(new PartitionColumns(Columns.NONE, Columns.from(row.columns())), 162)), BTree.singleton(row), deletionInfo, Rows.EMPTY_STATIC_ROW, EncodingStats.NO_STATS), 163));
+            return ((PartitionUpdate) org.zlab.ocov.tracker.Runtime.monitorCreationContext(new PartitionUpdate(metadata, key, holder, deletionInfo, false), 164));
         }
     }
 
@@ -185,8 +159,7 @@ public class PartitionUpdate extends AbstractBTreePartition
      *
      * @return the newly created partition update containing only {@code row}.
      */
-    public static PartitionUpdate singleRowUpdate(CFMetaData metadata, ByteBuffer key, Row row)
-    {
+    public static PartitionUpdate singleRowUpdate(CFMetaData metadata, ByteBuffer key, Row row) {
         return singleRowUpdate(metadata, metadata.decorateKey(key), row);
     }
 
@@ -196,22 +169,20 @@ public class PartitionUpdate extends AbstractBTreePartition
      * Warning: this method does not close the provided iterator, it is up to
      * the caller to close it.
      */
-    public static PartitionUpdate fromIterator(UnfilteredRowIterator iterator)
-    {
+    public static PartitionUpdate fromIterator(UnfilteredRowIterator iterator) {
         Holder holder = build(iterator, 16);
+        org.zlab.ocov.tracker.Runtime.update(holder, 79, iterator);
         MutableDeletionInfo deletionInfo = (MutableDeletionInfo) holder.deletionInfo;
-        return new PartitionUpdate(iterator.metadata(), iterator.partitionKey(), holder, deletionInfo, false);
+        return ((PartitionUpdate) org.zlab.ocov.tracker.Runtime.monitorCreationContext(new PartitionUpdate(iterator.metadata(), iterator.partitionKey(), holder, deletionInfo, false), 165));
     }
 
-    public static PartitionUpdate fromIterator(RowIterator iterator)
-    {
+    public static PartitionUpdate fromIterator(RowIterator iterator) {
         MutableDeletionInfo deletionInfo = MutableDeletionInfo.live();
         Holder holder = build(iterator, deletionInfo, true, 16);
         return new PartitionUpdate(iterator.metadata(), iterator.partitionKey(), holder, deletionInfo, false);
     }
 
-    protected boolean canHaveShadowedData()
-    {
+    protected boolean canHaveShadowedData() {
         return canHaveShadowedData;
     }
 
@@ -225,20 +196,12 @@ public class PartitionUpdate extends AbstractBTreePartition
      *
      * @return the deserialized update or {@code null} if {@code bytes == null}.
      */
-    public static PartitionUpdate fromBytes(ByteBuffer bytes, int version, DecoratedKey key)
-    {
+    public static PartitionUpdate fromBytes(ByteBuffer bytes, int version, DecoratedKey key) {
         if (bytes == null)
             return null;
-
-        try
-        {
-            return serializer.deserialize(new DataInputBuffer(bytes, true),
-                                          version,
-                                          SerializationHelper.Flag.LOCAL,
-                                          version < MessagingService.VERSION_30 ? key : null);
-        }
-        catch (IOException e)
-        {
+        try {
+            return serializer.deserialize(new DataInputBuffer(bytes, true), version, SerializationHelper.Flag.LOCAL, version < MessagingService.VERSION_30 ? key : null);
+        } catch (IOException e) {
             throw new RuntimeException(e);
         }
     }
@@ -251,15 +214,11 @@ public class PartitionUpdate extends AbstractBTreePartition
      *
      * @return a newly allocated byte buffer containing the serialized update.
      */
-    public static ByteBuffer toBytes(PartitionUpdate update, int version)
-    {
-        try (DataOutputBuffer out = new DataOutputBuffer())
-        {
+    public static ByteBuffer toBytes(PartitionUpdate update, int version) {
+        try (DataOutputBuffer out = new DataOutputBuffer()) {
             serializer.serialize(update, out, version);
             return ByteBuffer.wrap(out.getData(), 0, out.getLength());
-        }
-        catch (IOException e)
-        {
+        } catch (IOException e) {
             throw new RuntimeException(e);
         }
     }
@@ -274,8 +233,7 @@ public class PartitionUpdate extends AbstractBTreePartition
      *
      * @return the newly created partition deletion update.
      */
-    public static PartitionUpdate fullPartitionDelete(CFMetaData metadata, ByteBuffer key, long timestamp, int nowInSec)
-    {
+    public static PartitionUpdate fullPartitionDelete(CFMetaData metadata, ByteBuffer key, long timestamp, int nowInSec) {
         return fullPartitionDelete(metadata, metadata.decorateKey(key), timestamp, nowInSec);
     }
 
@@ -286,14 +244,11 @@ public class PartitionUpdate extends AbstractBTreePartition
      *
      * @return a partition update that include (merge) all the updates from {@code updates}.
      */
-    public static PartitionUpdate merge(List<PartitionUpdate> updates)
-    {
+    public static PartitionUpdate merge(List<PartitionUpdate> updates) {
         assert !updates.isEmpty();
         final int size = updates.size();
-
         if (size == 1)
             return Iterables.getOnlyElement(updates);
-
         int nowInSecs = FBUtilities.nowInSeconds();
         List<UnfilteredRowIterator> asIterators = Lists.transform(updates, AbstractBTreePartition::unfilteredIterator);
         return fromIterator(UnfilteredRowIterators.merge(asIterators, nowInSecs));
@@ -303,8 +258,7 @@ public class PartitionUpdate extends AbstractBTreePartition
     // further updates, but that's not necessary here and being able to check at least the partition deletion without
     // "locking" the update is nice (and used in DataResolver.RepairMergeListener.MergeListener).
     @Override
-    public DeletionInfo deletionInfo()
-    {
+    public DeletionInfo deletionInfo() {
         return deletionInfo;
     }
 
@@ -322,14 +276,13 @@ public class PartitionUpdate extends AbstractBTreePartition
      * tombstones always wins on timestamp equality, using -1 guarantees our deletion will still
      * delete anything from a previous update.
      */
-    public void updateAllTimestamp(long newTimestamp)
-    {
+    public void updateAllTimestamp(long newTimestamp) {
         Holder holder = holder();
         deletionInfo.updateAllTimestamp(newTimestamp - 1);
         Object[] tree = BTree.<Row>transformAndFilter(holder.tree, (x) -> x.updateAllTimestamp(newTimestamp));
         Row staticRow = holder.staticRow.updateAllTimestamp(newTimestamp);
         EncodingStats newStats = EncodingStats.Collector.collect(staticRow, BTree.<Row>iterator(tree), deletionInfo);
-        this.holder = new Holder(holder.columns, tree, deletionInfo, staticRow, newStats);
+        this.holder = ((Holder) org.zlab.ocov.tracker.Runtime.monitorCreationContext(new Holder(holder.columns, tree, deletionInfo, staticRow, newStats), 166));
     }
 
     /**
@@ -340,12 +293,8 @@ public class PartitionUpdate extends AbstractBTreePartition
      *
      * @return the number of "operations" performed by the update.
      */
-    public int operationCount()
-    {
-        return rowCount()
-             + (staticRow().isEmpty() ? 0 : 1)
-             + deletionInfo.rangeCount()
-             + (deletionInfo.getPartitionDeletion().isLive() ? 0 : 1);
+    public int operationCount() {
+        return rowCount() + (staticRow().isEmpty() ? 0 : 1) + deletionInfo.rangeCount() + (deletionInfo.getPartitionDeletion().isLive() ? 0 : 1);
     }
 
     /**
@@ -353,35 +302,29 @@ public class PartitionUpdate extends AbstractBTreePartition
      *
      * @return the size of the data contained in this update.
      */
-    public int dataSize()
-    {
+    public int dataSize() {
         int size = 0;
-        for (Row row : this)
-        {
+        for (Row row : this) {
             size += row.clustering().dataSize();
-            for (ColumnData cd : row)
-                size += cd.dataSize();
+            for (ColumnData cd : row) size += cd.dataSize();
         }
         return size;
     }
 
     @Override
-    public PartitionColumns columns()
-    {
+    public PartitionColumns columns() {
         // The superclass implementation calls holder(), but that triggers a build of the PartitionUpdate. But since
         // the columns are passed to the ctor, we know the holder always has the proper columns even if it doesn't have
         // the built rows yet, so just bypass the holder() method.
         return holder.columns;
     }
 
-    protected Holder holder()
-    {
+    protected Holder holder() {
         maybeBuild();
         return holder;
     }
 
-    public EncodingStats stats()
-    {
+    public EncodingStats stats() {
         return holder().stats;
     }
 
@@ -394,11 +337,9 @@ public class PartitionUpdate extends AbstractBTreePartition
      * again on read. This should thus be used sparingly (and if it turns that we end up using
      * this often, we should consider optimizing the behavior).
      */
-    public synchronized void allowNewUpdates()
-    {
+    public synchronized void allowNewUpdates() {
         if (!canReOpen)
             throw new IllegalStateException("You cannot do more updates on collectCounterMarks has been called");
-
         // This is synchronized to make extra sure things work properly even if this is
         // called concurrently with sort() (which should be avoided in the first place, but
         // better safe than sorry).
@@ -407,11 +348,8 @@ public class PartitionUpdate extends AbstractBTreePartition
             rowBuilder = builder(16);
     }
 
-    private BTree.Builder<Row> builder(int initialCapacity)
-    {
-        return BTree.<Row>builder(metadata.comparator, initialCapacity)
-                    .setQuickResolver((a, b) ->
-                                      Rows.merge(a, b, createdAtInSec));
+    private BTree.Builder<Row> builder(int initialCapacity) {
+        return BTree.<Row>builder(metadata.comparator, initialCapacity).setQuickResolver((a, b) -> Rows.merge(a, b, createdAtInSec));
     }
 
     /**
@@ -423,15 +361,13 @@ public class PartitionUpdate extends AbstractBTreePartition
      * @return an iterator over the rows of this update.
      */
     @Override
-    public Iterator<Row> iterator()
-    {
+    public Iterator<Row> iterator() {
         maybeBuild();
         return super.iterator();
     }
 
     @Override
-    public SliceableUnfilteredRowIterator sliceableUnfilteredIterator(ColumnFilter columns, boolean reversed)
-    {
+    public SliceableUnfilteredRowIterator sliceableUnfilteredIterator(ColumnFilter columns, boolean reversed) {
         maybeBuild();
         return super.sliceableUnfilteredIterator(columns, reversed);
     }
@@ -441,13 +377,10 @@ public class PartitionUpdate extends AbstractBTreePartition
      *
      * @throws org.apache.cassandra.serializers.MarshalException if some of the data contained in this update is corrupted.
      */
-    public void validate()
-    {
-        for (Row row : this)
-        {
+    public void validate() {
+        for (Row row : this) {
             metadata().comparator.validate(row.clustering());
-            for (ColumnData cd : row)
-                cd.validate();
+            for (ColumnData cd : row) cd.validate();
         }
     }
 
@@ -456,26 +389,18 @@ public class PartitionUpdate extends AbstractBTreePartition
      *
      * @return the maximum timestamp used in this update.
      */
-    public long maxTimestamp()
-    {
+    public long maxTimestamp() {
         maybeBuild();
-
         long maxTimestamp = deletionInfo.maxTimestamp();
-        for (Row row : this)
-        {
+        for (Row row : this) {
             maxTimestamp = Math.max(maxTimestamp, row.primaryKeyLivenessInfo().timestamp());
-            for (ColumnData cd : row)
-            {
-                if (cd.column().isSimple())
-                {
-                    maxTimestamp = Math.max(maxTimestamp, ((Cell)cd).timestamp());
-                }
-                else
-                {
-                    ComplexColumnData complexData = (ComplexColumnData)cd;
+            for (ColumnData cd : row) {
+                if (cd.column().isSimple()) {
+                    maxTimestamp = Math.max(maxTimestamp, ((Cell) cd).timestamp());
+                } else {
+                    ComplexColumnData complexData = (ComplexColumnData) cd;
                     maxTimestamp = Math.max(maxTimestamp, complexData.complexDeletion().markedForDeleteAt());
-                    for (Cell cell : complexData)
-                        maxTimestamp = Math.max(maxTimestamp, cell.timestamp());
+                    for (Cell cell : complexData) maxTimestamp = Math.max(maxTimestamp, cell.timestamp());
                 }
             }
         }
@@ -488,44 +413,36 @@ public class PartitionUpdate extends AbstractBTreePartition
      *
      * @return a list with counter marks for every counter in this update.
      */
-    public List<CounterMark> collectCounterMarks()
-    {
+    public List<CounterMark> collectCounterMarks() {
         assert metadata().isCounter();
         maybeBuild();
         // We will take aliases on the rows of this update, and update them in-place. So we should be sure the
         // update is now immutable for all intent and purposes.
         canReOpen = false;
-
         List<CounterMark> marks = new ArrayList<>();
         addMarksForRow(staticRow(), marks);
-        for (Row row : this)
-            addMarksForRow(row, marks);
+        for (Row row : this) addMarksForRow(row, marks);
         return marks;
     }
 
-    private void addMarksForRow(Row row, List<CounterMark> marks)
-    {
-        for (Cell cell : row.cells())
-        {
+    private void addMarksForRow(Row row, List<CounterMark> marks) {
+        for (Cell cell : row.cells()) {
             if (cell.isCounterCell())
                 marks.add(new CounterMark(row, cell.column(), cell.path()));
         }
     }
 
-    private void assertNotBuilt()
-    {
+    private void assertNotBuilt() {
         if (isBuilt)
             throw new IllegalStateException("An update should not be written again once it has been read");
     }
 
-    public void addPartitionDeletion(DeletionTime deletionTime)
-    {
+    public void addPartitionDeletion(DeletionTime deletionTime) {
         assertNotBuilt();
         deletionInfo.add(deletionTime);
     }
 
-    public void add(RangeTombstone range)
-    {
+    public void add(RangeTombstone range) {
         assertNotBuilt();
         deletionInfo.add(range, metadata.comparator);
     }
@@ -541,25 +458,17 @@ public class PartitionUpdate extends AbstractBTreePartition
      *
      * @param row the row to add.
      */
-    public void add(Row row)
-    {
+    public void add(Row row) {
         if (row.isEmpty())
             return;
-
         assertNotBuilt();
-
-        if (row.isStatic())
-        {
+        if (row.isStatic()) {
             // this assert is expensive, and possibly of limited value; we should consider removing it
             // or introducing a new class of assertions for test purposes
             assert columns().statics.containsAll(row.columns()) : columns().statics + " is not superset of " + row.columns();
-            Row staticRow = holder.staticRow.isEmpty()
-                      ? row
-                      : Rows.merge(holder.staticRow, row, createdAtInSec);
-            holder = new Holder(holder.columns, holder.tree, holder.deletionInfo, staticRow, holder.stats);
-        }
-        else
-        {
+            Row staticRow = holder.staticRow.isEmpty() ? row : Rows.merge(holder.staticRow, row, createdAtInSec);
+            holder = ((Holder) org.zlab.ocov.tracker.Runtime.monitorCreationContext(new Holder(holder.columns, holder.tree, holder.deletionInfo, staticRow, holder.stats), 167));
+        } else {
             // this assert is expensive, and possibly of limited value; we should consider removing it
             // or introducing a new class of assertions for test purposes
             assert columns().regulars.containsAll(row.columns()) : columns().regulars + " is not superset of " + row.columns();
@@ -567,155 +476,114 @@ public class PartitionUpdate extends AbstractBTreePartition
         }
     }
 
-    private void maybeBuild()
-    {
+    private void maybeBuild() {
         if (isBuilt)
             return;
-
         build();
     }
 
-    private synchronized void build()
-    {
+    private synchronized void build() {
         if (isBuilt)
             return;
-
         Holder holder = this.holder;
         Object[] cur = holder.tree;
         Object[] add = rowBuilder.build();
-        Object[] merged = BTree.<Row>merge(cur, add, metadata.comparator,
-                                           UpdateFunction.Simple.of((a, b) -> Rows.merge(a, b, createdAtInSec)));
-
+        Object[] merged = BTree.<Row>merge(cur, add, metadata.comparator, UpdateFunction.Simple.of((a, b) -> Rows.merge(a, b, createdAtInSec)));
         assert deletionInfo == holder.deletionInfo;
         EncodingStats newStats = EncodingStats.Collector.collect(holder.staticRow, BTree.<Row>iterator(merged), deletionInfo);
-
-        this.holder = new Holder(holder.columns, merged, holder.deletionInfo, holder.staticRow, newStats);
+        this.holder = ((Holder) org.zlab.ocov.tracker.Runtime.monitorCreationContext(new Holder(holder.columns, merged, holder.deletionInfo, holder.staticRow, newStats), 168));
         rowBuilder = null;
         isBuilt = true;
     }
 
     @Override
-    public String toString()
-    {
+    public String toString() {
         if (isBuilt)
             return super.toString();
-
         // We intentionally override AbstractBTreePartition#toString() to avoid iterating over the rows in the
         // partition, which can result in build() being triggered and lead to errors if the PartitionUpdate is later
         // modified.
-
         StringBuilder sb = new StringBuilder();
-        sb.append(String.format("[%s.%s] key=%s columns=%s",
-                                metadata.ksName,
-                                metadata.cfName,
-                                metadata.getKeyValidator().getString(partitionKey().getKey()),
-                                columns()));
-
+        sb.append(String.format("[%s.%s] key=%s columns=%s", metadata.ksName, metadata.cfName, metadata.getKeyValidator().getString(partitionKey().getKey()), columns()));
         sb.append("\n    deletionInfo=").append(deletionInfo);
         sb.append(" (not built)");
         return sb.toString();
     }
 
-    public static class PartitionUpdateSerializer
-    {
-        public void serialize(PartitionUpdate update, DataOutputPlus out, int version) throws IOException
-        {
-            try (UnfilteredRowIterator iter = update.sliceableUnfilteredIterator())
-            {
-                assert !iter.isReverseOrder();
+    public static class PartitionUpdateSerializer {
 
-                if (version < MessagingService.VERSION_30)
-                {
+        public void serialize(PartitionUpdate update, DataOutputPlus out, int version) throws IOException {
+            try (UnfilteredRowIterator iter = update.sliceableUnfilteredIterator()) {
+                assert !iter.isReverseOrder();
+                if ((org.zlab.ocov.tracker.Runtime.updateBranch(version, MessagingService.VERSION_30, "<", 21))) {
                     LegacyLayout.serializeAsLegacyPartition(null, iter, out, version);
-                }
-                else
-                {
+                } else {
                     CFMetaData.serializer.serialize(update.metadata(), out, version);
                     UnfilteredRowIteratorSerializer.serializer.serialize(iter, null, out, version, update.rowCount());
                 }
             }
         }
 
-        public PartitionUpdate deserialize(DataInputPlus in, int version, SerializationHelper.Flag flag, ByteBuffer key) throws IOException
-        {
-            if (version >= MessagingService.VERSION_30)
-            {
-                assert key == null; // key is only there for the old format
+        public PartitionUpdate deserialize(DataInputPlus in, int version, SerializationHelper.Flag flag, ByteBuffer key) throws IOException {
+            if ((org.zlab.ocov.tracker.Runtime.updateBranch(version, MessagingService.VERSION_30, ">=", 22))) {
+                // key is only there for the old format
+                assert key == null;
                 return deserialize30(in, version, flag);
-            }
-            else
-            {
+            } else {
                 assert key != null;
                 return deserializePre30(in, version, flag, key);
             }
         }
 
         // Used to share same decorated key between updates.
-        public PartitionUpdate deserialize(DataInputPlus in, int version, SerializationHelper.Flag flag, DecoratedKey key) throws IOException
-        {
-            if (version >= MessagingService.VERSION_30)
-            {
+        public PartitionUpdate deserialize(DataInputPlus in, int version, SerializationHelper.Flag flag, DecoratedKey key) throws IOException {
+            if ((org.zlab.ocov.tracker.Runtime.updateBranch(version, MessagingService.VERSION_30, ">=", 23))) {
                 return deserialize30(in, version, flag);
-            }
-            else
-            {
+            } else {
                 assert key != null;
                 return deserializePre30(in, version, flag, key.getKey());
             }
         }
 
-        private static PartitionUpdate deserialize30(DataInputPlus in, int version, SerializationHelper.Flag flag) throws IOException
-        {
+        private static PartitionUpdate deserialize30(DataInputPlus in, int version, SerializationHelper.Flag flag) throws IOException {
             CFMetaData metadata = CFMetaData.serializer.deserialize(in, version);
             UnfilteredRowIteratorSerializer.Header header = UnfilteredRowIteratorSerializer.serializer.deserializeHeader(metadata, null, in, version, flag);
-            if (header.isEmpty)
-                return emptyUpdate(metadata, header.key);
-
+            org.zlab.ocov.tracker.Runtime.update(header, 80, in, version, flag);
+            if (header.isEmpty) {
+                return ((org.apache.cassandra.db.partitions.PartitionUpdate) org.zlab.ocov.tracker.Runtime.update(emptyUpdate(metadata, header.key), 81, in, version, flag));
+            }
             assert !header.isReversed;
             assert header.rowEstimate >= 0;
-
-            MutableDeletionInfo.Builder deletionBuilder = MutableDeletionInfo.builder(header.partitionDeletion, metadata.comparator, false);
+            MutableDeletionInfo.Builder deletionBuilder = ((org.apache.cassandra.db.MutableDeletionInfo.Builder) org.zlab.ocov.tracker.Runtime.update(MutableDeletionInfo.builder(header.partitionDeletion, metadata.comparator, false), 82, in, version, flag));
             BTree.Builder<Row> rows = BTree.builder(metadata.comparator, header.rowEstimate);
             rows.auto(false);
-
-            try (UnfilteredRowIterator partition = UnfilteredRowIteratorSerializer.serializer.deserialize(in, version, metadata, flag, header))
-            {
-                while (partition.hasNext())
-                {
+            try (UnfilteredRowIterator partition = UnfilteredRowIteratorSerializer.serializer.deserialize(in, version, metadata, flag, header)) {
+                while (partition.hasNext()) {
                     Unfiltered unfiltered = partition.next();
                     if (unfiltered.kind() == Unfiltered.Kind.ROW)
-                        rows.add((Row)unfiltered);
-                    else
-                        deletionBuilder.add((RangeTombstoneMarker)unfiltered);
+                        rows.add((Row) unfiltered);
+                    else {
+                        deletionBuilder.add((RangeTombstoneMarker) unfiltered);
+                    }
                 }
             }
-
             MutableDeletionInfo deletionInfo = deletionBuilder.build();
-            return new PartitionUpdate(metadata,
-                                       header.key,
-                                       new Holder(header.sHeader.columns(), rows.build(), deletionInfo, header.staticRow, header.sHeader.stats()),
-                                       deletionInfo,
-                                       false);
+            return ((PartitionUpdate) org.zlab.ocov.tracker.Runtime.monitorCreationContext(new PartitionUpdate(metadata, header.key, new Holder(header.sHeader.columns(), rows.build(), deletionInfo, header.staticRow, header.sHeader.stats()), deletionInfo, false), 169));
         }
 
-        private static PartitionUpdate deserializePre30(DataInputPlus in, int version, SerializationHelper.Flag flag, ByteBuffer key) throws IOException
-        {
-            try (UnfilteredRowIterator iterator = LegacyLayout.deserializeLegacyPartition(in, version, flag, key))
-            {
-                assert iterator != null; // This is only used in mutation, and mutation have never allowed "null" column families
+        private static PartitionUpdate deserializePre30(DataInputPlus in, int version, SerializationHelper.Flag flag, ByteBuffer key) throws IOException {
+            try (UnfilteredRowIterator iterator = LegacyLayout.deserializeLegacyPartition(in, version, flag, key)) {
+                // This is only used in mutation, and mutation have never allowed "null" column families
+                assert iterator != null;
                 return PartitionUpdate.fromIterator(iterator);
             }
         }
 
-        public long serializedSize(PartitionUpdate update, int version)
-        {
-            try (UnfilteredRowIterator iter = update.sliceableUnfilteredIterator())
-            {
+        public long serializedSize(PartitionUpdate update, int version) {
+            try (UnfilteredRowIterator iter = update.sliceableUnfilteredIterator()) {
                 if (version < MessagingService.VERSION_30)
                     return LegacyLayout.serializedSizeAsLegacyPartition(null, iter, version);
-
-                return CFMetaData.serializer.serializedSize(update.metadata(), version)
-                     + UnfilteredRowIteratorSerializer.serializer.serializedSize(iter, null, version, update.rowCount());
+                return CFMetaData.serializer.serializedSize(update.metadata(), version) + UnfilteredRowIteratorSerializer.serializer.serializedSize(iter, null, version, update.rowCount());
             }
         }
     }
@@ -725,47 +593,41 @@ public class PartitionUpdate extends AbstractBTreePartition
      * us to update the counter value based on the pre-existing value read during the read-before-write that counters
      * do. See {@link CounterMutation} to understand how this is used.
      */
-    public static class CounterMark
-    {
+    public static class CounterMark {
+
         private final Row row;
+
         private final ColumnDefinition column;
+
         private final CellPath path;
 
-        private CounterMark(Row row, ColumnDefinition column, CellPath path)
-        {
+        private CounterMark(Row row, ColumnDefinition column, CellPath path) {
             this.row = row;
             this.column = column;
             this.path = path;
         }
 
-        public Clustering clustering()
-        {
+        public Clustering clustering() {
             return row.clustering();
         }
 
-        public ColumnDefinition column()
-        {
+        public ColumnDefinition column() {
             return column;
         }
 
-        public CellPath path()
-        {
+        public CellPath path() {
             return path;
         }
 
-        public ByteBuffer value()
-        {
-            return path == null
-                 ? row.getCell(column).value()
-                 : row.getCell(column, path).value();
+        public ByteBuffer value() {
+            return path == null ? row.getCell(column).value() : row.getCell(column, path).value();
         }
 
-        public void setValue(ByteBuffer value)
-        {
+        public void setValue(ByteBuffer value) {
             // This is a bit of a giant hack as this is the only place where we mutate a Row object. This makes it more efficient
             // for counters however and this won't be needed post-#6506 so that's probably fine.
             assert row instanceof BTreeRow;
-            ((BTreeRow)row).setValue(column, path, value);
+            ((BTreeRow) row).setValue(column, path, value);
         }
     }
 }

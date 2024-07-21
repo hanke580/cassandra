@@ -18,51 +18,42 @@
 package org.apache.cassandra.db;
 
 import java.util.*;
-
 import com.google.common.collect.Iterators;
-
 import org.apache.cassandra.config.ColumnDefinition;
 import org.apache.cassandra.utils.btree.BTreeSet;
-
 import static java.util.Comparator.naturalOrder;
 
 /**
  * Columns (or a subset of the columns) that a partition contains.
  * This mainly groups both static and regular columns for convenience.
  */
-public class PartitionColumns implements Iterable<ColumnDefinition>
-{
+public class PartitionColumns implements Iterable<ColumnDefinition> {
+
     public static PartitionColumns NONE = new PartitionColumns(Columns.NONE, Columns.NONE);
 
     public final Columns statics;
+
     public final Columns regulars;
 
-    public PartitionColumns(Columns statics, Columns regulars)
-    {
+    public PartitionColumns(Columns statics, Columns regulars) {
         assert statics != null && regulars != null;
         this.statics = statics;
         this.regulars = regulars;
     }
 
-    public static PartitionColumns of(ColumnDefinition column)
-    {
-        return new PartitionColumns(column.isStatic() ? Columns.of(column) : Columns.NONE,
-                                    column.isStatic() ? Columns.NONE : Columns.of(column));
+    public static PartitionColumns of(ColumnDefinition column) {
+        return ((PartitionColumns) org.zlab.ocov.tracker.Runtime.monitorCreationContext(new PartitionColumns(column.isStatic() ? Columns.of(column) : Columns.NONE, column.isStatic() ? Columns.NONE : Columns.of(column)), 140));
     }
 
-    public PartitionColumns without(ColumnDefinition column)
-    {
-        return new PartitionColumns(column.isStatic() ? statics.without(column) : statics,
-                                    column.isStatic() ? regulars : regulars.without(column));
+    public PartitionColumns without(ColumnDefinition column) {
+        return ((PartitionColumns) org.zlab.ocov.tracker.Runtime.monitorCreationContext(new PartitionColumns(column.isStatic() ? statics.without(column) : statics, column.isStatic() ? regulars : regulars.without(column)), 141));
     }
 
-    public PartitionColumns withoutStatics()
-    {
-        return statics.isEmpty() ? this : new PartitionColumns(Columns.NONE, regulars);
+    public PartitionColumns withoutStatics() {
+        return statics.isEmpty() ? this : ((PartitionColumns) org.zlab.ocov.tracker.Runtime.monitorCreationContext(new PartitionColumns(Columns.NONE, regulars), 142));
     }
 
-    public PartitionColumns mergeTo(PartitionColumns that)
-    {
+    public PartitionColumns mergeTo(PartitionColumns that) {
         if (this == that)
             return this;
         Columns statics = this.statics.mergeTo(that.statics);
@@ -71,93 +62,79 @@ public class PartitionColumns implements Iterable<ColumnDefinition>
             return this;
         if (statics == that.statics && regulars == that.regulars)
             return that;
-        return new PartitionColumns(statics, regulars);
+        return ((PartitionColumns) org.zlab.ocov.tracker.Runtime.monitorCreationContext(new PartitionColumns(statics, regulars), 143));
     }
 
-    public boolean isEmpty()
-    {
+    public boolean isEmpty() {
         return statics.isEmpty() && regulars.isEmpty();
     }
 
-    public Columns columns(boolean isStatic)
-    {
+    public Columns columns(boolean isStatic) {
         return isStatic ? statics : regulars;
     }
 
-    public boolean contains(ColumnDefinition column)
-    {
+    public boolean contains(ColumnDefinition column) {
         return column.isStatic() ? statics.contains(column) : regulars.contains(column);
     }
 
-    public boolean includes(PartitionColumns columns)
-    {
+    public boolean includes(PartitionColumns columns) {
         return statics.containsAll(columns.statics) && regulars.containsAll(columns.regulars);
     }
 
-    public Iterator<ColumnDefinition> iterator()
-    {
+    public Iterator<ColumnDefinition> iterator() {
         return Iterators.concat(statics.iterator(), regulars.iterator());
     }
 
-    public Iterator<ColumnDefinition> selectOrderIterator()
-    {
+    public Iterator<ColumnDefinition> selectOrderIterator() {
         return Iterators.concat(statics.selectOrderIterator(), regulars.selectOrderIterator());
     }
 
-    /** * Returns the total number of static and regular columns. */
-    public int size()
-    {
+    /**
+     * Returns the total number of static and regular columns.
+     */
+    public int size() {
         return regulars.size() + statics.size();
     }
 
     @Override
-    public String toString()
-    {
+    public String toString() {
         StringBuilder sb = new StringBuilder();
         sb.append("[").append(statics).append(" | ").append(regulars).append("]");
         return sb.toString();
     }
 
     @Override
-    public boolean equals(Object other)
-    {
+    public boolean equals(Object other) {
         if (!(other instanceof PartitionColumns))
             return false;
-
-        PartitionColumns that = (PartitionColumns)other;
-        return this.statics.equals(that.statics)
-            && this.regulars.equals(that.regulars);
+        PartitionColumns that = (PartitionColumns) other;
+        return this.statics.equals(that.statics) && this.regulars.equals(that.regulars);
     }
 
     @Override
-    public int hashCode()
-    {
+    public int hashCode() {
         return Objects.hash(statics, regulars);
     }
 
-    public static Builder builder()
-    {
+    public static Builder builder() {
         return new Builder();
     }
 
-    public static class Builder
-    {
+    public static class Builder {
+
         // Note that we do want to use sorted sets because we want the column definitions to be compared
         // through compareTo, not equals. The former basically check it's the same column name, while the latter
         // check it's the same object, including the same type.
         private BTreeSet.Builder<ColumnDefinition> regularColumns;
+
         private BTreeSet.Builder<ColumnDefinition> staticColumns;
 
-        public Builder add(ColumnDefinition c)
-        {
-            if (c.isStatic())
-            {
+        public Builder add(ColumnDefinition c) {
+            if (c.isStatic()) {
                 if (staticColumns == null)
                     staticColumns = BTreeSet.builder(naturalOrder());
                 staticColumns.add(c);
-            }
-            else
-            {
+            } else {
                 assert c.isRegular();
                 if (regularColumns == null)
                     regularColumns = BTreeSet.builder(naturalOrder());
@@ -166,34 +143,23 @@ public class PartitionColumns implements Iterable<ColumnDefinition>
             return this;
         }
 
-        public Builder addAll(Iterable<ColumnDefinition> columns)
-        {
-            for (ColumnDefinition c : columns)
-                add(c);
+        public Builder addAll(Iterable<ColumnDefinition> columns) {
+            for (ColumnDefinition c : columns) add(c);
             return this;
         }
 
-        public Builder addAll(PartitionColumns columns)
-        {
+        public Builder addAll(PartitionColumns columns) {
             if (regularColumns == null && !columns.regulars.isEmpty())
                 regularColumns = BTreeSet.builder(naturalOrder());
-
-            for (ColumnDefinition c : columns.regulars)
-                regularColumns.add(c);
-
+            for (ColumnDefinition c : columns.regulars) regularColumns.add(c);
             if (staticColumns == null && !columns.statics.isEmpty())
                 staticColumns = BTreeSet.builder(naturalOrder());
-
-            for (ColumnDefinition c : columns.statics)
-                staticColumns.add(c);
-
+            for (ColumnDefinition c : columns.statics) staticColumns.add(c);
             return this;
         }
 
-        public PartitionColumns build()
-        {
-            return new PartitionColumns(staticColumns == null ? Columns.NONE : Columns.from(staticColumns.build()),
-                                        regularColumns == null ? Columns.NONE : Columns.from(regularColumns.build()));
+        public PartitionColumns build() {
+            return ((PartitionColumns) org.zlab.ocov.tracker.Runtime.monitorCreationContext(new PartitionColumns(staticColumns == null ? Columns.NONE : Columns.from(staticColumns.build()), regularColumns == null ? Columns.NONE : Columns.from(regularColumns.build())), 144));
         }
     }
 }

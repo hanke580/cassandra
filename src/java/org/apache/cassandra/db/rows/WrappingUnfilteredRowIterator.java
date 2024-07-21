@@ -18,7 +18,6 @@
 package org.apache.cassandra.db.rows;
 
 import com.google.common.collect.UnmodifiableIterator;
-
 import org.apache.cassandra.config.CFMetaData;
 import org.apache.cassandra.db.*;
 
@@ -31,62 +30,51 @@ import org.apache.cassandra.db.*;
  * Note that if most of what you want to do is modifying/filtering the returned
  * {@code Unfiltered}, {@link org.apache.cassandra.db.transform.Transformation.apply} can be a simpler option.
  */
-public abstract class WrappingUnfilteredRowIterator extends UnmodifiableIterator<Unfiltered>  implements UnfilteredRowIterator
-{
+public abstract class WrappingUnfilteredRowIterator extends UnmodifiableIterator<Unfiltered> implements UnfilteredRowIterator {
+
     protected final UnfilteredRowIterator wrapped;
 
-    protected WrappingUnfilteredRowIterator(UnfilteredRowIterator wrapped)
-    {
+    protected WrappingUnfilteredRowIterator(UnfilteredRowIterator wrapped) {
         this.wrapped = wrapped;
     }
 
-    public CFMetaData metadata()
-    {
+    public CFMetaData metadata() {
         return wrapped.metadata();
     }
 
-    public PartitionColumns columns()
-    {
+    public PartitionColumns columns() {
         return wrapped.columns();
     }
 
-    public boolean isReverseOrder()
-    {
+    public boolean isReverseOrder() {
         return wrapped.isReverseOrder();
     }
 
-    public DecoratedKey partitionKey()
-    {
+    public DecoratedKey partitionKey() {
         return wrapped.partitionKey();
     }
 
-    public DeletionTime partitionLevelDeletion()
-    {
+    public DeletionTime partitionLevelDeletion() {
         return wrapped.partitionLevelDeletion();
     }
 
-    public Row staticRow()
-    {
+    public Row staticRow() {
         return wrapped.staticRow();
     }
 
-    public EncodingStats stats()
-    {
-        return wrapped.stats();
+    public EncodingStats stats() {
+        return ((org.apache.cassandra.db.rows.EncodingStats) org.zlab.ocov.tracker.Runtime.update(wrapped.stats(), 41));
     }
 
-    public boolean hasNext()
-    {
+    public boolean hasNext() {
         return wrapped.hasNext();
     }
 
-    public Unfiltered next()
-    {
+    public Unfiltered next() {
         return wrapped.next();
     }
 
-    public void close()
-    {
+    public void close() {
         wrapped.close();
     }
 }
