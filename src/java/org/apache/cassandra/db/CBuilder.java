@@ -20,185 +20,210 @@ package org.apache.cassandra.db;
 import java.nio.ByteBuffer;
 import java.util.Arrays;
 import java.util.List;
+
 import org.apache.cassandra.db.marshal.AbstractType;
 
 /**
  * Allows to build ClusteringPrefixes, either Clustering or Slice.Bound.
  */
-public abstract class CBuilder {
-
-    public static CBuilder STATIC_BUILDER = new CBuilder() {
-
-        public int count() {
+public abstract class CBuilder
+{
+    public static CBuilder STATIC_BUILDER = new CBuilder()
+    {
+        public int count()
+        {
             return 0;
         }
 
-        public int remainingCount() {
+        public int remainingCount()
+        {
             return 0;
         }
 
-        public ClusteringComparator comparator() {
+        public ClusteringComparator comparator()
+        {
             throw new UnsupportedOperationException();
         }
 
-        public CBuilder add(ByteBuffer value) {
+        public CBuilder add(ByteBuffer value)
+        {
             throw new UnsupportedOperationException();
         }
 
-        public CBuilder add(Object value) {
+        public CBuilder add(Object value)
+        {
             throw new UnsupportedOperationException();
         }
 
-        public Clustering build() {
+        public Clustering build()
+        {
             return Clustering.STATIC_CLUSTERING;
         }
 
-        public Slice.Bound buildBound(boolean isStart, boolean isInclusive) {
+        public Slice.Bound buildBound(boolean isStart, boolean isInclusive)
+        {
             throw new UnsupportedOperationException();
         }
 
-        public Slice buildSlice() {
+        public Slice buildSlice()
+        {
             throw new UnsupportedOperationException();
         }
 
-        public Clustering buildWith(ByteBuffer value) {
+        public Clustering buildWith(ByteBuffer value)
+        {
             throw new UnsupportedOperationException();
         }
 
-        public Clustering buildWith(List<ByteBuffer> newValues) {
+        public Clustering buildWith(List<ByteBuffer> newValues)
+        {
             throw new UnsupportedOperationException();
         }
 
-        public Slice.Bound buildBoundWith(ByteBuffer value, boolean isStart, boolean isInclusive) {
+        public Slice.Bound buildBoundWith(ByteBuffer value, boolean isStart, boolean isInclusive)
+        {
             throw new UnsupportedOperationException();
         }
 
-        public Slice.Bound buildBoundWith(List<ByteBuffer> newValues, boolean isStart, boolean isInclusive) {
+        public Slice.Bound buildBoundWith(List<ByteBuffer> newValues, boolean isStart, boolean isInclusive)
+        {
             throw new UnsupportedOperationException();
         }
     };
 
-    public static CBuilder create(ClusteringComparator comparator) {
-        return ((ArrayBackedBuilder) org.zlab.ocov.tracker.Runtime.monitorCreationContext(new ArrayBackedBuilder(comparator), 137));
+    public static CBuilder create(ClusteringComparator comparator)
+    {
+        return new ArrayBackedBuilder(comparator);
     }
 
     public abstract int count();
-
     public abstract int remainingCount();
-
     public abstract ClusteringComparator comparator();
-
     public abstract CBuilder add(ByteBuffer value);
-
     public abstract CBuilder add(Object value);
-
     public abstract Clustering build();
-
     public abstract Slice.Bound buildBound(boolean isStart, boolean isInclusive);
-
     public abstract Slice buildSlice();
-
     public abstract Clustering buildWith(ByteBuffer value);
-
     public abstract Clustering buildWith(List<ByteBuffer> newValues);
-
     public abstract Slice.Bound buildBoundWith(ByteBuffer value, boolean isStart, boolean isInclusive);
-
     public abstract Slice.Bound buildBoundWith(List<ByteBuffer> newValues, boolean isStart, boolean isInclusive);
 
-    private static class ArrayBackedBuilder extends CBuilder {
-
+    private static class ArrayBackedBuilder extends CBuilder
+    {
         private final ClusteringComparator type;
-
         private final ByteBuffer[] values;
-
         private int size;
-
         private boolean built;
 
-        public ArrayBackedBuilder(ClusteringComparator type) {
+        public ArrayBackedBuilder(ClusteringComparator type)
+        {
             this.type = type;
             this.values = new ByteBuffer[type.size()];
         }
 
-        public int count() {
+        public int count()
+        {
             return size;
         }
 
-        public int remainingCount() {
+        public int remainingCount()
+        {
             return values.length - size;
         }
 
-        public ClusteringComparator comparator() {
+        public ClusteringComparator comparator()
+        {
             return type;
         }
 
-        public CBuilder add(ByteBuffer value) {
+        public CBuilder add(ByteBuffer value)
+        {
             if (isDone())
                 throw new IllegalStateException();
             values[size++] = value;
             return this;
         }
 
-        public CBuilder add(Object value) {
-            return add(((AbstractType) type.subtype(size)).decompose(value));
+        public CBuilder add(Object value)
+        {
+            return add(((AbstractType)type.subtype(size)).decompose(value));
         }
 
-        private boolean isDone() {
+        private boolean isDone()
+        {
             return remainingCount() == 0 || built;
         }
 
-        public Clustering build() {
+        public Clustering build()
+        {
             // We don't allow to add more element to a builder that has been built so
             // that we don't have to copy values.
             built = true;
+
             // Currently, only dense table can leave some clustering column out (see #7990)
-            return size == 0 ? Clustering.EMPTY : ((Clustering) org.zlab.ocov.tracker.Runtime.monitorCreationContext(new Clustering(values), 138));
+            return size == 0 ? Clustering.EMPTY : new Clustering(values);
         }
 
-        public Slice.Bound buildBound(boolean isStart, boolean isInclusive) {
+        public Slice.Bound buildBound(boolean isStart, boolean isInclusive)
+        {
             // We don't allow to add more element to a builder that has been built so
             // that we don't have to copy values (even though we have to do it in most cases).
             built = true;
+
             if (size == 0)
                 return isStart ? Slice.Bound.BOTTOM : Slice.Bound.TOP;
-            return Slice.Bound.create(Slice.Bound.boundKind(isStart, isInclusive), size == values.length ? values : Arrays.copyOfRange(values, 0, size));
+
+            return Slice.Bound.create(Slice.Bound.boundKind(isStart, isInclusive),
+                                      size == values.length ? values : Arrays.copyOfRange(values, 0, size));
         }
 
-        public Slice buildSlice() {
+        public Slice buildSlice()
+        {
             // We don't allow to add more element to a builder that has been built so
             // that we don't have to copy values.
             built = true;
+
             if (size == 0)
                 return Slice.ALL;
+
             return Slice.make(buildBound(true, true), buildBound(false, true));
         }
 
-        public Clustering buildWith(ByteBuffer value) {
-            assert size + 1 <= type.size();
+        public Clustering buildWith(ByteBuffer value)
+        {
+            assert size+1 <= type.size();
+
             ByteBuffer[] newValues = Arrays.copyOf(values, type.size());
             newValues[size] = value;
             return new Clustering(newValues);
         }
 
-        public Clustering buildWith(List<ByteBuffer> newValues) {
+        public Clustering buildWith(List<ByteBuffer> newValues)
+        {
             assert size + newValues.size() <= type.size();
             ByteBuffer[] buffers = Arrays.copyOf(values, type.size());
             int newSize = size;
-            for (ByteBuffer value : newValues) buffers[newSize++] = value;
-            return ((Clustering) org.zlab.ocov.tracker.Runtime.monitorCreationContext(new Clustering(buffers), 139));
+            for (ByteBuffer value : newValues)
+                buffers[newSize++] = value;
+
+            return new Clustering(buffers);
         }
 
-        public Slice.Bound buildBoundWith(ByteBuffer value, boolean isStart, boolean isInclusive) {
-            ByteBuffer[] newValues = Arrays.copyOf(values, size + 1);
+        public Slice.Bound buildBoundWith(ByteBuffer value, boolean isStart, boolean isInclusive)
+        {
+            ByteBuffer[] newValues = Arrays.copyOf(values, size+1);
             newValues[size] = value;
             return Slice.Bound.create(Slice.Bound.boundKind(isStart, isInclusive), newValues);
         }
 
-        public Slice.Bound buildBoundWith(List<ByteBuffer> newValues, boolean isStart, boolean isInclusive) {
+        public Slice.Bound buildBoundWith(List<ByteBuffer> newValues, boolean isStart, boolean isInclusive)
+        {
             ByteBuffer[] buffers = Arrays.copyOf(values, size + newValues.size());
             int newSize = size;
-            for (ByteBuffer value : newValues) buffers[newSize++] = value;
+            for (ByteBuffer value : newValues)
+                buffers[newSize++] = value;
+
             return Slice.Bound.create(Slice.Bound.boundKind(isStart, isInclusive), buffers);
         }
     }
