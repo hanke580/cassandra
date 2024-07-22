@@ -342,21 +342,26 @@ public class SerializationHeader {
             }
         }
 
-        public SerializationHeader deserializeForMessaging(DataInputPlus in, CFMetaData metadata, ColumnFilter selection, boolean hasStatic) throws IOException {
+        public SerializationHeader deserializeForMessaging(DataInputPlus in, CFMetaData metadata, ColumnFilter selection, boolean hasStatic) throws IOException
+        {
             EncodingStats stats = EncodingStats.serializer.deserialize(in);
-            org.zlab.ocov.tracker.Runtime.update(stats, 122, in, metadata, selection, hasStatic);
+
             AbstractType<?> keyType = metadata.getKeyValidator();
             List<AbstractType<?>> clusteringTypes = typesOf(metadata.clusteringColumns());
+
             Columns statics, regulars;
-            if (selection == null) {
-                statics = hasStatic ? ((org.apache.cassandra.db.Columns) org.zlab.ocov.tracker.Runtime.update(Columns.serializer.deserialize(in, metadata), 123, in, metadata, selection, hasStatic)) : Columns.NONE;
+            if (selection == null)
+            {
+                statics = hasStatic ? Columns.serializer.deserialize(in, metadata) : Columns.NONE;
                 regulars = Columns.serializer.deserialize(in, metadata);
-                org.zlab.ocov.tracker.Runtime.update(regulars, 124, in, metadata, selection, hasStatic);
-            } else {
-                statics = hasStatic ? ((org.apache.cassandra.db.Columns) org.zlab.ocov.tracker.Runtime.update(Columns.serializer.deserializeSubset(selection.fetchedColumns().statics, in), 125, in, metadata, selection, hasStatic)) : Columns.NONE;
-                regulars = ((org.apache.cassandra.db.Columns) org.zlab.ocov.tracker.Runtime.update(Columns.serializer.deserializeSubset(selection.fetchedColumns().regulars, in), 126, in, metadata, selection, hasStatic));
             }
-            return ((SerializationHeader) org.zlab.ocov.tracker.Runtime.monitorCreationContext(new SerializationHeader(false, keyType, clusteringTypes, new PartitionColumns(statics, regulars), stats, null), 252));
+            else
+            {
+                statics = hasStatic ? Columns.serializer.deserializeSubset(selection.fetchedColumns().statics, in) : Columns.NONE;
+                regulars = Columns.serializer.deserializeSubset(selection.fetchedColumns().regulars, in);
+            }
+
+            return new SerializationHeader(false, keyType, clusteringTypes, new PartitionColumns(statics, regulars), stats, null);
         }
 
         public long serializedSizeForMessaging(SerializationHeader header, ColumnFilter selection, boolean hasStatic) {

@@ -401,8 +401,8 @@ public abstract class UnfilteredRowIterators {
             Columns regulars = first.regulars;
             for (int i = 1; i < iterators.size(); i++) {
                 PartitionColumns cols = iterators.get(i).columns();
-                statics = ((org.apache.cassandra.db.Columns) org.zlab.ocov.tracker.Runtime.update(statics.mergeTo(cols.statics), 31, iterators));
-                regulars = ((org.apache.cassandra.db.Columns) org.zlab.ocov.tracker.Runtime.update(regulars.mergeTo(cols.regulars), 32, iterators));
+                statics = statics.mergeTo(cols.statics);
+                regulars = regulars.mergeTo(cols.regulars);
             }
             return statics == first.statics && regulars == first.regulars ? first : ((PartitionColumns) org.zlab.ocov.tracker.Runtime.update(new PartitionColumns(statics, regulars), 33, iterators));
         }
