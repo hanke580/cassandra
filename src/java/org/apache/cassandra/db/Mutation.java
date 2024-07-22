@@ -184,7 +184,7 @@ public class Mutation implements IMutation {
     }
 
     public void apply(boolean durableWrites, boolean isDroppable) {
-        ((org.apache.cassandra.db.Keyspace) org.zlab.ocov.tracker.Runtime.update(Keyspace.open(keyspaceName), 120, durableWrites, isDroppable)).apply(this, durableWrites, true, isDroppable);
+        Keyspace.open(keyspaceName).apply(this, durableWrites, true, isDroppable);
     }
 
     public void apply(boolean durableWrites) {

@@ -163,7 +163,6 @@ public abstract class Transformation<I extends BaseRowIterator<?>> {
 
     static <E extends BaseIterator> E add(E to, Transformation add) {
         to.add(add);
-        org.zlab.ocov.tracker.Runtime.update(add, 100, to, add);
         return to;
     }
 

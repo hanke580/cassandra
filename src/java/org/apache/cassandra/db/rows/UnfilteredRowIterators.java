@@ -410,7 +410,7 @@ public abstract class UnfilteredRowIterators {
         private static EncodingStats mergeStats(List<UnfilteredRowIterator> iterators) {
             EncodingStats stats = EncodingStats.NO_STATS;
             for (UnfilteredRowIterator iter : iterators) {
-                stats = ((org.apache.cassandra.db.rows.EncodingStats) org.zlab.ocov.tracker.Runtime.update(stats.mergeWith(iter.stats()), 34, iterators));
+                stats = stats.mergeWith(iter.stats());
             }
             return stats;
         }

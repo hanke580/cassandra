@@ -87,7 +87,6 @@ public abstract class BaseRows<R extends Unfiltered, I extends BaseRowIterator<?
             org.zlab.ocov.tracker.Runtime.update(transformation, 98, transformation);
         }
         next = applyOne(next, transformation);
-        org.zlab.ocov.tracker.Runtime.update(transformation, 99, transformation);
     }
 
     @Override

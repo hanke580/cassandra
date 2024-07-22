@@ -142,7 +142,7 @@ public class Keyspace {
     }
 
     public static ColumnFamilyStore openAndGetStore(CFMetaData cfm) {
-        return ((org.apache.cassandra.db.Keyspace) org.zlab.ocov.tracker.Runtime.update(open(cfm.ksName), 106, cfm)).getColumnFamilyStore(cfm.cfId);
+        return open(cfm.ksName).getColumnFamilyStore(cfm.cfId);
     }
 
     /**

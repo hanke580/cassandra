@@ -143,7 +143,7 @@ public class ComplexColumnData extends ColumnData implements Iterable<Cell> {
             return this;
         if (newDeletion == DeletionTime.LIVE && BTree.isEmpty(transformed))
             return null;
-        return ((ComplexColumnData) org.zlab.ocov.tracker.Runtime.update(new ComplexColumnData(column, transformed, newDeletion), 28, newDeletion, function));
+        return new ComplexColumnData(column, transformed, newDeletion);
     }
 
     public ComplexColumnData updateAllTimestamp(long newTimestamp) {
