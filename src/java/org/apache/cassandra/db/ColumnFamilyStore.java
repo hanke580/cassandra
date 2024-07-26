@@ -821,6 +821,7 @@ public class ColumnFamilyStore implements ColumnFamilyStoreMBean {
         }
 
         public void run() {
+            org.zlab.ocov.tracker.Runtime.update(this, 1000);
             // mark writes older than the barrier as blocking progress, permitting them to exceed our memory limit
             // if they are stuck waiting on it, then wait for them all to complete
             writeBarrier.markBlocking();

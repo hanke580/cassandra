@@ -624,7 +624,6 @@ public class SinglePartitionReadCommand extends ReadCommand {
     private UnfilteredRowIterator queryMemtableAndSSTablesInTimestampOrder(ColumnFamilyStore cfs, boolean copyOnHeap, ClusteringIndexNamesFilter filter) {
         Tracing.trace("Acquiring sstable references");
         ColumnFamilyStore.ViewFragment view = cfs.select(View.select(SSTableSet.LIVE, partitionKey()));
-        org.zlab.ocov.tracker.Runtime.update(view, 91, cfs, copyOnHeap, filter);
         ImmutableBTreePartition result = null;
         Tracing.trace("Merging memtable contents");
         for (Memtable memtable : view.memtables) {

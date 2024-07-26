@@ -19,6 +19,7 @@ package org.apache.cassandra.db;
 
 import java.util.Objects;
 import java.security.MessageDigest;
+
 import org.apache.cassandra.config.CFMetaData;
 import org.apache.cassandra.serializers.MarshalException;
 import org.apache.cassandra.utils.FBUtilities;
@@ -36,41 +37,47 @@ import org.apache.cassandra.utils.FBUtilities;
  * unaffected (of course, the rest of said row data might be ttl'ed on its own but this is
  * separate).
  */
-public class LivenessInfo {
-
+public class LivenessInfo
+{
     public static final long NO_TIMESTAMP = Long.MIN_VALUE;
-
     public static final int NO_TTL = 0;
-
     public static final int NO_EXPIRATION_TIME = Integer.MAX_VALUE;
 
     public static final LivenessInfo EMPTY = new LivenessInfo(NO_TIMESTAMP);
 
     protected final long timestamp;
 
-    protected LivenessInfo(long timestamp) {
+    protected LivenessInfo(long timestamp)
+    {
         this.timestamp = timestamp;
     }
 
-    public static LivenessInfo create(CFMetaData metadata, long timestamp, int nowInSec) {
+    public static LivenessInfo create(CFMetaData metadata, long timestamp, int nowInSec)
+    {
         int defaultTTL = metadata.params.defaultTimeToLive;
         if (defaultTTL != NO_TTL)
             return expiring(timestamp, defaultTTL, nowInSec);
-        return ((LivenessInfo) org.zlab.ocov.tracker.Runtime.monitorCreationContext(new LivenessInfo(timestamp), 189));
+
+        return new LivenessInfo(timestamp);
     }
 
-    public static LivenessInfo expiring(long timestamp, int ttl, int nowInSec) {
-        return ((ExpiringLivenessInfo) org.zlab.ocov.tracker.Runtime.monitorCreationContext(new ExpiringLivenessInfo(timestamp, ttl, nowInSec + ttl), 190));
+    public static LivenessInfo expiring(long timestamp, int ttl, int nowInSec)
+    {
+        return new ExpiringLivenessInfo(timestamp, ttl, nowInSec + ttl);
     }
 
-    public static LivenessInfo create(CFMetaData metadata, long timestamp, int ttl, int nowInSec) {
-        return ttl == NO_TTL ? create(metadata, timestamp, nowInSec) : expiring(timestamp, ttl, nowInSec);
+    public static LivenessInfo create(CFMetaData metadata, long timestamp, int ttl, int nowInSec)
+    {
+        return ttl == NO_TTL
+             ? create(metadata, timestamp, nowInSec)
+             : expiring(timestamp, ttl, nowInSec);
     }
 
     // Note that this ctor ignores the default table ttl and takes the expiration time, not the current time.
     // Use when you know that's what you want.
-    public static LivenessInfo create(long timestamp, int ttl, int localExpirationTime) {
-        return ttl == NO_TTL ? ((LivenessInfo) org.zlab.ocov.tracker.Runtime.monitorCreationContext(new LivenessInfo(timestamp), 191)) : ((ExpiringLivenessInfo) org.zlab.ocov.tracker.Runtime.monitorCreationContext(new ExpiringLivenessInfo(timestamp, ttl, localExpirationTime), 192));
+    public static LivenessInfo create(long timestamp, int ttl, int localExpirationTime)
+    {
+        return ttl == NO_TTL ? new LivenessInfo(timestamp) : new ExpiringLivenessInfo(timestamp, ttl, localExpirationTime);
     }
 
     /**
@@ -78,7 +85,8 @@ public class LivenessInfo {
      *
      * @return whether this liveness info is empty or not.
      */
-    public boolean isEmpty() {
+    public boolean isEmpty()
+    {
         return timestamp == NO_TIMESTAMP;
     }
 
@@ -87,14 +95,16 @@ public class LivenessInfo {
      *
      * @return the liveness info timestamp (or {@link #NO_TIMESTAMP} if the info is empty).
      */
-    public long timestamp() {
+    public long timestamp()
+    {
         return timestamp;
     }
 
     /**
      * Whether the info has a ttl.
      */
-    public boolean isExpiring() {
+    public boolean isExpiring()
+    {
         return false;
     }
 
@@ -105,14 +115,17 @@ public class LivenessInfo {
      * Please note that this value is the TTL that was set originally and is thus not
      * changing.
      */
-    public int ttl() {
+    public int ttl()
+    {
         return NO_TTL;
     }
 
     /**
      * The expiration time (in seconds) if the info is expiring ({@link #NO_EXPIRATION_TIME} otherwise).
+     *
      */
-    public int localExpirationTime() {
+    public int localExpirationTime()
+    {
         return NO_EXPIRATION_TIME;
     }
 
@@ -125,7 +138,8 @@ public class LivenessInfo {
      * @param nowInSec the current time in seconds.
      * @return whether this liveness info is live or not.
      */
-    public boolean isLive(int nowInSec) {
+    public boolean isLive(int nowInSec)
+    {
         return !isEmpty();
     }
 
@@ -134,7 +148,8 @@ public class LivenessInfo {
      *
      * @param digest the digest to add this liveness information to.
      */
-    public void digest(MessageDigest digest) {
+    public void digest(MessageDigest digest)
+    {
         FBUtilities.updateWithLong(digest, timestamp());
     }
 
@@ -143,7 +158,8 @@ public class LivenessInfo {
      *
      * @throws MarshalException if some of the data is corrupted.
      */
-    public void validate() {
+    public void validate()
+    {
     }
 
     /**
@@ -151,7 +167,8 @@ public class LivenessInfo {
      *
      * @return the size of the data this liveness information contains.
      */
-    public int dataSize() {
+    public int dataSize()
+    {
         return TypeSizes.sizeof(timestamp());
     }
 
@@ -172,7 +189,8 @@ public class LivenessInfo {
      *
      * @return whether this {@code LivenessInfo} supersedes {@code other}.
      */
-    public boolean supersedes(LivenessInfo other) {
+    public boolean supersedes(LivenessInfo other)
+    {
         if (timestamp != other.timestamp)
             return timestamp > other.timestamp;
         if (isExpiring() == other.isExpiring())
@@ -188,35 +206,42 @@ public class LivenessInfo {
      * as timestamp. If it has no timestamp however, this liveness info is returned
      * unchanged.
      */
-    public LivenessInfo withUpdatedTimestamp(long newTimestamp) {
-        return ((LivenessInfo) org.zlab.ocov.tracker.Runtime.monitorCreationContext(new LivenessInfo(newTimestamp), 193));
+    public LivenessInfo withUpdatedTimestamp(long newTimestamp)
+    {
+        return new LivenessInfo(newTimestamp);
     }
 
     @Override
-    public String toString() {
+    public String toString()
+    {
         return String.format("[ts=%d]", timestamp);
     }
 
     @Override
-    public boolean equals(Object other) {
-        if (!(other instanceof LivenessInfo))
+    public boolean equals(Object other)
+    {
+        if(!(other instanceof LivenessInfo))
             return false;
-        LivenessInfo that = (LivenessInfo) other;
-        return this.timestamp() == that.timestamp() && this.ttl() == that.ttl() && this.localExpirationTime() == that.localExpirationTime();
+
+        LivenessInfo that = (LivenessInfo)other;
+        return this.timestamp() == that.timestamp()
+            && this.ttl() == that.ttl()
+            && this.localExpirationTime() == that.localExpirationTime();
     }
 
     @Override
-    public int hashCode() {
+    public int hashCode()
+    {
         return Objects.hash(timestamp(), ttl(), localExpirationTime());
     }
 
-    private static class ExpiringLivenessInfo extends LivenessInfo {
-
+    private static class ExpiringLivenessInfo extends LivenessInfo
+    {
         private final int ttl;
-
         private final int localExpirationTime;
 
-        private ExpiringLivenessInfo(long timestamp, int ttl, int localExpirationTime) {
+        private ExpiringLivenessInfo(long timestamp, int ttl, int localExpirationTime)
+        {
             super(timestamp);
             assert ttl != NO_TTL && localExpirationTime != NO_EXPIRATION_TIME;
             this.ttl = ttl;
@@ -224,34 +249,40 @@ public class LivenessInfo {
         }
 
         @Override
-        public int ttl() {
+        public int ttl()
+        {
             return ttl;
         }
 
         @Override
-        public int localExpirationTime() {
+        public int localExpirationTime()
+        {
             return localExpirationTime;
         }
 
         @Override
-        public boolean isExpiring() {
+        public boolean isExpiring()
+        {
             return true;
         }
 
         @Override
-        public boolean isLive(int nowInSec) {
+        public boolean isLive(int nowInSec)
+        {
             return nowInSec < localExpirationTime;
         }
 
         @Override
-        public void digest(MessageDigest digest) {
+        public void digest(MessageDigest digest)
+        {
             super.digest(digest);
             FBUtilities.updateWithInt(digest, localExpirationTime);
             FBUtilities.updateWithInt(digest, ttl);
         }
 
         @Override
-        public void validate() {
+        public void validate()
+        {
             if (ttl < 0)
                 throw new MarshalException("A TTL should not be negative");
             if (localExpirationTime < 0)
@@ -259,17 +290,23 @@ public class LivenessInfo {
         }
 
         @Override
-        public int dataSize() {
-            return super.dataSize() + TypeSizes.sizeof(ttl) + TypeSizes.sizeof(localExpirationTime);
+        public int dataSize()
+        {
+            return super.dataSize()
+                 + TypeSizes.sizeof(ttl)
+                 + TypeSizes.sizeof(localExpirationTime);
+
         }
 
         @Override
-        public LivenessInfo withUpdatedTimestamp(long newTimestamp) {
-            return ((ExpiringLivenessInfo) org.zlab.ocov.tracker.Runtime.monitorCreationContext(new ExpiringLivenessInfo(newTimestamp, ttl, localExpirationTime), 194));
+        public LivenessInfo withUpdatedTimestamp(long newTimestamp)
+        {
+            return new ExpiringLivenessInfo(newTimestamp, ttl, localExpirationTime);
         }
 
         @Override
-        public String toString() {
+        public String toString()
+        {
             return String.format("[ts=%d ttl=%d, let=%d]", timestamp, ttl, localExpirationTime);
         }
     }

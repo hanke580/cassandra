@@ -1219,7 +1219,7 @@ public class StorageProxy implements StorageProxyMBean {
         int cmdCount = commands.size();
         SinglePartitionReadLifecycle[] reads = new SinglePartitionReadLifecycle[cmdCount];
         for (int i = 0; i < cmdCount; i++) {
-            reads[i] = ((SinglePartitionReadLifecycle) org.zlab.ocov.tracker.Runtime.update(new SinglePartitionReadLifecycle(commands.get(i), consistencyLevel), 11, commands, consistencyLevel));
+            reads[i] = new SinglePartitionReadLifecycle(commands.get(i), consistencyLevel);
         }
         for (int i = 0; i < cmdCount; i++) reads[i].doInitialQueries();
         for (int i = 0; i < cmdCount; i++) reads[i].maybeTryAdditionalReplicas();
