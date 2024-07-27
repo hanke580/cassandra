@@ -458,7 +458,7 @@ public final class CFMetaData {
     }
 
     public CFMetaData copy() {
-        return ((org.apache.cassandra.config.CFMetaData) org.zlab.ocov.tracker.Runtime.update(copyOpts(new CFMetaData(ksName, cfName, cfType, comparator, cfId), this), 0));
+        return copyOpts(new CFMetaData(ksName, cfName, cfType, comparator, cfId), this);
     }
 
     /**
