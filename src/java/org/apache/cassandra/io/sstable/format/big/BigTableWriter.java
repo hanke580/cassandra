@@ -125,9 +125,9 @@ public class BigTableWriter extends SSTableWriter {
         long startPosition = beforeAppend(key);
         try (UnfilteredRowIterator collecting = Transformation.apply(iterator, ((StatsCollector) org.zlab.ocov.tracker.Runtime.monitorCreationContext(new StatsCollector(metadataCollector), 287)))) {
             ColumnIndex index = ColumnIndex.writeAndBuildIndex(collecting, dataFile, header, descriptor.version);
-            org.zlab.ocov.tracker.Runtime.update(index, 139, iterator);
             RowIndexEntry entry = RowIndexEntry.create(startPosition, collecting.partitionLevelDeletion(), index);
-            org.zlab.ocov.tracker.Runtime.update(entry, 140, iterator);
+            if (!iterator.metadata().ksName.startsWith("system"))
+                org.zlab.ocov.tracker.Runtime.update(entry, 140, iterator);
             long endPosition = dataFile.position();
             long rowSize = endPosition - startPosition;
             maybeLogLargePartitionWarning(key, rowSize);
