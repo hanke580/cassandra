@@ -144,7 +144,8 @@ public class BigTableWriter extends SSTableWriter {
         long endPosition;
         try {
             RowIndexEntry entry = rawAppend(cf, startPosition, decoratedKey, dataFile.stream);
-            org.zlab.ocov.tracker.Runtime.update(entry, 1, decoratedKey, cf);
+            if (!cf.metadata().ksName.startsWith("system"))
+                org.zlab.ocov.tracker.Runtime.update(entry, 1, decoratedKey, cf);
             endPosition = dataFile.getFilePointer();
             afterAppend(decoratedKey, endPosition, entry);
         } catch (IOException e) {
