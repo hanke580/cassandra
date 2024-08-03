@@ -19,54 +19,43 @@ package org.apache.cassandra.utils;
 
 import java.io.Closeable;
 import java.util.*;
-
 import org.apache.cassandra.utils.AbstractIterator;
 
-/** Merges sorted input iterators which individually contain unique items. */
-public abstract class MergeIterator<In,Out> extends AbstractIterator<Out> implements IMergeIterator<In, Out>
-{
-    protected final Reducer<In,Out> reducer;
+/**
+ * Merges sorted input iterators which individually contain unique items.
+ */
+public abstract class MergeIterator<In, Out> extends AbstractIterator<Out> implements IMergeIterator<In, Out> {
+
+    protected final Reducer<In, Out> reducer;
+
     protected final List<? extends Iterator<In>> iterators;
 
-    protected MergeIterator(List<? extends Iterator<In>> iters, Reducer<In, Out> reducer)
-    {
+    protected MergeIterator(List<? extends Iterator<In>> iters, Reducer<In, Out> reducer) {
         this.iterators = iters;
         this.reducer = reducer;
     }
 
-    public static <In, Out> MergeIterator<In, Out> get(List<? extends Iterator<In>> sources,
-                                                       Comparator<? super In> comparator,
-                                                       Reducer<In, Out> reducer)
-    {
-        if (sources.size() == 1)
-        {
-            return reducer.trivialReduceIsTrivial()
-                 ? new TrivialOneToOne<>(sources, reducer)
-                 : new OneToOne<>(sources, reducer);
+    public static <In, Out> MergeIterator<In, Out> get(List<? extends Iterator<In>> sources, Comparator<? super In> comparator, Reducer<In, Out> reducer) {
+        if (sources.size() == 1) {
+            return reducer.trivialReduceIsTrivial() ? new TrivialOneToOne<>(sources, reducer) : new OneToOne<>(sources, reducer);
         }
         return new ManyToOne<>(sources, comparator, reducer);
     }
 
-    public Iterable<? extends Iterator<In>> iterators()
-    {
+    public Iterable<? extends Iterator<In>> iterators() {
         return iterators;
     }
 
-    public void close()
-    {
-        for (Iterator<In> iterator : this.iterators)
-        {
-            try
-            {
-                if (iterator instanceof AutoCloseable)
-                    ((AutoCloseable)iterator).close();
-            }
-            catch (Exception e)
-            {
+    public void close() {
+        for (Iterator<In> iterator : this.iterators) {
+            try {
+                if (iterator instanceof AutoCloseable) {
+                    ((AutoCloseable) iterator).close();
+                }
+            } catch (Exception e) {
                 throw new RuntimeException(e);
             }
         }
-
         reducer.close();
     }
 
@@ -107,7 +96,7 @@ public abstract class MergeIterator<In,Out> extends AbstractIterator<Out> implem
      * The iterator is further complicated by the need to avoid advancing the input iterators until an output is
      * actually requested. To achieve this {@code consume} walks the heap to find equal items without advancing the
      * iterators, and {@code advance} moves them and restores the heap structure before any items can be consumed.
-     * 
+     *
      * To avoid having to do additional comparisons in consume to identify the equal items, we keep track of equality
      * between children and their parents in the heap. More precisely, the lines in the diagram above define the
      * following relationship:
@@ -116,11 +105,13 @@ public abstract class MergeIterator<In,Out> extends AbstractIterator<Out> implem
      *
      * For more formal definitions and proof of correctness, see CASSANDRA-8915.
      */
-    static final class ManyToOne<In,Out> extends MergeIterator<In,Out>
-    {
+    static final class ManyToOne<In, Out> extends MergeIterator<In, Out> {
+
         protected final Candidate<In>[] heap;
 
-        /** Number of non-exhausted iterators. */
+        /**
+         * Number of non-exhausted iterators.
+         */
         int size;
 
         /**
@@ -136,25 +127,20 @@ public abstract class MergeIterator<In,Out> extends AbstractIterator<Out> implem
          */
         static final int SORTED_SECTION_SIZE = 4;
 
-        public ManyToOne(List<? extends Iterator<In>> iters, Comparator<? super In> comp, Reducer<In, Out> reducer)
-        {
+        public ManyToOne(List<? extends Iterator<In>> iters, Comparator<? super In> comp, Reducer<In, Out> reducer) {
             super(iters, reducer);
-
             @SuppressWarnings("unchecked")
             Candidate<In>[] heap = new Candidate[iters.size()];
             this.heap = heap;
             size = 0;
-
-            for (int i = 0; i < iters.size(); i++)
-            {
+            for (int i = 0; i < iters.size(); i++) {
                 Candidate<In> candidate = new Candidate<>(i, iters.get(i), comp);
                 heap[size++] = candidate;
             }
             needingAdvance = size;
         }
 
-        protected final Out computeNext()
-        {
+        protected final Out computeNext() {
             advance();
             return consume();
         }
@@ -173,11 +159,9 @@ public abstract class MergeIterator<In,Out> extends AbstractIterator<Out> implem
          * the heap if the number of consumed elements is high (as it is in the initial heap construction). With non- or
          * lightly-overlapping iterators the procedure finishes after just one (resp. a couple of) comparisons.
          */
-        private void advance()
-        {
+        private void advance() {
             // Turn the set of candidates into a heap.
-            for (int i = needingAdvance - 1; i >= 0; --i)
-            {
+            for (int i = needingAdvance - 1; i >= 0; --i) {
                 Candidate<In> candidate = heap[i];
                 /**
                  *  needingAdvance runs to the maximum index (and deepest-right node) that may need advancing;
@@ -196,11 +180,9 @@ public abstract class MergeIterator<In,Out> extends AbstractIterator<Out> implem
          *
          * This relies on the equalParent flag to avoid doing any comparisons.
          */
-        private Out consume()
-        {
+        private Out consume() {
             if (size == 0)
                 return endOfData();
-
             reducer.onKeyChange();
             assert !heap[0].equalParent;
             reducer.reduce(heap[0].idx, heap[0].consume());
@@ -208,8 +190,7 @@ public abstract class MergeIterator<In,Out> extends AbstractIterator<Out> implem
             final int sortedSectionSize = Math.min(size, SORTED_SECTION_SIZE);
             int i;
             consume: {
-                for (i = 1; i < sortedSectionSize; ++i)
-                {
+                for (i = 1; i < sortedSectionSize; ++i) {
                     if (!heap[i].equalParent)
                         break consume;
                     reducer.reduce(heap[i].idx, heap[i].consume());
@@ -225,11 +206,9 @@ public abstract class MergeIterator<In,Out> extends AbstractIterator<Out> implem
          *
          * @return the largest equal index found in this search.
          */
-        private int consumeHeap(int idx)
-        {
+        private int consumeHeap(int idx) {
             if (idx >= size || !heap[idx].equalParent)
                 return -1;
-
             reducer.reduce(heap[idx].idx, heap[idx].consume());
             int nextIdx = (idx << 1) - (SORTED_SECTION_SIZE - 1);
             return Math.max(idx, Math.max(consumeHeap(nextIdx), consumeHeap(nextIdx + 1)));
@@ -242,164 +221,143 @@ public abstract class MergeIterator<In,Out> extends AbstractIterator<Out> implem
          * Whenever an equality is found between two elements that form a new parent-child relationship, the child's
          * equalParent flag is set to true if the elements are equal.
          */
-        private void replaceAndSink(Candidate<In> candidate, int currIdx)
-        {
-            if (candidate == null)
-            {
+        private void replaceAndSink(Candidate<In> candidate, int currIdx) {
+            if (candidate == null) {
                 // Drop iterator by replacing it with the last one in the heap.
                 candidate = heap[--size];
-                heap[size] = null; // not necessary but helpful for debugging
+                // not necessary but helpful for debugging
+                heap[size] = null;
             }
             // The new element will be top of its heap, at this point there is no parent to be equal to.
             candidate.equalParent = false;
-
             final int size = this.size;
             final int sortedSectionSize = Math.min(size - 1, SORTED_SECTION_SIZE);
-
             int nextIdx;
-
             // Advance within the sorted section, pulling up items lighter than candidate.
-            while ((nextIdx = currIdx + 1) <= sortedSectionSize)
-            {
-                if (!heap[nextIdx].equalParent) // if we were greater then an (or were the) equal parent, we are >= the child
-                {
+            while ((nextIdx = currIdx + 1) <= sortedSectionSize) {
+                if (// if we were greater then an (or were the) equal parent, we are >= the child
+                !heap[nextIdx].equalParent) {
                     int cmp = candidate.compareTo(heap[nextIdx]);
-                    if (cmp <= 0)
-                    {
+                    if (cmp <= 0) {
                         heap[nextIdx].equalParent = cmp == 0;
                         heap[currIdx] = candidate;
                         return;
                     }
                 }
-
                 heap[currIdx] = heap[nextIdx];
                 currIdx = nextIdx;
             }
             // If size <= SORTED_SECTION_SIZE, nextIdx below will be no less than size,
             // because currIdx == sortedSectionSize == size - 1 and nextIdx becomes
             // (size - 1) * 2) - (size - 1 - 1) == size.
-
             // Advance in the binary heap, pulling up the lighter element from the two at each level.
-            while ((nextIdx = (currIdx * 2) - (sortedSectionSize - 1)) + 1 < size)
-            {
-                if (!heap[nextIdx].equalParent)
-                {
-                    if (!heap[nextIdx + 1].equalParent)
-                    {
+            while ((nextIdx = (currIdx * 2) - (sortedSectionSize - 1)) + 1 < size) {
+                if (!heap[nextIdx].equalParent) {
+                    if (!heap[nextIdx + 1].equalParent) {
                         // pick the smallest of the two children
                         int siblingCmp = heap[nextIdx + 1].compareTo(heap[nextIdx]);
                         if (siblingCmp < 0)
                             ++nextIdx;
-
                         // if we're smaller than this, we are done, and must only restore the heap and equalParent properties
                         int cmp = candidate.compareTo(heap[nextIdx]);
-                        if (cmp <= 0)
-                        {
-                            if (cmp == 0)
-                            {
+                        if (cmp <= 0) {
+                            if (cmp == 0) {
                                 heap[nextIdx].equalParent = true;
-                                if (siblingCmp == 0) // siblingCmp == 0 => nextIdx is the left child
+                                if (// siblingCmp == 0 => nextIdx is the left child
+                                siblingCmp == 0)
                                     heap[nextIdx + 1].equalParent = true;
                             }
-
                             heap[currIdx] = candidate;
                             return;
                         }
-
-                        if (siblingCmp == 0)
-                        {
+                        if (siblingCmp == 0) {
                             // siblingCmp == 0 => nextIdx is still the left child
                             // if the two siblings were equal, and we are inserting something greater, we will
                             // pull up the left one; this means the right gets an equalParent
                             heap[nextIdx + 1].equalParent = true;
                         }
-                    }
-                    else
-                        ++nextIdx;  // descend down the path where we found the equal child
+                    } else
+                        // descend down the path where we found the equal child
+                        ++nextIdx;
                 }
-
                 heap[currIdx] = heap[nextIdx];
                 currIdx = nextIdx;
             }
-
             // our loop guard ensures there are always two siblings to process; typically when we exit the loop we will
             // be well past the end of the heap and this next condition will match...
-            if (nextIdx >= size)
-            {
+            if (nextIdx >= size) {
                 heap[currIdx] = candidate;
                 return;
             }
-
             // ... but sometimes we will have one last child to compare against, that has no siblings
-            if (!heap[nextIdx].equalParent)
-            {
+            if (!heap[nextIdx].equalParent) {
                 int cmp = candidate.compareTo(heap[nextIdx]);
-                if (cmp <= 0)
-                {
+                if (cmp <= 0) {
                     heap[nextIdx].equalParent = cmp == 0;
                     heap[currIdx] = candidate;
                     return;
                 }
             }
-
             heap[currIdx] = heap[nextIdx];
             heap[nextIdx] = candidate;
         }
     }
 
     // Holds and is comparable by the head item of an iterator it owns
-    protected static final class Candidate<In> implements Comparable<Candidate<In>>
-    {
+    protected static final class Candidate<In> implements Comparable<Candidate<In>> {
+
         private final Iterator<? extends In> iter;
+
         private final Comparator<? super In> comp;
+
         private final int idx;
+
         private In item;
+
         boolean equalParent;
 
-        public Candidate(int idx, Iterator<? extends In> iter, Comparator<? super In> comp)
-        {
+        public Candidate(int idx, Iterator<? extends In> iter, Comparator<? super In> comp) {
             this.iter = iter;
             this.comp = comp;
             this.idx = idx;
         }
 
-        /** @return this if our iterator had an item, and it is now available, otherwise null */
-        protected Candidate<In> advance()
-        {
+        /**
+         * @return this if our iterator had an item, and it is now available, otherwise null
+         */
+        protected Candidate<In> advance() {
             if (!iter.hasNext())
                 return null;
             item = iter.next();
             return this;
         }
 
-        public int compareTo(Candidate<In> that)
-        {
+        public int compareTo(Candidate<In> that) {
             assert item != null && that.item != null;
             return comp.compare(this.item, that.item);
         }
 
-        public In consume()
-        {
+        public In consume() {
             In temp = item;
             item = null;
             assert temp != null;
             return temp;
         }
 
-        public boolean needsAdvance()
-        {
+        public boolean needsAdvance() {
             return item == null;
         }
     }
 
-    /** Accumulator that collects values of type A, and outputs a value of type B. */
-    public static abstract class Reducer<In,Out>
-    {
+    /**
+     * Accumulator that collects values of type A, and outputs a value of type B.
+     */
+    public static abstract class Reducer<In, Out> {
+
         /**
          * @return true if Out is the same as In for the case of a single source iterator
          */
-        public boolean trivialReduceIsTrivial()
-        {
+        public boolean trivialReduceIsTrivial() {
             return false;
         }
 
@@ -409,33 +367,35 @@ public abstract class MergeIterator<In,Out> extends AbstractIterator<Out> implem
          */
         public abstract void reduce(int idx, In current);
 
-        /** @return The last object computed by reduce */
+        /**
+         * @return The last object computed by reduce
+         */
         protected abstract Out getReduced();
 
         /**
          * Called at the beginning of each new key, before any reduce is called.
          * To be overridden by implementing classes.
          */
-        protected void onKeyChange() {}
+        protected void onKeyChange() {
+        }
 
         /**
          * May be overridden by implementations that require cleaning up after use
          */
-        public void close() {}
+        public void close() {
+        }
     }
 
-    private static class OneToOne<In, Out> extends MergeIterator<In, Out>
-    {
+    private static class OneToOne<In, Out> extends MergeIterator<In, Out> {
+
         private final Iterator<In> source;
 
-        public OneToOne(List<? extends Iterator<In>> sources, Reducer<In, Out> reducer)
-        {
+        public OneToOne(List<? extends Iterator<In>> sources, Reducer<In, Out> reducer) {
             super(sources, reducer);
             source = sources.get(0);
         }
 
-        protected Out computeNext()
-        {
+        protected Out computeNext() {
             if (!source.hasNext())
                 return endOfData();
             reducer.onKeyChange();
@@ -444,19 +404,17 @@ public abstract class MergeIterator<In,Out> extends AbstractIterator<Out> implem
         }
     }
 
-    private static class TrivialOneToOne<In, Out> extends MergeIterator<In, Out>
-    {
+    private static class TrivialOneToOne<In, Out> extends MergeIterator<In, Out> {
+
         private final Iterator<In> source;
 
-        public TrivialOneToOne(List<? extends Iterator<In>> sources, Reducer<In, Out> reducer)
-        {
+        public TrivialOneToOne(List<? extends Iterator<In>> sources, Reducer<In, Out> reducer) {
             super(sources, reducer);
             source = sources.get(0);
         }
 
         @SuppressWarnings("unchecked")
-        protected Out computeNext()
-        {
+        protected Out computeNext() {
             if (!source.hasNext())
                 return endOfData();
             return (Out) source.next();

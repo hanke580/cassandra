@@ -15,7 +15,6 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
 package org.apache.cassandra.hints;
 
 import java.io.File;
@@ -23,11 +22,10 @@ import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
 import java.util.zip.CRC32;
-
 import org.apache.cassandra.io.compress.ICompressor;
 
-public class CompressedHintsWriter extends HintsWriter
-{
+public class CompressedHintsWriter extends HintsWriter {
+
     // compressed and uncompressed size is stored at the beginning of each compressed block
     static final int METADATA_SIZE = 8;
 
@@ -35,28 +33,22 @@ public class CompressedHintsWriter extends HintsWriter
 
     private volatile ByteBuffer compressionBuffer = null;
 
-    public CompressedHintsWriter(File directory, HintsDescriptor descriptor, File file, FileChannel channel, int fd, CRC32 globalCRC)
-    {
+    public CompressedHintsWriter(File directory, HintsDescriptor descriptor, File file, FileChannel channel, int fd, CRC32 globalCRC) {
         super(directory, descriptor, file, channel, fd, globalCRC);
         compressor = descriptor.createCompressor();
         assert compressor != null;
     }
 
-    protected void writeBuffer(ByteBuffer bb) throws IOException
-    {
+    protected void writeBuffer(ByteBuffer bb) throws IOException {
         int originalSize = bb.remaining();
         int estimatedSize = compressor.initialCompressedBufferLength(originalSize) + METADATA_SIZE;
-
-        if (compressionBuffer == null || compressionBuffer.capacity() < estimatedSize)
-        {
+        if (compressionBuffer == null || compressionBuffer.capacity() < estimatedSize) {
             compressionBuffer = compressor.preferredBufferType().allocate(estimatedSize);
         }
         compressionBuffer.clear();
-
         compressionBuffer.position(METADATA_SIZE);
         compressor.compress(bb, compressionBuffer);
         int compressedSize = compressionBuffer.position() - METADATA_SIZE;
-
         compressionBuffer.rewind();
         compressionBuffer.putInt(originalSize);
         compressionBuffer.putInt(compressedSize);

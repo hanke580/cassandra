@@ -26,48 +26,42 @@ import org.apache.cassandra.db.rows.EncodingStats;
 import org.apache.cassandra.db.rows.Unfiltered;
 import org.apache.cassandra.db.rows.UnfilteredRowIterator;
 
-final class UnfilteredRows extends BaseRows<Unfiltered, UnfilteredRowIterator> implements UnfilteredRowIterator
-{
+final class UnfilteredRows extends BaseRows<Unfiltered, UnfilteredRowIterator> implements UnfilteredRowIterator {
+
     private PartitionColumns columns;
+
     private DeletionTime partitionLevelDeletion;
 
-    public UnfilteredRows(UnfilteredRowIterator input)
-    {
+    public UnfilteredRows(UnfilteredRowIterator input) {
         this(input, input.columns());
     }
 
-    public UnfilteredRows(UnfilteredRowIterator input, PartitionColumns columns)
-    {
+    public UnfilteredRows(UnfilteredRowIterator input, PartitionColumns columns) {
         super(input);
         this.columns = columns;
         partitionLevelDeletion = input.partitionLevelDeletion();
     }
 
-    public PartitionColumns columns()
-    {
+    public PartitionColumns columns() {
         return columns;
     }
 
     @Override
-    void add(Transformation add)
-    {
+    void add(Transformation add) {
         super.add(add);
         partitionLevelDeletion = add.applyToDeletion(partitionLevelDeletion);
     }
 
-    public DeletionTime partitionLevelDeletion()
-    {
+    public DeletionTime partitionLevelDeletion() {
         return partitionLevelDeletion;
     }
 
-    public EncodingStats stats()
-    {
-        return input.stats();
+    public EncodingStats stats() {
+        return ((org.apache.cassandra.db.rows.EncodingStats) org.zlab.ocov.tracker.Runtime.update(input.stats(), 158));
     }
 
     @Override
-    public boolean isEmpty()
-    {
+    public boolean isEmpty() {
         return staticRow().isEmpty() && partitionLevelDeletion().isLive() && !hasNext();
     }
 }

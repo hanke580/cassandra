@@ -20,12 +20,10 @@ package org.apache.cassandra.thrift;
 import java.util.Collections;
 import java.util.Iterator;
 import java.util.NoSuchElementException;
-
 import org.apache.cassandra.db.transform.Transformation;
 import org.apache.cassandra.utils.AbstractIterator;
 import com.google.common.collect.Iterators;
 import com.google.common.collect.PeekingIterator;
-
 import org.apache.cassandra.config.CFMetaData;
 import org.apache.cassandra.config.ColumnDefinition;
 import org.apache.cassandra.db.*;
@@ -60,43 +58,34 @@ import org.apache.cassandra.db.partitions.*;
  *                 "c5": { value : 4 }
  *                 "c7": { value : 1 }
  */
-public class ThriftResultsMerger extends Transformation<UnfilteredRowIterator>
-{
+public class ThriftResultsMerger extends Transformation<UnfilteredRowIterator> {
+
     private final int nowInSec;
 
-    private ThriftResultsMerger(int nowInSec)
-    {
+    private ThriftResultsMerger(int nowInSec) {
         this.nowInSec = nowInSec;
     }
 
-    public static UnfilteredPartitionIterator maybeWrap(UnfilteredPartitionIterator iterator, CFMetaData metadata, int nowInSec)
-    {
+    public static UnfilteredPartitionIterator maybeWrap(UnfilteredPartitionIterator iterator, CFMetaData metadata, int nowInSec) {
         if (!metadata.isStaticCompactTable() && !metadata.isSuper())
             return iterator;
-
         return Transformation.apply(iterator, new ThriftResultsMerger(nowInSec));
     }
 
-    public static UnfilteredRowIterator maybeWrap(UnfilteredRowIterator iterator, int nowInSec)
-    {
+    public static UnfilteredRowIterator maybeWrap(UnfilteredRowIterator iterator, int nowInSec) {
         if (!iterator.metadata().isStaticCompactTable() && !iterator.metadata().isSuper())
             return iterator;
-
-        return iterator.metadata().isSuper()
-             ? Transformation.apply(iterator, new SuperColumnsPartitionMerger(iterator, nowInSec))
-             : new PartitionMerger(iterator, nowInSec);
+        org.zlab.ocov.tracker.Runtime.update(iterator, 191, iterator, nowInSec);
+        return iterator.metadata().isSuper() ? Transformation.apply(iterator, new SuperColumnsPartitionMerger(iterator, nowInSec)) : ((PartitionMerger) org.zlab.ocov.tracker.Runtime.update(new PartitionMerger(iterator, nowInSec), 192, iterator, nowInSec));
     }
 
     @Override
-    public UnfilteredRowIterator applyToPartition(UnfilteredRowIterator iter)
-    {
-        return iter.metadata().isSuper()
-             ? Transformation.apply(iter, new SuperColumnsPartitionMerger(iter, nowInSec))
-             : new PartitionMerger(iter, nowInSec);
+    public UnfilteredRowIterator applyToPartition(UnfilteredRowIterator iter) {
+        return iter.metadata().isSuper() ? Transformation.apply(iter, new SuperColumnsPartitionMerger(iter, nowInSec)) : ((PartitionMerger) org.zlab.ocov.tracker.Runtime.update(new PartitionMerger(iter, nowInSec), 193, iter));
     }
 
-    private static class PartitionMerger extends WrappingUnfilteredRowIterator
-    {
+    private static class PartitionMerger extends WrappingUnfilteredRowIterator {
+
         private final int nowInSec;
 
         // We initialize lazily to avoid having this iterator fetch the wrapped iterator before it's actually asked for it.
@@ -105,99 +94,81 @@ public class ThriftResultsMerger extends Transformation<UnfilteredRowIterator>
         private Iterator<Cell> staticCells;
 
         private final Row.Builder builder;
+
         private Row nextToMerge;
+
         private Unfiltered nextFromWrapped;
 
-        private PartitionMerger(UnfilteredRowIterator results, int nowInSec)
-        {
+        private PartitionMerger(UnfilteredRowIterator results, int nowInSec) {
             super(results);
             assert results.metadata().isStaticCompactTable();
             this.nowInSec = nowInSec;
             this.builder = BTreeRow.sortedBuilder();
         }
 
-        private void init()
-        {
+        private void init() {
             assert !isInit;
             Row staticRow = super.staticRow();
             assert !staticRow.hasComplex();
-
             staticCells = staticRow.cells().iterator();
             updateNextToMerge();
             isInit = true;
         }
 
         @Override
-        public Row staticRow()
-        {
+        public Row staticRow() {
             return Rows.EMPTY_STATIC_ROW;
         }
 
         @Override
-        public boolean hasNext()
-        {
+        public boolean hasNext() {
             if (!isInit)
                 init();
-
             return nextFromWrapped != null || nextToMerge != null || super.hasNext();
         }
 
         @Override
-        public Unfiltered next()
-        {
+        public Unfiltered next() {
             if (!isInit)
                 init();
-
             if (nextFromWrapped == null && super.hasNext())
                 nextFromWrapped = super.next();
-
-            if (nextFromWrapped == null)
-            {
+            if (nextFromWrapped == null) {
                 if (nextToMerge == null)
                     throw new NoSuchElementException();
-
                 return consumeNextToMerge();
             }
-
             if (nextToMerge == null)
                 return consumeNextWrapped();
-
             int cmp = metadata().comparator.compare(nextToMerge, nextFromWrapped);
             if (cmp < 0)
                 return consumeNextToMerge();
             if (cmp > 0)
                 return consumeNextWrapped();
-
             // Same row, so merge them
             assert nextFromWrapped instanceof Row;
-            return Rows.merge((Row)consumeNextWrapped(), consumeNextToMerge(), nowInSec);
+            return Rows.merge((Row) consumeNextWrapped(), consumeNextToMerge(), nowInSec);
         }
 
-        private Unfiltered consumeNextWrapped()
-        {
+        private Unfiltered consumeNextWrapped() {
             Unfiltered toReturn = nextFromWrapped;
             nextFromWrapped = null;
             return toReturn;
         }
 
-        private Row consumeNextToMerge()
-        {
+        private Row consumeNextToMerge() {
             Row toReturn = nextToMerge;
             updateNextToMerge();
             return toReturn;
         }
 
-        private void updateNextToMerge()
-        {
-            if (!staticCells.hasNext())
-            {
+        private void updateNextToMerge() {
+            if (!staticCells.hasNext()) {
                 // Nothing more to merge.
                 nextToMerge = null;
                 return;
             }
-
             Cell cell = staticCells.next();
-
             // Given a static cell, the equivalent row uses the column name as clustering and the value as unique cell value.
             builder.newRow(new Clustering(cell.column().name.bytes));
             builder.addCell(new BufferCell(metadata().compactValueColumn(), cell.timestamp(), cell.ttl(), cell.localDeletionTime(), cell.value(), cell.path()));
@@ -205,49 +176,40 @@ public class ThriftResultsMerger extends Transformation<UnfilteredRowIterator>
         }
     }
 
-    private static class SuperColumnsPartitionMerger extends Transformation
-    {
+    private static class SuperColumnsPartitionMerger extends Transformation {
+
         private final int nowInSec;
+
         private final Row.Builder builder;
+
         private final ColumnDefinition superColumnMapColumn;
+
         private final AbstractType<?> columnComparator;
 
-        private SuperColumnsPartitionMerger(UnfilteredRowIterator applyTo, int nowInSec)
-        {
+        private SuperColumnsPartitionMerger(UnfilteredRowIterator applyTo, int nowInSec) {
             assert applyTo.metadata().isSuper();
             this.nowInSec = nowInSec;
-
             this.superColumnMapColumn = applyTo.metadata().compactValueColumn();
             assert superColumnMapColumn != null && superColumnMapColumn.type instanceof MapType;
-
             this.builder = BTreeRow.sortedBuilder();
-            this.columnComparator = ((MapType)superColumnMapColumn.type).nameComparator();
+            this.columnComparator = ((MapType) superColumnMapColumn.type).nameComparator();
         }
 
         @Override
-        public Row applyToRow(Row row)
-        {
+        public Row applyToRow(Row row) {
             PeekingIterator<Cell> staticCells = Iterators.peekingIterator(simpleCellsIterator(row));
             if (!staticCells.hasNext())
                 return row;
-
             builder.newRow(row.clustering());
-
             ComplexColumnData complexData = row.getComplexColumnData(superColumnMapColumn);
-            
             PeekingIterator<Cell> dynamicCells;
-            if (complexData == null)
-            {
+            if (complexData == null) {
                 dynamicCells = Iterators.peekingIterator(Collections.<Cell>emptyIterator());
-            }
-            else
-            {
+            } else {
                 dynamicCells = Iterators.peekingIterator(complexData.iterator());
                 builder.addComplexDeletion(superColumnMapColumn, complexData.complexDeletion());
             }
-
-            while (staticCells.hasNext() && dynamicCells.hasNext())
-            {
+            while (staticCells.hasNext() && dynamicCells.hasNext()) {
                 Cell staticCell = staticCells.peek();
                 Cell dynamicCell = dynamicCells.peek();
                 int cmp = columnComparator.compare(staticCell.column().name.bytes, dynamicCell.path().get(0));
@@ -258,29 +220,22 @@ public class ThriftResultsMerger extends Transformation<UnfilteredRowIterator>
                 else
                     builder.addCell(Cells.reconcile(makeDynamicCell(staticCells.next()), dynamicCells.next(), nowInSec));
             }
-
-            while (staticCells.hasNext())
-                builder.addCell(makeDynamicCell(staticCells.next()));
-            while (dynamicCells.hasNext())
-                builder.addCell(dynamicCells.next());
-
+            org.zlab.ocov.tracker.Runtime.update(staticCells, 194, row);
+            while (staticCells.hasNext()) builder.addCell(makeDynamicCell(staticCells.next()));
+            while (dynamicCells.hasNext()) builder.addCell(dynamicCells.next());
             return builder.build();
         }
 
-        private Cell makeDynamicCell(Cell staticCell)
-        {
+        private Cell makeDynamicCell(Cell staticCell) {
             return new BufferCell(superColumnMapColumn, staticCell.timestamp(), staticCell.ttl(), staticCell.localDeletionTime(), staticCell.value(), CellPath.create(staticCell.column().name.bytes));
         }
 
-        private Iterator<Cell> simpleCellsIterator(Row row)
-        {
+        private Iterator<Cell> simpleCellsIterator(Row row) {
             final Iterator<Cell> cells = row.cells().iterator();
-            return new AbstractIterator<Cell>()
-            {
-                protected Cell computeNext()
-                {
-                    if (cells.hasNext())
-                    {
+            return new AbstractIterator<Cell>() {
+
+                protected Cell computeNext() {
+                    if (cells.hasNext()) {
                         Cell cell = cells.next();
                         if (cell.column().isSimple())
                             return cell;
@@ -291,4 +246,3 @@ public class ThriftResultsMerger extends Transformation<UnfilteredRowIterator>
         }
     }
 }
-

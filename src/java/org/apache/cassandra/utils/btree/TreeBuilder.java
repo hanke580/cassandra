@@ -19,7 +19,6 @@
 package org.apache.cassandra.utils.btree;
 
 import java.util.Comparator;
-
 import static org.apache.cassandra.utils.btree.BTree.EMPTY_LEAF;
 import static org.apache.cassandra.utils.btree.BTree.FAN_SHIFT;
 import static org.apache.cassandra.utils.btree.BTree.POSITIVE_INFINITY;
@@ -30,8 +29,8 @@ import static org.apache.cassandra.utils.btree.BTree.POSITIVE_INFINITY;
  * <p/>
  * This is a fairly heavy-weight object, so a ThreadLocal instance is created for making modifications to a tree
  */
-final class TreeBuilder
-{
+final class TreeBuilder {
+
     private final NodeBuilder rootBuilder = new NodeBuilder();
 
     /**
@@ -54,19 +53,13 @@ final class TreeBuilder
      * we assume @param source has been sorted, e.g. by BTree.update, so the update of each key resumes where
      * the previous left off.
      */
-    public <C, K extends C, V extends C> Object[] update(Object[] btree, Comparator<C> comparator, Iterable<K> source, UpdateFunction<K, V> updateF)
-    {
+    public <C, K extends C, V extends C> Object[] update(Object[] btree, Comparator<C> comparator, Iterable<K> source, UpdateFunction<K, V> updateF) {
         assert updateF != null;
-
         NodeBuilder current = rootBuilder;
         current.reset(btree, POSITIVE_INFINITY, updateF, comparator);
-
-        for (K key : source)
-        {
-            while (true)
-            {
-                if (updateF.abortEarly())
-                {
+        for (K key : source) {
+            while (true) {
+                if (updateF.abortEarly()) {
                     rootBuilder.clear();
                     return null;
                 }
@@ -78,40 +71,29 @@ final class TreeBuilder
                 current = next;
             }
         }
-
         // finish copying any remaining keys from the original btree
-        while (true)
-        {
+        while (true) {
             NodeBuilder next = current.finish();
             if (next == null)
                 break;
             current = next;
         }
-
         // updating with POSITIVE_INFINITY means that current should be back to the root
         assert current.isRoot();
-
         Object[] r = current.toNode();
         current.clear();
         return r;
     }
 
-    public <C, K extends C, V extends C> Object[] build(Iterable<K> source, UpdateFunction<K, V> updateF, int size)
-    {
+    public <C, K extends C, V extends C> Object[] build(Iterable<K> source, UpdateFunction<K, V> updateF, int size) {
         assert updateF != null;
-
         NodeBuilder current = rootBuilder;
         // we descend only to avoid wasting memory; in update() we will often descend into existing trees
         // so here we want to descend also, so we don't have lg max(N) depth in both directions
-        while ((size >>= FAN_SHIFT) > 0)
-            current = current.ensureChild();
-
+        while ((size >>= FAN_SHIFT) > 0) current = current.ensureChild();
         current.reset(EMPTY_LEAF, POSITIVE_INFINITY, updateF, null);
-        for (K key : source)
-            current.addNewKey(key);
-
+        for (K key : source) current.addNewKey(key);
         current = current.ascendToRoot();
-
         Object[] r = current.toNode();
         current.clear();
         return r;
