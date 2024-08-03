@@ -649,16 +649,6 @@ public abstract class LegacyLayout {
         return foundOne ? builder.build() : Rows.EMPTY_STATIC_ROW;
     }
 
-    private static LegacyAtom readLegacyAtomSkippingUnknownColumn(CFMetaData metadata, DataInputPlus in) throws IOException {
-        while (true) {
-            try {
-                return readLegacyAtom(metadata, in, false);
-            } catch (UnknownColumnException e) {
-                // Simply skip, as the method name implies.
-            }
-        }
-    }
-
     private static Row getNextRow(CellGrouper grouper, PeekingIterator<? extends LegacyAtom> cells) {
         if (!cells.hasNext())
             return null;
@@ -1166,10 +1156,12 @@ public abstract class LegacyLayout {
                         if (!helper.includes(path))
                             return true;
                     }
-                    column.type.validateIfFixedSize(cell.value);
-                    Cell c = new BufferCell(column, cell.timestamp, cell.ttl, cell.localDeletionTime, cell.value, path);
-                    if (!helper.isDropped(c, column.isComplex()))
+                    if (!helper.isDropped(column, cell.timestamp, column.isComplex()))
+                    {
+                        column.type.validateIfFixedSize(cell.value);
+                        Cell c = new BufferCell(column, cell.timestamp, cell.ttl, cell.localDeletionTime, cell.value, path);
                         builder.addCell(c);
+                    }
                     if (column.isComplex()) {
                         helper.endOfComplexColumn();
                     }
