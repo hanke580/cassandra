@@ -27,7 +27,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 import org.apache.cassandra.cql3.ColumnIdentifier;
 import org.apache.cassandra.cql3.SuperColumnCompatibility;
-import org.apache.cassandra.utils.AbstractIterator;
+
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.collect.Iterators;
 import com.google.common.collect.Lists;
@@ -38,6 +38,15 @@ import org.apache.cassandra.db.filter.ColumnFilter;
 import org.apache.cassandra.db.filter.DataLimits;
 import org.apache.cassandra.db.rows.*;
 import org.apache.cassandra.db.partitions.*;
+import org.apache.cassandra.db.LegacyLayout.CellGrouper;
+import org.apache.cassandra.db.LegacyLayout.LegacyAtom;
+import org.apache.cassandra.db.LegacyLayout.LegacyBound;
+import org.apache.cassandra.db.LegacyLayout.LegacyCell;
+import org.apache.cassandra.db.LegacyLayout.LegacyCellName;
+import org.apache.cassandra.db.LegacyLayout.LegacyDeletionInfo;
+import org.apache.cassandra.db.LegacyLayout.LegacyRangeTombstone;
+import org.apache.cassandra.db.LegacyLayout.LegacyRangeTombstoneList;
+import org.apache.cassandra.db.LegacyLayout.LegacyUnfilteredPartition;
 import org.apache.cassandra.db.context.CounterContext;
 import org.apache.cassandra.db.marshal.*;
 import org.apache.cassandra.io.util.DataInputPlus;
@@ -598,33 +607,45 @@ public abstract class LegacyLayout {
         return new RowAndDeletionMergeIterator(metadata, key, delInfo.deletionInfo.getPartitionDeletion(), ColumnFilter.all(metadata), staticRow, reversed, EncodingStats.NO_STATS, rows, ranges, true);
     }
 
-    public static Row extractStaticColumns(CFMetaData metadata, DataInputPlus in, Columns statics) throws IOException {
+    public static Row extractStaticColumns(CFMetaData metadata, DataInputPlus in, Columns statics) throws IOException
+    {
         assert !statics.isEmpty();
         assert metadata.isCompactTable();
+
         if (metadata.isSuper())
             // TODO: there is in practice nothing to do here, but we need to handle the column_metadata for super columns somewhere else
             throw new UnsupportedOperationException();
+
         Set<ByteBuffer> columnsToFetch = new HashSet<>(statics.size());
-        for (ColumnDefinition column : statics) columnsToFetch.add(column.name.bytes);
+        for (ColumnDefinition column : statics)
+            columnsToFetch.add(column.name.bytes);
+
         Row.Builder builder = BTreeRow.unsortedBuilder(FBUtilities.nowInSeconds());
         builder.newRow(Clustering.STATIC_CLUSTERING);
+
         boolean foundOne = false;
         LegacyAtom atom;
-        while ((atom = readLegacyAtomSkippingUnknownColumn(metadata, in)) != null) {
-            if (atom.isCell()) {
+        while ((atom = readLegacyAtom(metadata, in, false)) != null)
+        {
+            if (atom.isCell())
+            {
                 LegacyCell cell = atom.asCell();
                 if (!columnsToFetch.contains(cell.name.encode(metadata)))
                     continue;
+
                 foundOne = true;
                 cell.name.column.type.validateIfFixedSize(cell.value);
                 builder.addCell(new BufferCell(cell.name.column, cell.timestamp, cell.ttl, cell.localDeletionTime, cell.value, null));
-            } else {
+            }
+            else
+            {
                 LegacyRangeTombstone tombstone = atom.asRangeTombstone();
                 // TODO: we need to track tombstones and potentially ignore cells that are
                 // shadowed (or even better, replace them by tombstones).
                 throw new UnsupportedOperationException();
             }
         }
+
         return foundOne ? builder.build() : Rows.EMPTY_STATIC_ROW;
     }
 
@@ -911,25 +932,29 @@ public abstract class LegacyLayout {
         };
     }
 
-    public static LegacyAtom readLegacyAtom(CFMetaData metadata, DataInputPlus in, boolean readAllAsDynamic) throws IOException, UnknownColumnException {
-        ByteBuffer cellname = ByteBufferUtil.readWithShortLength(in);
-        if (!cellname.hasRemaining())
-            // END_OF_ROW
-            return null;
-        try {
-            int b = in.readUnsignedByte();
-            return (b & RANGE_TOMBSTONE_MASK) != 0 ? readLegacyRangeTombstoneBody(metadata, in, cellname) : readLegacyCellBody(metadata, in, cellname, b, SerializationHelper.Flag.LOCAL, readAllAsDynamic);
-        } catch (UnknownColumnException e) {
-            // We legitimately can get here in 2 cases:
-            // 1) for system tables, because we've unceremoniously removed columns (without registering them as dropped)
-            // 2) for dropped columns.
-            // In any other case, there is a mismatch between the schema and the data, and we complain loudly in
-            // that case. Note that if we are in a legit case of an unknown column, we want to simply skip that cell,
-            // but we don't do this here and re-throw the exception because the calling code sometimes has to know
-            // about this happening. This does mean code calling this method should handle this case properly.
-            if (!metadata.ksName.equals(SystemKeyspace.NAME) && metadata.getDroppedColumnDefinition(e.columnName) == null)
-                throw new IllegalStateException(String.format("Got cell for unknown column %s in sstable of %s.%s: " + "This suggest a problem with the schema which doesn't list " + "this column. Even if that column was dropped, it should have " + "been listed as such", UTF8Type.instance.compose(e.columnName), metadata.ksName, metadata.cfName), e);
-            throw e;
+    public static LegacyAtom readLegacyAtom(CFMetaData metadata, DataInputPlus in, boolean readAllAsDynamic) throws IOException
+    {
+        while (true)
+        {
+            ByteBuffer cellname = ByteBufferUtil.readWithShortLength(in);
+            if (!cellname.hasRemaining())
+                return null; // END_OF_ROW
+
+            try
+            {
+                int b = in.readUnsignedByte();
+                return (b & RANGE_TOMBSTONE_MASK) != 0
+                    ? readLegacyRangeTombstoneBody(metadata, in, cellname)
+                    : readLegacyCellBody(metadata, in, cellname, b, SerializationHelper.Flag.LOCAL, readAllAsDynamic);
+            }
+            catch (UnknownColumnException e)
+            {
+                // We can get there if we read a cell for a dropped column, and ff that is the case,
+                // then simply ignore the cell is fine. But also not that we ignore if it's the
+                // system keyspace because for those table we actually remove columns without registering
+                // them in the dropped columns
+                assert metadata.ksName.equals(SystemKeyspace.NAME) || metadata.getDroppedColumnDefinition(e.columnName) != null : e.getMessage();
+            }
         }
     }
 
