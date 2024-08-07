@@ -661,7 +661,7 @@ public class ColumnFamilyStore implements ColumnFamilyStoreMBean {
     public ListenableFuture<ReplayPosition> switchMemtable() {
         synchronized (data) {
             logFlush();
-            Flush flush = new Flush(false);
+            Flush flush = ((Flush) org.zlab.ocov.tracker.Runtime.monitorCreationContext(new Flush(false), 1000, this));
             flushExecutor.execute(flush);
             ListenableFutureTask<ReplayPosition> task = ListenableFutureTask.create(flush.postFlush);
             postFlushExecutor.execute(task);
@@ -836,6 +836,8 @@ public class ColumnFamilyStore implements ColumnFamilyStoreMBean {
         }
 
         public void run() {
+            org.zlab.ocov.tracker.Runtime.update(this, 1000);
+
             if (logger.isTraceEnabled())
                 logger.trace("Flush task {}@{} starts executing, waiting on barrier", hashCode(), name);
             long start = System.nanoTime();

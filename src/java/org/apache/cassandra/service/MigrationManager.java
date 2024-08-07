@@ -44,6 +44,7 @@ import org.apache.cassandra.net.MessagingService;
 import org.apache.cassandra.schema.KeyspaceMetadata;
 import org.apache.cassandra.schema.SchemaKeyspace;
 import org.apache.cassandra.schema.Tables;
+import org.apache.cassandra.service.MigrationManager.MigrationsSerializer;
 import org.apache.cassandra.utils.FBUtilities;
 import org.apache.cassandra.utils.WrappedRunnable;
 
@@ -224,6 +225,7 @@ public class MigrationManager
     private static void announceNewColumnFamily(CFMetaData cfm, boolean announceLocally, boolean throwOnDuplicate, long timestamp) throws ConfigurationException
     {
         cfm.validate();
+        org.zlab.ocov.tracker.Runtime.update(cfm, 1001);
 
         KeyspaceMetadata ksm = Schema.instance.getKSMetaData(cfm.ksName);
         if (ksm == null)
@@ -300,6 +302,7 @@ public class MigrationManager
     public static void announceColumnFamilyUpdate(CFMetaData cfm, Collection<ViewDefinition> views, boolean announceLocally) throws ConfigurationException
     {
         cfm.validate();
+        org.zlab.ocov.tracker.Runtime.update(cfm, 1002);
 
         CFMetaData oldCfm = Schema.instance.getCFMetaData(cfm.ksName, cfm.cfName);
         if (oldCfm == null)
