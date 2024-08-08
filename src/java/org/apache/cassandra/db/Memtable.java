@@ -242,7 +242,6 @@ public class Memtable implements Comparable<Memtable> {
         columnsCollector.update(update.columns());
         statsCollector.update(update.stats());
         currentOperations.addAndGet(update.operationCount());
-        org.zlab.ocov.tracker.Runtime.update(update, 109, update, indexer, opGroup);
         return pair[1];
     }
 
