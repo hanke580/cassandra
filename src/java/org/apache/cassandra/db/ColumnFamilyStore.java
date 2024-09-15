@@ -392,8 +392,7 @@ public class ColumnFamilyStore implements ColumnFamilyStoreMBean {
             }
         }
         latencyCalculator.cancel(false);
-        if (!metadata.isIndex())
-            SystemKeyspace.removeTruncationRecord(metadata.cfId);
+        SystemKeyspace.removeTruncationRecord(metadata.cfId);
         data.dropSSTables();
         indexManager.invalidate();
         invalidateCaches();

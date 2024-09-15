@@ -1253,12 +1253,4 @@ public final class CFMetaData {
     public String toString() {
         return new ToStringBuilder(this).append("cfId", cfId).append("ksName", ksName).append("cfName", cfName).append("cfType", cfType).append("comparator", comparator).append("comment", comment).append("readRepairChance", readRepairChance).append("dcLocalReadRepairChance", dcLocalReadRepairChance).append("gcGraceSeconds", gcGraceSeconds).append("defaultValidator", defaultValidator).append("keyValidator", keyValidator).append("minCompactionThreshold", minCompactionThreshold).append("maxCompactionThreshold", maxCompactionThreshold).append("columnMetadata", columnMetadata.values()).append("compactionStrategyClass", compactionStrategyClass).append("compactionStrategyOptions", compactionStrategyOptions).append("compressionParameters", compressionParameters.asThriftOptions()).append("bloomFilterFpChance", getBloomFilterFpChance()).append("memtableFlushPeriod", memtableFlushPeriod).append("caching", caching).append("defaultTimeToLive", defaultTimeToLive).append("minIndexInterval", minIndexInterval).append("maxIndexInterval", maxIndexInterval).append("speculativeRetry", speculativeRetry).append("droppedColumns", droppedColumns).append("triggers", triggers.values()).append("isDense", isDense).toString();
     }
-
-    /**
-     * true if this CFS contains secondary index data.
-     */
-    public boolean isIndex()
-    {
-        return cfName.contains(".");
-    }
 }
