@@ -57,9 +57,6 @@ import org.apache.cassandra.utils.memory.BufferPool;
 import static java.lang.Math.*;
 import static java.util.concurrent.TimeUnit.MILLISECONDS;
 import static org.apache.cassandra.net.MessagingService.*;
-import static org.apache.cassandra.net.MessagingService.VERSION_40;
-import static org.apache.cassandra.net.MessagingService.current_version;
-import static org.apache.cassandra.net.MessagingService.minimum_version;
 import static org.apache.cassandra.net.SocketFactory.WIRETRACE;
 import static org.apache.cassandra.net.SocketFactory.encryptionLogStatement;
 import static org.apache.cassandra.net.SocketFactory.newSslHandler;
@@ -343,6 +340,18 @@ public class InboundConnectionInitiator
                 return;
 
             logger.trace("Received third handshake message from peer {}, message = {}", ctx.channel().remoteAddress(), confirmOutboundPre40);
+
+            // Inject a delay to simulate a slow peer, for testing purposes
+            logger.info("[hklog] Injecting a delay to simulate a slow peer");
+            try
+            {
+                Thread.sleep(10000);
+            }
+            catch (InterruptedException e)
+            {
+                throw new RuntimeException(e);
+            }
+
             setupMessagingPipeline(confirmOutboundPre40.from, initiate.requestMessagingVersion, confirmOutboundPre40.maxMessagingVersion, ctx.pipeline());
         }
 

@@ -38,9 +38,13 @@ import io.netty.util.concurrent.SucceededFuture;
 import org.apache.cassandra.concurrent.NamedThreadFactory;
 import org.apache.cassandra.config.DatabaseDescriptor;
 import org.apache.cassandra.utils.FBUtilities;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 class InboundSockets
 {
+    private static final Logger logger = LoggerFactory.getLogger(InboundSockets.class);
+
     /**
      * A simple struct to wrap up the components needed for each listening socket.
      */
@@ -189,8 +193,10 @@ class InboundSockets
     {
         InboundConnectionSettings settings = template.withDefaults();
         out.add(new InboundSocket(settings));
-        if (settings.encryption.enable_legacy_ssl_storage_port && settings.encryption.enabled)
+        if (settings.encryption.enable_legacy_ssl_storage_port && settings.encryption.enabled) {
+            logger.info("[hklog] Adding legacy SSL port for {}", settings.bindAddress);
             out.add(new InboundSocket(template.withLegacyDefaults()));
+        }
     }
 
     public Future<Void> open(Consumer<ChannelPipeline> pipelineInjector)

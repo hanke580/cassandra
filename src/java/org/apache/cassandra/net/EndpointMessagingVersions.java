@@ -42,8 +42,12 @@ public class EndpointMessagingVersions
      */
     public int set(InetAddressAndPort endpoint, int version)
     {
-        logger.trace("Setting version {} for {}", version, endpoint);
+        logger.info("[hklog] Setting version {} for {}", version, endpoint);
 
+        for (StackTraceElement ste : Thread.currentThread().getStackTrace()) {
+            logger.info("[hklog] " + ste);
+        }
+        
         Integer v = versions.put(endpoint, version);
         return v == null ? version : v;
     }
