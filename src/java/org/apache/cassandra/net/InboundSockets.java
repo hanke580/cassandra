@@ -38,9 +38,13 @@ import io.netty.util.concurrent.SucceededFuture;
 import org.apache.cassandra.concurrent.NamedThreadFactory;
 import org.apache.cassandra.config.DatabaseDescriptor;
 import org.apache.cassandra.utils.FBUtilities;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 class InboundSockets
 {
+    static final Logger logger = LoggerFactory.getLogger(InboundSockets.class);
+
     /**
      * A simple struct to wrap up the components needed for each listening socket.
      */
@@ -187,10 +191,27 @@ class InboundSockets
 
     private static void addBindings(InboundConnectionSettings template, ImmutableList.Builder<InboundSocket> out)
     {
-        InboundConnectionSettings settings = template.withDefaults();
-        out.add(new InboundSocket(settings));
+        for (StackTraceElement ste : Thread.currentThread().getStackTrace()) {
+            logger.info("[hklog] " + ste);
+        }
+
+        InboundConnectionSettings       settings = template.withDefaults();
+        InboundConnectionSettings legacySettings = template.withLegacyDefaults();
+
         if (settings.encryption.enable_legacy_ssl_storage_port && settings.encryption.enabled)
-            out.add(new InboundSocket(template.withLegacyDefaults()));
+        {
+            out.add(new InboundSocket(legacySettings));
+
+            /*
+             * If the legacy ssl storage port and storage port match, only bind to the
+             * legacy ssl port. This makes it possible to configure a 4.0 node like a 3.0
+             * node with only the ssl_storage_port if required.
+             */
+            if (settings.bindAddress.equals(legacySettings.bindAddress))
+                return;
+        }
+
+        out.add(new InboundSocket(settings));
     }
 
     public Future<Void> open(Consumer<ChannelPipeline> pipelineInjector)

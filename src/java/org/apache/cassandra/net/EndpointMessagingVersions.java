@@ -42,7 +42,7 @@ public class EndpointMessagingVersions
      */
     public int set(InetAddressAndPort endpoint, int version)
     {
-        logger.trace("Setting version {} for {}", version, endpoint);
+        logger.info("[hklog] Setting version {} for {}", version, endpoint);
 
         Integer v = versions.put(endpoint, version);
         return v == null ? version : v;

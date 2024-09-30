@@ -51,7 +51,11 @@ import io.netty.util.concurrent.PromiseNotifier;
 import io.netty.util.concurrent.SucceededFuture;
 import org.apache.cassandra.config.DatabaseDescriptor;
 import org.apache.cassandra.io.util.DataOutputBufferFixed;
+import org.apache.cassandra.net.OutboundConnectionInitiator.Result;
 import org.apache.cassandra.net.OutboundConnectionInitiator.Result.MessagingSuccess;
+import org.apache.cassandra.net.ResourceLimits.EndpointAndGlobal;
+import org.apache.cassandra.net.ResourceLimits.Limit;
+import org.apache.cassandra.net.ResourceLimits.Outcome;
 import org.apache.cassandra.tracing.Tracing;
 import org.apache.cassandra.utils.FBUtilities;
 import org.apache.cassandra.utils.JVMStabilityInspector;
@@ -1196,6 +1200,13 @@ public class OutboundConnection
 
             Future<Result<MessagingSuccess>> initiate()
             {
+                logger.info("[hklog] messagingVersion: {}", messagingVersion);
+
+                for (StackTraceElement ste : Thread.currentThread().getStackTrace()) {
+                    logger.info("[hklog-initiate] " + ste);
+                }
+                
+
                 Promise<Result<MessagingSuccess>> result = new AsyncPromise<>(eventLoop);
                 state = new Connecting(state.disconnected(), result);
                 attempt(result);
