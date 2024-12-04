@@ -21,19 +21,15 @@ import java.time.Duration;
 import java.util.Collection;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.TimeUnit;
-
 import com.google.common.annotations.VisibleForTesting;
-
 import org.apache.cassandra.config.DatabaseDescriptor;
 import org.apache.cassandra.utils.NoSpamLogger;
 import org.apache.cassandra.utils.TimeUUID;
 import org.apache.cassandra.utils.concurrent.AsyncFuture;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-
 import org.apache.cassandra.locator.InetAddressAndPort;
 import org.apache.cassandra.utils.FBUtilities;
-
 import static org.apache.cassandra.streaming.StreamingChannel.Factory.Global.streamingFactory;
 import static org.apache.cassandra.utils.Clock.Global.nanoTime;
 
@@ -50,14 +46,18 @@ import static org.apache.cassandra.utils.Clock.Global.nanoTime;
  * You can attach {@link StreamEventHandler} to this object to listen on {@link StreamEvent}s to
  * track progress of the streaming.
  */
-public final class StreamResultFuture extends AsyncFuture<StreamState>
-{
+public final class StreamResultFuture extends AsyncFuture<StreamState> {
+
     private static final Logger logger = LoggerFactory.getLogger(StreamResultFuture.class);
 
     public final TimeUUID planId;
+
     public final StreamOperation streamOperation;
+
     private final StreamCoordinator coordinator;
+
     private final Collection<StreamEventHandler> eventListeners = new ConcurrentLinkedQueue<>();
+
     private final long slowEventsLogTimeoutNanos = DatabaseDescriptor.getStreamingSlowEventsLogTimeout().toNanoseconds();
 
     /**
@@ -68,92 +68,64 @@ public final class StreamResultFuture extends AsyncFuture<StreamState>
      * @param planId Stream plan ID
      * @param streamOperation Stream streamOperation
      */
-    public StreamResultFuture(TimeUUID planId, StreamOperation streamOperation, StreamCoordinator coordinator)
-    {
+    public StreamResultFuture(TimeUUID planId, StreamOperation streamOperation, StreamCoordinator coordinator) {
         this.planId = planId;
         this.streamOperation = streamOperation;
         this.coordinator = coordinator;
-
         // if there is no session to listen to, we immediately set result for returning
         if (!coordinator.isFollower() && !coordinator.hasActiveSessions())
             trySuccess(getCurrentState());
     }
 
     @VisibleForTesting
-    public StreamResultFuture(TimeUUID planId, StreamOperation streamOperation, TimeUUID pendingRepair, PreviewKind previewKind)
-    {
+    public StreamResultFuture(TimeUUID planId, StreamOperation streamOperation, TimeUUID pendingRepair, PreviewKind previewKind) {
         this(planId, streamOperation, new StreamCoordinator(streamOperation, 0, streamingFactory(), true, false, pendingRepair, previewKind));
     }
 
-    public static StreamResultFuture createInitiator(TimeUUID planId, StreamOperation streamOperation, Collection<StreamEventHandler> listeners,
-                                                     StreamCoordinator coordinator)
-    {
+    public static StreamResultFuture createInitiator(TimeUUID planId, StreamOperation streamOperation, Collection<StreamEventHandler> listeners, StreamCoordinator coordinator) {
         StreamResultFuture future = createAndRegisterInitiator(planId, streamOperation, coordinator);
-        if (listeners != null)
-        {
-            for (StreamEventHandler listener : listeners)
-                future.addEventListener(listener);
+        if (listeners != null) {
+            for (StreamEventHandler listener : listeners) future.addEventListener(listener);
         }
-
-        logger.info("[Stream #{}] Executing streaming plan for {}", planId,  streamOperation.getDescription());
-
+        logger.info("[Stream #{}] Executing streaming plan for {}", planId, streamOperation.getDescription());
         // Initialize and start all sessions
-        for (final StreamSession session : coordinator.getAllStreamSessions())
-        {
+        for (final StreamSession session : coordinator.getAllStreamSessions()) {
             session.init(future);
         }
-
         coordinator.connect(future);
-
         return future;
     }
 
-    public static synchronized StreamResultFuture createFollower(int sessionIndex,
-                                                                 TimeUUID planId,
-                                                                 StreamOperation streamOperation,
-                                                                 InetAddressAndPort from,
-                                                                 StreamingChannel channel,
-                                                                 int messagingVersion,
-                                                                 TimeUUID pendingRepair,
-                                                                 PreviewKind previewKind)
-    {
+    public static synchronized StreamResultFuture createFollower(int sessionIndex, TimeUUID planId, StreamOperation streamOperation, InetAddressAndPort from, StreamingChannel channel, int messagingVersion, TimeUUID pendingRepair, PreviewKind previewKind) {
         StreamResultFuture future = StreamManager.instance.getReceivingStream(planId);
-        if (future == null)
-        {
-            logger.info("[Stream #{} ID#{}] Creating new streaming plan for {} from {} {}", planId, sessionIndex, streamOperation.getDescription(),
-                        from, channel.description());
-
+        if (future == null) {
+            logger.info("[Stream #{} ID#{}] Creating new streaming plan for {} from {} {}", planId, sessionIndex, streamOperation.getDescription(), from, channel.description());
             // The main reason we create a StreamResultFuture on the receiving side is for JMX exposure.
             future = new StreamResultFuture(planId, streamOperation, pendingRepair, previewKind);
             StreamManager.instance.registerFollower(future);
         }
         future.initInbound(from, channel, messagingVersion, sessionIndex);
-        logger.info("[Stream #{}, ID#{}] Received streaming plan for {} from {} {}",
-                    planId, sessionIndex, streamOperation.getDescription(), from, channel.description());
+        logger.info("[Stream #{}, ID#{}] Received streaming plan for {} from {} {}", planId, sessionIndex, streamOperation.getDescription(), from, channel.description());
         return future;
     }
 
-    private static StreamResultFuture createAndRegisterInitiator(TimeUUID planId, StreamOperation streamOperation, StreamCoordinator coordinator)
-    {
+    private static StreamResultFuture createAndRegisterInitiator(TimeUUID planId, StreamOperation streamOperation, StreamCoordinator coordinator) {
         StreamResultFuture future = new StreamResultFuture(planId, streamOperation, coordinator);
         StreamManager.instance.registerInitiator(future);
         return future;
     }
 
-    public StreamCoordinator getCoordinator()
-    {
+    public StreamCoordinator getCoordinator() {
         return coordinator;
     }
 
-    private void initInbound(InetAddressAndPort from, StreamingChannel channel, int messagingVersion, int sessionIndex)
-    {
+    private void initInbound(InetAddressAndPort from, StreamingChannel channel, int messagingVersion, int sessionIndex) {
         StreamSession session = coordinator.getOrCreateInboundSession(from, channel, messagingVersion, sessionIndex);
         session.init(this);
     }
 
     @SuppressWarnings("UnstableApiUsage")
-    public void addEventListener(StreamEventHandler listener)
-    {
+    public void addEventListener(StreamEventHandler listener) {
         addCallback(listener);
         eventListeners.add(listener);
     }
@@ -161,102 +133,78 @@ public final class StreamResultFuture extends AsyncFuture<StreamState>
     /**
      * @return Current snapshot of streaming progress.
      */
-    public StreamState getCurrentState()
-    {
+    public StreamState getCurrentState() {
         return new StreamState(planId, streamOperation, coordinator.getAllSessionInfo());
     }
 
     @Override
-    public boolean equals(Object o)
-    {
-        if (this == o) return true;
-        if (o == null || getClass() != o.getClass()) return false;
+    public boolean equals(Object o) {
+        if (this == o)
+            return true;
+        if (o == null || getClass() != o.getClass())
+            return false;
         StreamResultFuture that = (StreamResultFuture) o;
         return planId.equals(that.planId);
     }
 
     @Override
-    public int hashCode()
-    {
+    public int hashCode() {
         return planId.hashCode();
     }
 
-    void handleSessionPrepared(StreamSession session, StreamSession.PrepareDirection prepareDirection)
-    {
+    void handleSessionPrepared(StreamSession session, StreamSession.PrepareDirection prepareDirection) {
         SessionInfo sessionInfo = session.getSessionInfo();
-        logger.info("[Stream #{} ID#{}] Prepare completed. Receiving {} files({}), sending {} files({})",
-                              session.planId(),
-                              session.sessionIndex(),
-                              sessionInfo.getTotalFilesToReceive(),
-                              FBUtilities.prettyPrintMemory(sessionInfo.getTotalSizeToReceive()),
-                              sessionInfo.getTotalFilesToSend(),
-                              FBUtilities.prettyPrintMemory(sessionInfo.getTotalSizeToSend()));
+        logger.info("[Stream #{} ID#{}] Prepare completed. Receiving {} files({}), sending {} files({})", session.planId(), session.sessionIndex(), sessionInfo.getTotalFilesToReceive(), FBUtilities.prettyPrintMemory(sessionInfo.getTotalSizeToReceive()), sessionInfo.getTotalFilesToSend(), FBUtilities.prettyPrintMemory(sessionInfo.getTotalSizeToSend()));
         StreamEvent.SessionPreparedEvent event = new StreamEvent.SessionPreparedEvent(planId, sessionInfo, prepareDirection);
         coordinator.addSessionInfo(sessionInfo);
         fireStreamEvent(event);
     }
 
-    void handleSessionComplete(StreamSession session)
-    {
+    void handleSessionComplete(StreamSession session) {
         logger.info("[Stream #{}] Session with {} is {}", session.planId(), session.peer, session.state().name().toLowerCase());
-        fireStreamEvent(new StreamEvent.SessionCompleteEvent(session));
+        fireStreamEvent(((StreamEvent.SessionCompleteEvent) org.zlab.ocov.tracker.Runtime.update(new StreamEvent.SessionCompleteEvent(session), 43, session)));
         SessionInfo sessionInfo = session.getSessionInfo();
         coordinator.addSessionInfo(sessionInfo);
         maybeComplete();
     }
 
-    public void handleProgress(ProgressInfo progress)
-    {
+    public void handleProgress(ProgressInfo progress) {
         coordinator.updateProgress(progress);
         fireStreamEvent(new StreamEvent.ProgressEvent(planId, progress));
     }
 
-    synchronized void fireStreamEvent(StreamEvent event)
-    {
+    synchronized void fireStreamEvent(StreamEvent event) {
         // delegate to listener
         long startNanos = nanoTime();
-        for (StreamEventHandler listener : eventListeners)
-        {
-            try
-            {
+        for (StreamEventHandler listener : eventListeners) {
+            try {
                 listener.handleStreamEvent(event);
-            }
-            catch (Throwable t)
-            {
+            } catch (Throwable t) {
                 logger.warn("Unexpected exception in listern while calling handleStreamEvent", t);
             }
         }
         long totalNanos = nanoTime() - startNanos;
         if (totalNanos > slowEventsLogTimeoutNanos)
-            NoSpamLogger.log(logger, NoSpamLogger.Level.WARN, 1, TimeUnit.MINUTES, "Handling streaming events took longer than {}; took {}",
-                             () -> new Object[] { Duration.ofNanos(slowEventsLogTimeoutNanos), Duration.ofNanos(totalNanos)});
+            NoSpamLogger.log(logger, NoSpamLogger.Level.WARN, 1, TimeUnit.MINUTES, "Handling streaming events took longer than {}; took {}", () -> new Object[] { Duration.ofNanos(slowEventsLogTimeoutNanos), Duration.ofNanos(totalNanos) });
     }
 
-    private synchronized void maybeComplete()
-    {
-        if (finishedAllSessions())
-        {
+    private synchronized void maybeComplete() {
+        if (finishedAllSessions()) {
             StreamState finalState = getCurrentState();
-            if (finalState.hasFailedSession())
-            {
+            if (finalState.hasFailedSession()) {
                 logger.warn("[Stream #{}] Stream failed", planId);
                 tryFailure(new StreamException(finalState, "Stream failed"));
-            }
-            else if (finalState.hasAbortedSession())
-            {
+            } else if (finalState.hasAbortedSession()) {
                 logger.info("[Stream #{}] Stream aborted", planId);
                 trySuccess(finalState);
-            }
-            else
-            {
+            } else {
                 logger.info("[Stream #{}] All sessions completed", planId);
                 trySuccess(finalState);
             }
         }
     }
 
-    public StreamSession getSession(InetAddressAndPort peer, int sessionIndex)
-    {
+    public StreamSession getSession(InetAddressAndPort peer, int sessionIndex) {
         return coordinator.getSessionById(peer, sessionIndex);
     }
 
@@ -265,8 +213,7 @@ public final class StreamResultFuture extends AsyncFuture<StreamState>
      * relies on the snapshotted state from {@link StreamCoordinator} and not the {@link StreamSession} state
      * directly (CASSANDRA-15667), otherwise inconsistent snapshotted states may lead to completion races.
      */
-    private boolean finishedAllSessions()
-    {
+    private boolean finishedAllSessions() {
         return coordinator.getAllSessionInfo().stream().allMatch(s -> s.state.isFinalState());
     }
 }

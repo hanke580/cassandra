@@ -21,33 +21,35 @@ import java.io.Closeable;
 import java.util.Iterator;
 import java.util.UUID;
 import java.util.concurrent.BlockingQueue;
-
 import org.apache.cassandra.config.Config;
 import org.apache.cassandra.net.MessagingService;
 import org.apache.cassandra.utils.concurrent.UncheckedInterruptedException;
-
 import static org.apache.cassandra.utils.concurrent.BlockingQueues.newBlockingQueue;
 
 /**
  * A primitive pool of {@link HintsBuffer} buffers. Under normal conditions should only hold two buffers - the currently
  * written to one, and a reserve buffer to switch to when the first one is beyond capacity.
  */
-final class HintsBufferPool implements Closeable
-{
-    interface FlushCallback
-    {
+final class HintsBufferPool implements Closeable {
+
+    interface FlushCallback {
+
         void flush(HintsBuffer buffer, HintsBufferPool pool);
     }
 
     static final int MAX_ALLOCATED_BUFFERS = Integer.getInteger(Config.PROPERTY_PREFIX + "MAX_HINT_BUFFERS", 3);
+
     private volatile HintsBuffer currentBuffer;
+
     private final BlockingQueue<HintsBuffer> reserveBuffers;
+
     private final int bufferSize;
+
     private final FlushCallback flushCallback;
+
     private int allocatedBuffers = 0;
 
-    HintsBufferPool(int bufferSize, FlushCallback flushCallback)
-    {
+    HintsBufferPool(int bufferSize, FlushCallback flushCallback) {
         reserveBuffers = newBlockingQueue();
         this.bufferSize = bufferSize;
         this.flushCallback = flushCallback;
@@ -57,11 +59,10 @@ final class HintsBufferPool implements Closeable
      * @param hostIds host ids of the hint's target nodes
      * @param hint the hint to store
      */
-    void write(Iterable<UUID> hostIds, Hint hint)
-    {
+    void write(Iterable<UUID> hostIds, Hint hint) {
         int hintSize = (int) Hint.serializer.serializedSize(hint, MessagingService.current_version);
-        try (HintsBuffer.Allocation allocation = allocate(hintSize))
-        {
+        try (HintsBuffer.Allocation allocation = allocate(hintSize)) {
+            org.zlab.ocov.tracker.Runtime.update(allocation, 44, hostIds, hint);
             allocation.write(hostIds, hint);
         }
     }
@@ -71,96 +72,71 @@ final class HintsBufferPool implements Closeable
      * @param hostId UUID of the node
      * @return timestamp for the earliest hint
      */
-    long getEarliestHintForHost(UUID hostId)
-    {
+    long getEarliestHintForHost(UUID hostId) {
         long min = currentBuffer().getEarliestHintTime(hostId);
         Iterator<HintsBuffer> it = reserveBuffers.iterator();
-
-        while (it.hasNext())
-            min = Math.min(min, it.next().getEarliestHintTime(hostId));
-
+        while (it.hasNext()) min = Math.min(min, it.next().getEarliestHintTime(hostId));
         return min;
     }
 
-    public void clearEarliestHintsForHostId(UUID hostId)
-    {
+    public void clearEarliestHintsForHostId(UUID hostId) {
         currentBuffer().clearEarliestHintForHostId(hostId);
         Iterator<HintsBuffer> it = reserveBuffers.iterator();
-
-        while (it.hasNext())
-            it.next().clearEarliestHintForHostId(hostId);
+        while (it.hasNext()) it.next().clearEarliestHintForHostId(hostId);
     }
 
-    private HintsBuffer.Allocation allocate(int hintSize)
-    {
+    private HintsBuffer.Allocation allocate(int hintSize) {
         HintsBuffer current = currentBuffer();
-
-        while (true)
-        {
+        while (true) {
             HintsBuffer.Allocation allocation = current.allocate(hintSize);
             if (allocation != null)
                 return allocation;
-
             // allocation failed due to insufficient size remaining in the buffer
             if (switchCurrentBuffer(current))
                 flushCallback.flush(current, this);
-
             current = currentBuffer;
         }
     }
 
-    void offer(HintsBuffer buffer)
-    {
+    void offer(HintsBuffer buffer) {
         if (!reserveBuffers.offer(buffer))
             throw new RuntimeException("Failed to store buffer");
     }
 
     // A wrapper to ensure a non-null currentBuffer value on the first call.
-    HintsBuffer currentBuffer()
-    {
+    HintsBuffer currentBuffer() {
         if (currentBuffer == null)
             initializeCurrentBuffer();
-
         return currentBuffer;
     }
 
-    private synchronized void initializeCurrentBuffer()
-    {
+    private synchronized void initializeCurrentBuffer() {
         if (currentBuffer == null)
             currentBuffer = createBuffer();
     }
 
-    private synchronized boolean switchCurrentBuffer(HintsBuffer previous)
-    {
+    private synchronized boolean switchCurrentBuffer(HintsBuffer previous) {
         if (currentBuffer != previous)
             return false;
-
         HintsBuffer buffer = reserveBuffers.poll();
-        if (buffer == null && allocatedBuffers >= MAX_ALLOCATED_BUFFERS)
-        {
-            try
-            {
+        if (buffer == null && allocatedBuffers >= MAX_ALLOCATED_BUFFERS) {
+            try {
                 //This BlockingQueue.take is a target for byteman in HintsBufferPoolTest
                 buffer = reserveBuffers.take();
-            }
-            catch (InterruptedException e)
-            {
+            } catch (InterruptedException e) {
                 throw new UncheckedInterruptedException(e);
             }
         }
         currentBuffer = buffer == null ? createBuffer() : buffer;
-
         return true;
     }
 
-    private HintsBuffer createBuffer()
-    {
+    private HintsBuffer createBuffer() {
         allocatedBuffers++;
         return HintsBuffer.create(bufferSize);
     }
 
-    public void close()
-    {
+    public void close() {
         currentBuffer.free();
     }
 }

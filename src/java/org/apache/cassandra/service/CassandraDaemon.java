@@ -875,6 +875,7 @@ public class CassandraDaemon
 
     public static void main(String[] args)
     {
+	org.zlab.ocov.tracker.Runtime.init(); // Add this line
         instance.activate();
     }
 
