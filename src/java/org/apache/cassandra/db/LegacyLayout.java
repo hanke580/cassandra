@@ -1391,6 +1391,9 @@ public abstract class LegacyLayout
         public boolean addAtom(LegacyAtom atom)
         {
             assert atom.isRowAtom(metadata) : "Unexpected non in-row legacy range tombstone " + atom;
+            if (metadata.cfName.equals("tb")) {
+                logger.info("[hklog] addAtom: atom = " + atom);
+            }
             return atom.isCell()
                  ? addCell(atom.asCell())
                  : addRangeTombstone(atom.asRangeTombstone());
@@ -1489,10 +1492,16 @@ public abstract class LegacyLayout
         {
             if (tombstone.isRowDeletion(metadata))
             {
+                if (metadata.cfName.equals("tb")) {
+                    logger.info("[hklog] addRangeTombstone: tombstone is row deletion");
+                }
                 return addRowTombstone(tombstone);
             }
             else
             {
+                if (metadata.cfName.equals("tb")) {
+                    logger.info("[hklog] addRangeTombstone: tombstone is collection deletion");
+                }
                 // The isRowAtom() assertion back in addAtom would have already triggered otherwise, but spelling it
                 // out nonetheless.
                 assert tombstone.isCollectionTombstone();
@@ -1602,7 +1611,11 @@ public abstract class LegacyLayout
                 return null;
             if (!hasValidCells && invalidLivenessInfo != null)
                 builder.addPrimaryKeyLivenessInfo(invalidLivenessInfo);
-            return builder.build();
+            Row ret = builder.build();
+            if (metadata.cfName.equals("tb")) {
+                logger.info("[hklog] getRow = " + ret);
+            }
+            return ret;
         }
     }
 

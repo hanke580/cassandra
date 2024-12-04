@@ -17,8 +17,15 @@
  */
 package org.apache.cassandra.db.rows;
 
+import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.Iterator;
+import java.util.List;
+
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 
 import org.apache.cassandra.config.CFMetaData;
 import org.apache.cassandra.db.*;
@@ -34,6 +41,8 @@ import org.apache.cassandra.db.filter.ColumnFilter;
  */
 public class RowAndDeletionMergeIterator extends AbstractUnfilteredRowIterator
 {
+    private static final Logger logger = LoggerFactory.getLogger(RowAndDeletionMergeIterator.class);
+
     // For some of our Partition implementation, we can't guarantee that the deletion information (partition level
     // deletion and range tombstones) don't shadow data in the rows. If that is the case, this class also take
     // cares of skipping such shadowed data (since it is the contract of an UnfilteredRowIterator that it doesn't
@@ -75,10 +84,23 @@ public class RowAndDeletionMergeIterator extends AbstractUnfilteredRowIterator
         while (true)
         {
             updateNextRow();
+            if (metadata.cfName.equals("tb")) {
+                if (nextRow != null) {
+                    logger.info("[hklog] nextRow = " + nextRow.toString(metadata));
+                } else {
+                    logger.info("[hklog] nextRow = null");
+                }
+                if (openRange != null) {
+                    logger.info("[hklog] openRange = " + openRange.toString(metadata.comparator));
+                } else {
+                    logger.info("[hklog] openRange = null");
+                }
+            }
             if (nextRow == null)
             {
-                if (openRange != null)
+                if (openRange != null) {
                     return closeOpenedRange();
+                }
 
                 updateNextRange();
                 return nextRange == null ? endOfData() : openRange();
@@ -143,8 +165,14 @@ public class RowAndDeletionMergeIterator extends AbstractUnfilteredRowIterator
         {
             Unfiltered next = computeNextInternal();
 
-            if (shouldSkip(next))
+            if (next != null)
+                logger.info("[hklog] next = " + next.toString(metadata()));
+
+            if (shouldSkip(next)) {
+                logger.info("[hklog] skip noop boundary marker");
                 continue;
+            }
+            logger.info("[hklog] not skip");
 
             return next;
         }

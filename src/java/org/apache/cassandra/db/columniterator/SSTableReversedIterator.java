@@ -22,6 +22,9 @@ import java.util.*;
 
 import com.google.common.base.Verify;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import org.apache.cassandra.config.CFMetaData;
 import org.apache.cassandra.db.*;
 import org.apache.cassandra.db.filter.ColumnFilter;
@@ -38,6 +41,8 @@ import org.apache.cassandra.utils.btree.BTree;
  */
 public class SSTableReversedIterator extends AbstractSSTableIterator
 {
+    private static final Logger logger = LoggerFactory.getLogger(SSTableReversedIterator.class);
+
     public SSTableReversedIterator(SSTableReader sstable,
                                    DecoratedKey key,
                                    ColumnFilter columns,
@@ -414,6 +419,10 @@ public class SSTableReversedIterator extends AbstractSSTableIterator
                 if (!iterator.hasNext() && nextBlockIdx > lastBlockIdx)
                 {
                     continue;
+                }
+
+                if (metadata().cfName.equals("tb")) {
+                    logger.info("[hklog] iterator type = " + iterator.getClass().getName() + ", hasNext = " + iterator.hasNext());
                 }
 
                 return iterator.hasNext();

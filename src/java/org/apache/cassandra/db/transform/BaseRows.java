@@ -25,12 +25,19 @@ import org.apache.cassandra.db.DecoratedKey;
 import org.apache.cassandra.db.PartitionColumns;
 import org.apache.cassandra.db.rows.*;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import static org.apache.cassandra.utils.Throwables.merge;
+
+import java.util.Random;
 
 public abstract class BaseRows<R extends Unfiltered, I extends BaseRowIterator<? extends Unfiltered>>
 extends BaseIterator<Unfiltered, I, R>
 implements BaseRowIterator<R>
 {
+
+    private static final Logger logger = LoggerFactory.getLogger(BaseRowIterator.class);
 
     private Row staticRow;
 
@@ -117,9 +124,18 @@ implements BaseRowIterator<R>
                  : transformation.applyToMarker((RangeTombstoneMarker) value);
     }
 
+    static Random rand = new Random();
+
     @Override
     public final boolean hasNext()
     {
+        boolean log = false;
+        int r = -1;
+        if (input.metadata().cfName.equals("tb")) {
+            log = true;
+            r = rand.nextInt(1000);
+            logger.info("[hklog] start hasNext(), r = " + r + ", input type = " + input.getClass().getName());
+        }
         Stop stop = this.stop;
         while (this.next == null)
         {
@@ -129,6 +145,8 @@ implements BaseRowIterator<R>
             while (!stop.isSignalled && !stopChild.isSignalled && input.hasNext())
             {
                 Unfiltered next = input.next();
+                if (log)
+                    logger.info("[hklog] next = " + next.toString(input.metadata()) + ", r = " + r);
 
                 if (next.isRow())
                 {
@@ -148,13 +166,20 @@ implements BaseRowIterator<R>
                 if (next != null)
                 {
                     this.next = next;
+                    if (log)
+                        logger.info("[hklog] finish hasNext() 1" + ", r = " + r);
                     return true;
                 }
             }
 
-            if (stop.isSignalled || stopChild.isSignalled || !hasMoreContents())
+            if (stop.isSignalled || stopChild.isSignalled || !hasMoreContents()) {
+                if (log)
+                    logger.info("[hklog] finish hasNext() 2" + ", r = " + r);
                 return false;
+            }
         }
+        if (log)
+            logger.info("[hklog] finish hasNext() 3" + ", r = " + r);
         return true;
     }
 }

@@ -25,6 +25,9 @@ import org.apache.cassandra.config.CFMetaData;
 import org.apache.cassandra.db.*;
 import org.apache.cassandra.utils.memory.AbstractAllocator;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 /**
  * A range tombstone marker that indicates the bound of a range tombstone (start or end).
  */
@@ -32,11 +35,18 @@ public class RangeTombstoneBoundMarker extends AbstractRangeTombstoneMarker
 {
     private final DeletionTime deletion;
 
+    private static final Logger logger = LoggerFactory.getLogger(RangeTombstoneBoundMarker.class);
+
     public RangeTombstoneBoundMarker(RangeTombstone.Bound bound, DeletionTime deletion)
     {
         super(bound);
         assert !bound.isBoundary();
         this.deletion = deletion;
+
+        // for (StackTraceElement ste : Thread.currentThread().getStackTrace()) {
+        //     logger.info("[hklog] " + ste);
+        // }
+        logger.info("[hklog] bound = " + bound + ", deletion = " + deletion + ", bound.kind = " + bound.kind());
     }
 
     public RangeTombstoneBoundMarker(Slice.Bound bound, DeletionTime deletion)

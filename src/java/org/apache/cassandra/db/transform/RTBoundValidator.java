@@ -20,8 +20,12 @@ package org.apache.cassandra.db.transform;
 import org.apache.cassandra.config.CFMetaData;
 import org.apache.cassandra.db.DeletionTime;
 import org.apache.cassandra.db.partitions.UnfilteredPartitionIterator;
+import org.apache.cassandra.db.rows.BaseRowIterator;
 import org.apache.cassandra.db.rows.RangeTombstoneMarker;
 import org.apache.cassandra.db.rows.UnfilteredRowIterator;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * A validating transformation that sanity-checks the sequence of RT bounds and boundaries in every partition.
@@ -33,6 +37,8 @@ import org.apache.cassandra.db.rows.UnfilteredRowIterator;
  */
 public final class RTBoundValidator extends Transformation<UnfilteredRowIterator>
 {
+    private static final Logger logger = LoggerFactory.getLogger(RTBoundValidator.class);
+
     public enum Stage { MEMTABLE, SSTABLE, MERGED, PURGED, PROCESSED }
 
     private final Stage stage;
@@ -80,9 +86,11 @@ public final class RTBoundValidator extends Transformation<UnfilteredRowIterator
         @Override
         public RangeTombstoneMarker applyToMarker(RangeTombstoneMarker marker)
         {
+            logger.info("[hklog] this = " + this + ", openMarkerDeletionTime = " + openMarkerDeletionTime + ", marker.isClose(isReverseOrder) = " + marker.isClose(isReverseOrder));
             if (null == openMarkerDeletionTime)
             {
                  // there is no open RT in the stream - we are expecting a *_START_BOUND
+                 // If reverse: *_END_BOUND
                 if (marker.isClose(isReverseOrder))
                     throw ise("unexpected end bound or boundary " + marker.toString(metadata));
             }
@@ -97,11 +105,14 @@ public final class RTBoundValidator extends Transformation<UnfilteredRowIterator
                 if (!deletionTime.equals(openMarkerDeletionTime))
                     throw ise("open marker and close marker have different deletion times");
 
+                logger.info("[hklog] this = " + this + ", openMarkerDeletionTime is set null ");
                 openMarkerDeletionTime = null;
             }
 
-            if (marker.isOpen(isReverseOrder))
+            if (marker.isOpen(isReverseOrder)) {
+                logger.info("[hklog] this = " + this + ", ori openMarkerDeletionTime = " + openMarkerDeletionTime + ", now = " + marker.openDeletionTime(isReverseOrder));
                 openMarkerDeletionTime = marker.openDeletionTime(isReverseOrder);
+            }
 
             return marker;
         }

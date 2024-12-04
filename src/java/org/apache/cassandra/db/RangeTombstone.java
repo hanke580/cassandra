@@ -24,10 +24,14 @@ import java.util.Objects;
 
 import org.apache.cassandra.db.marshal.AbstractType;
 import org.apache.cassandra.db.rows.RangeTombstoneMarker;
+import org.apache.cassandra.db.rows.RowAndDeletionMergeIterator;
 import org.apache.cassandra.io.util.DataInputPlus;
 import org.apache.cassandra.io.util.DataOutputPlus;
 import org.apache.cassandra.utils.ByteBufferUtil;
 import org.apache.cassandra.utils.memory.AbstractAllocator;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 
 /**
@@ -40,6 +44,8 @@ import org.apache.cassandra.utils.memory.AbstractAllocator;
  */
 public class RangeTombstone
 {
+    private static final Logger logger = LoggerFactory.getLogger(RangeTombstone.class);
+
     private final Slice slice;
     private final DeletionTime deletion;
 
@@ -47,6 +53,11 @@ public class RangeTombstone
     {
         this.slice = slice;
         this.deletion = deletion;
+
+        logger.info("[hklog] create a new RT, slice = " + slice + ", deletion = " + deletion);
+        for (StackTraceElement ste : Thread.currentThread().getStackTrace()) {
+            logger.info("[hklog] " + ste);
+        }
     }
 
     /**

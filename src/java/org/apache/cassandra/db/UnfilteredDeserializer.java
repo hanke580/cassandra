@@ -32,6 +32,9 @@ import org.apache.cassandra.io.util.DataInputPlus;
 import org.apache.cassandra.io.util.FileDataInput;
 import org.apache.cassandra.net.MessagingService;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 /**
  * Helper class to deserialize Unfiltered object from disk efficiently.
  *
@@ -41,6 +44,8 @@ import org.apache.cassandra.net.MessagingService;
  */
 public abstract class UnfilteredDeserializer
 {
+    private static final Logger logger = LoggerFactory.getLogger(UnfilteredDeserializer.class);
+
     protected final CFMetaData metadata;
     protected final DataInputPlus in;
     protected final SerializationHelper helper;
@@ -293,6 +298,13 @@ public abstract class UnfilteredDeserializer
                     long pos = currentPosition();
                     LegacyLayout.LegacyAtom atom = LegacyLayout.readLegacyAtom(metadata, in, readAllAsDynamic);
                     bytesReadForNextAtom = currentPosition() - pos;
+                    if (this.metadata.cfName.equals("tb")) {
+                        if (atom != null)
+                            logger.info("[hklog] readAtom() atom = " + atom.toString() + ", atom type = " + atom.getClass().getName());
+                        // for (StackTraceElement ste : Thread.currentThread().getStackTrace()) {
+                        //     logger.info("[hklog] " + ste);
+                        // }                        
+                    }
                     return atom;
                 }
                 catch (UnknownColumnException e)
@@ -526,6 +538,12 @@ public abstract class UnfilteredDeserializer
 
             private Unfiltered readRow(LegacyLayout.LegacyAtom first)
             {
+                if (metadata.cfName.equals("tb")) {
+                    for (StackTraceElement ste : Thread.currentThread().getStackTrace()) {
+                        // logger.info("[hklog] " + ste);
+                    }
+                }
+
                 LegacyLayout.CellGrouper grouper = first.isStatic()
                                                  ? LegacyLayout.CellGrouper.staticGrouper(metadata, helper)
                                                  : this.grouper;
@@ -539,12 +557,18 @@ public abstract class UnfilteredDeserializer
                 {
                     // Peek, but don't consume the next atom just yet
                     LegacyLayout.LegacyAtom atom = atoms.peek();
+                    if (metadata.cfName.equals("tb")) {
+                        logger.info("[hklog] atom = " + atom);
+                    }
                     // First, that atom may be shadowed in which case we can simply ignore it. Note that this handles
                     // the case of repeated RT start marker after we've crossed an index boundary, which could well
                     // appear in the middle of a row (CASSANDRA-14008).
                     if (!tombstoneTracker.hasClosingMarkerBefore(atom) && tombstoneTracker.isShadowed(atom))
                     {
                         atoms.next(); // consume the atom since we only peeked it so far
+                        if (metadata.cfName.equals("tb")) {
+                            logger.info("[hklog] ignore atom = " + atom);
+                        }
                         continue;
                     }
 
@@ -558,6 +582,9 @@ public abstract class UnfilteredDeserializer
                     else
                     {
                         LegacyLayout.LegacyRangeTombstone rt = (LegacyLayout.LegacyRangeTombstone) atom;
+                        if (metadata.cfName.equals("tb")) {
+                            logger.info("[hklog] LegacyRangeTombstone rt = " + rt);
+                        }
                         // This means we have a non-row range tombstone. Unfortunately, that does not guarantee the
                         // current row is finished (though it may), because due to the logic within LegacyRangeTombstone
                         // constructor, we can get an out-of-order RT that includes on the current row (even if it is
@@ -566,18 +593,27 @@ public abstract class UnfilteredDeserializer
                         // So first, evacuate the easy case of the range tombstone simply starting after the current
                         // row, in which case we're done with the current row (but don't consume the new RT yet so it
                         // gets handled as any other non-row RT).
-                        if (grouper.startsAfterCurrentRow(rt))
+                        if (grouper.startsAfterCurrentRow(rt)) {
+                            if (metadata.cfName.equals("tb")) {
+                                logger.info("[hklog] break1");
+                            }
                             break;
+                        }
 
                         // Otherwise, we "split" the RT in 2: the part covering the current row, which is now an
                         // inRowAtom and can be passed to the grouper, and the part after that, which we push back into
                         // the iterator for later processing.
                         Clustering currentRow = grouper.currentRowClustering();
                         atoms.next(); // consume since we had only just peeked it so far and we're using it
-                        atoms.pushOutOfOrder(rt.withNewStart(Slice.Bound.exclusiveStartOf(currentRow)));
+                        LegacyLayout.LegacyAtom tmpPush = rt.withNewStart(Slice.Bound.exclusiveStartOf(currentRow));
+                        atoms.pushOutOfOrder(tmpPush);
+                        LegacyLayout.LegacyAtom tmpAdd = rt.withNewStart(Slice.Bound.inclusiveStartOf(currentRow))
+                        .withNewEnd(Slice.Bound.inclusiveEndOf(currentRow));
                         // Note: in theory the withNewStart is a no-op here, but not taking any risk
-                        grouper.addAtom(rt.withNewStart(Slice.Bound.inclusiveStartOf(currentRow))
-                                          .withNewEnd(Slice.Bound.inclusiveEndOf(currentRow)));
+                        grouper.addAtom(tmpAdd);
+                        if (metadata.cfName.equals("tb")) {
+                            logger.info("[hklog] tmpPush = " + tmpPush);
+                        }
                     }
                 }
 
