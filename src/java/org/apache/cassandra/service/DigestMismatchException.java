@@ -22,14 +22,19 @@ import java.nio.ByteBuffer;
 import org.apache.cassandra.db.DecoratedKey;
 import org.apache.cassandra.utils.ByteBufferUtil;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 @SuppressWarnings("serial")
 public class DigestMismatchException extends Exception
 {
+    private static final Logger logger = LoggerFactory.getLogger(DigestMismatchException.class);
     public DigestMismatchException(DecoratedKey key, ByteBuffer digest1, ByteBuffer digest2)
     {
         super(String.format("Mismatch for key %s (%s vs %s)",
                             key.toString(),
                             ByteBufferUtil.bytesToHex(digest1),
                             ByteBufferUtil.bytesToHex(digest2)));
+        logger.error("[HKLOG] 3.x digest mismatch occur");
     }
 }
