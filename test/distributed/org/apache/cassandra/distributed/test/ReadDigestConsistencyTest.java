@@ -95,6 +95,7 @@ public class ReadDigestConsistencyTest extends TestBaseImpl
         for (Object[] result : results)
         {
             String activity = (String) result[0];
+            logger.info("Activity = " + activity);
             Assert.assertFalse(String.format("Found Digest Mismatch while executing query: %s with bound values %s on %s/%s",
                                              query,
                                              Arrays.toString(boundValues),

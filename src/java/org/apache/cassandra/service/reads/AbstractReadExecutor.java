@@ -390,6 +390,7 @@ public abstract class AbstractReadExecutor
         else
         {
             Tracing.trace("Digest mismatch: Mismatch for key {}", getKey());
+            logger.error("[HKLOG] 4.x digest mismatch info key = " + getKey());
             readRepair.startRepair(digestResolver, this::setResult);
         }
     }

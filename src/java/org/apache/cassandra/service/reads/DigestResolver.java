@@ -120,14 +120,17 @@ public class DigestResolver<E extends Endpoints<E>, P extends ReplicaPlan.ForRea
             ByteBuffer newDigest = message.payload.digest(command);
             if (digest == null)
                 digest = newDigest;
-            else if (!digest.equals(newDigest))
+            else if (!digest.equals(newDigest)) {
                 // rely on the fact that only single partition queries use digests
+                logger.error("[HKLOG] 4.x digest mismatch occur");
                 return false;
+            }
         }
 
         if (logger.isTraceEnabled())
             logger.trace("responsesMatch: {} ms.", TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - start));
 
+        
         return true;
     }
 
