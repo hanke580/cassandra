@@ -35,6 +35,9 @@ public class DigestMismatchException extends Exception
                             key.toString(),
                             ByteBufferUtil.bytesToHex(digest1),
                             ByteBufferUtil.bytesToHex(digest2)));
-        logger.error("[HKLOG] 3.x digest mismatch occur");
+        logger.error("[HKLOG] 3.x digest mismatch occur2");
+        for (StackTraceElement ste : Thread.currentThread().getStackTrace()) {
+            logger.info("[hklog] " + ste);
+        }        
     }
 }

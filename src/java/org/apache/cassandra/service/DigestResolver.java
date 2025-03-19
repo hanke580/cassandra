@@ -85,11 +85,15 @@ public class DigestResolver extends ResponseResolver
             ReadResponse response = message.payload;
 
             ByteBuffer newDigest = response.digest(command);
+
+            logger.error("[HKLOG] 3.x digest compare for keyspace: " + keyspace.getName() + ", command = " + command);
             if (digest == null)
                 digest = newDigest;
-            else if (!digest.equals(newDigest))
+            else if (!digest.equals(newDigest)) {
                 // rely on the fact that only single partition queries use digests
+                logger.error("[HKLOG] 3.x mismatch occur1: " + keyspace.getName() + ", command = " + command);
                 throw new DigestMismatchException(((SinglePartitionReadCommand)command).partitionKey(), digest, newDigest);
+            }
         }
 
         if (logger.isTraceEnabled())
