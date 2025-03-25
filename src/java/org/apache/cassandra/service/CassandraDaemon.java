@@ -70,6 +70,7 @@ import org.apache.cassandra.metrics.DefaultNameFactory;
 import org.apache.cassandra.metrics.StorageMetrics;
 import org.apache.cassandra.schema.LegacySchemaMigrator;
 import org.apache.cassandra.security.ThreadAwareSecurityManager;
+import org.apache.cassandra.service.CassandraDaemon.NativeAccess;
 import org.apache.cassandra.thrift.ThriftServer;
 import org.apache.cassandra.tracing.Tracing;
 import org.apache.cassandra.utils.FBUtilities;
@@ -783,6 +784,7 @@ public class CassandraDaemon
 
     public static void main(String[] args)
     {
+        org.zlab.net.tracker.Runtime.init();
         instance.activate();
     }
 
