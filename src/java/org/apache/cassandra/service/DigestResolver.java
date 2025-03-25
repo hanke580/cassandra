@@ -85,11 +85,16 @@ public class DigestResolver extends ResponseResolver
             ReadResponse response = message.payload;
 
             ByteBuffer newDigest = response.digest(command);
+            logger.error("[HKLOG] 3.x digest compare: " + keyspace.getName() + ", command = " + command);
             if (digest == null)
                 digest = newDigest;
-            else if (!digest.equals(newDigest))
+            else if (!digest.equals(newDigest)) {
                 // rely on the fact that only single partition queries use digests
+                logger.error("[HKLOG] 3.x mismatch occur: " + keyspace.getName() + ", command = " + command);
+                logger.error("[HKLOG] digest = " + byteBufferToHex(digest) + ", newDigest = " + byteBufferToHex(newDigest));
+                // Print value of digest and newDigest
                 throw new DigestMismatchException(((SinglePartitionReadCommand)command).partitionKey(), digest, newDigest);
+            }
         }
 
         if (logger.isTraceEnabled())
@@ -100,4 +105,14 @@ public class DigestResolver extends ResponseResolver
     {
         return dataResponse != null;
     }
+
+    public static String byteBufferToHex(ByteBuffer buffer) {
+        // duplicate it
+        buffer = buffer.duplicate();
+        StringBuilder sb = new StringBuilder();
+        while (buffer.hasRemaining()) {
+            sb.append(String.format("%02X", buffer.get()));
+        }
+        return sb.toString();
+    }  
 }
