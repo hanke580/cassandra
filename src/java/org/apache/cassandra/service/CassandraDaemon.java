@@ -884,6 +884,7 @@ public class CassandraDaemon
 
     public static void main(String[] args)
     {
+        org.zlab.net.tracker.Runtime.init();
         instance.activate();
     }
 
