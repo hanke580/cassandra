@@ -456,7 +456,7 @@ public class ColumnFilter
             }
 
             // see CASSANDRA-15833
-            if (isFetchAll && Gossiper.instance.haveMajorVersion3Nodes())
+            if (isFetchAll && Gossiper.instance.hasMajorVersion3Nodes())
                 queried = null;
 
             return new ColumnFilter(isFetchAll, metadata, queried, s);
